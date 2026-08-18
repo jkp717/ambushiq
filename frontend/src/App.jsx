@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Menu, ChevronLeft, Settings as SettingsIcon } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Menu, ChevronLeft, Settings as SettingsIcon, Camera, ChevronDown } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -692,6 +692,7 @@ function SettingsPage() {
   const [homeLat, setHomeLat] = useState("");
   const [homeLon, setHomeLon] = useState("");
   const [homeSaved, setHomeSaved] = useState(false);
+  const [tab, setTab] = useState("stand");  // stand | rating | cameras
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn’t load settings.")); }, []);
   useEffect(() => { api("/home").then((h) => { setHome(h); if (h.set) { setHomeLat(String(h.lat)); setHomeLon(String(h.lon)); } }).catch(() => {}); }, []);
 
@@ -699,8 +700,8 @@ function SettingsPage() {
     try { const r = await api("/settings", { method: "PUT", body: JSON.stringify(s) }); setS(r); setSaved(true); setTimeout(() => setSaved(false), 1800); }
     catch { setErr("Couldn’t save settings."); }
   }
-  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250 }); }
-  function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
+  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, max_camera_boost_pct: 15.0 }); }
+  function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20, rut_peak_month: 12, rut_peak_day: 5 }); }
 
   const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) &&
     +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
@@ -716,80 +717,328 @@ function SettingsPage() {
     { key: "food", label: "Food zones", icon: Wheat, color: "var(--green)" },
     { key: "bedding", label: "Bedding zones", icon: Trees, color: "#6B4FA0" },
   ];
+  const TABS = [
+    { key: "stand", label: "Best Stand" },
+    { key: "rating", label: "Daily Rating" },
+    { key: "cameras", label: "Trail Cameras" },
+  ];
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
   return (
-    <div style={{ maxWidth: 560 }}>
-      <PageHead title="Settings" action={<button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved" : "Save"}</button>} />
+    <div style={{ maxWidth: 600 }}>
+      <PageHead title="Settings" action={tab !== "cameras" ? <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved" : "Save"}</button> : null} />
       {err && <Banner>{err}</Banner>}
 
-      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <MapPin size={17} color="var(--navy)" /><strong style={{ fontSize: 14.5 }}>Hunt region</strong>
-        </div>
-        <p style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 0, marginBottom: 10 }}>
-          Centers the map before you’ve placed any stands. Once you have stands, the map fits to them automatically.
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
-          <Field label="Latitude"><input value={homeLat} onChange={(e) => setHomeLat(e.target.value)} placeholder="34.7465" inputMode="decimal" /></Field>
-          <Field label="Longitude"><input value={homeLon} onChange={(e) => setHomeLon(e.target.value)} placeholder="-92.2896" inputMode="decimal" /></Field>
-          <button className="btn btn-primary" disabled={!homeValid} onClick={saveHome} style={{ height: 38 }}><Save size={15} /> {homeSaved ? "Saved" : "Save"}</button>
-        </div>
-        {home && !home.set && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 8 }}>Not set yet — you’ll be asked for this when you add your first stand.</div>}
+      {/* sub-nav tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "1px solid var(--bord)" }}>
+        {TABS.map((t) => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            style={{
+              padding: "8px 14px", border: "none", background: "none", cursor: "pointer", fontSize: 14,
+              color: tab === t.key ? "var(--navy)" : "var(--sub)", fontWeight: tab === t.key ? 600 : 400,
+              borderBottom: tab === t.key ? "2px solid var(--navy)" : "2px solid transparent", marginBottom: -1,
+            }}>{t.label}</button>
+        ))}
       </div>
 
-      <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 6 }}>Best Stand — proximity weights</h2>
-      <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
-        Stands near these features get a ranking boost. <b>Weight</b> sets how much each type can add to a stand’s score; <b>falloff</b> is the distance (meters) beyond which a feature stops helping. Bonuses from multiple nearby features of the same type stack.
-      </p>
-
-      {TYPES.map(({ key, label, icon: Icon, color }) => (
-        <div key={key} className="card" style={{ padding: 14, marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <Icon size={17} color={color} /><strong style={{ fontSize: 14.5 }}>{label}</strong>
+      {/* ── TAB: Best Stand ── */}
+      {tab === "stand" && (<>
+        <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <MapPin size={17} color="var(--navy)" /><strong style={{ fontSize: 14.5 }}>Hunt region</strong>
           </div>
-          <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`]}
-            display={s[`weight_${key}`].toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
-          <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`]}
-            display={`${Math.round(s[`falloff_${key}`])} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
+          <p style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 0, marginBottom: 10 }}>
+            Centers the map before you’ve placed any stands. Once you have stands, the map fits to them automatically.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+            <Field label="Latitude"><input value={homeLat} onChange={(e) => setHomeLat(e.target.value)} placeholder="34.7465" inputMode="decimal" /></Field>
+            <Field label="Longitude"><input value={homeLon} onChange={(e) => setHomeLon(e.target.value)} placeholder="-92.2896" inputMode="decimal" /></Field>
+            <button className="btn btn-primary" disabled={!homeValid} onClick={saveHome} style={{ height: 38 }}><Save size={15} /> {homeSaved ? "Saved" : "Save"}</button>
+          </div>
+          {home && !home.set && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 8 }}>Not set yet — you’ll be asked for this when you add your first stand.</div>}
         </div>
-      ))}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
-        <button className="btn" onClick={reset}>Reset to defaults</button>
+        <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 6 }}>Proximity weights</h2>
+        <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
+          Stands near these features get a ranking boost. <b>Weight</b> sets how much each type can add to a stand’s score; <b>falloff</b> is the distance (meters) beyond which a feature stops helping. Bonuses from multiple nearby features of the same type stack.
+        </p>
+        {TYPES.map(({ key, label, icon: Icon, color }) => (
+          <div key={key} className="card" style={{ padding: 14, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <Icon size={17} color={color} /><strong style={{ fontSize: 14.5 }}>{label}</strong>
+            </div>
+            <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`]}
+              display={s[`weight_${key}`].toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
+            <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`]}
+              display={`${Math.round(s[`falloff_${key}`])} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
+          </div>
+        ))}
+
+        <div className="card" style={{ padding: 14, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <Camera size={17} color="var(--navy)" /><strong style={{ fontSize: 14.5 }}>Trail-camera boost cap</strong>
+          </div>
+          <p style={{ fontSize: 12, color: "var(--sub)", marginTop: 0, marginBottom: 10 }}>
+            Max ranking boost a stand can get from recent daylight camera photos. Positive-only — cameras never lower a stand’s rank.
+          </p>
+          <SliderRow label="Max camera boost" min={0} max={30} step={1} value={s.max_camera_boost_pct ?? 15}
+            display={`${Math.round(s.max_camera_boost_pct ?? 15)}%`} onChange={(v) => setS({ ...s, max_camera_boost_pct: v })} />
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
+          <button className="btn" onClick={reset}>Reset to defaults</button>
+        </div>
+      </>)}
+
+      {/* ── TAB: Daily Rating ── */}
+      {tab === "rating" && (<>
+        <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 6 }}>Weather factor weights</h2>
+        <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
+          These tune the 1–5 daily movement rating. They set how much each weather factor counts toward a day’s score. The values are relative — raising one lowers the others’ share automatically.
+        </p>
+        {(() => {
+          const RW = [
+            { key: "rate_w_pressure", label: "Barometric pressure" },
+            { key: "rate_w_wind", label: "Wind" },
+            { key: "rate_w_rain", label: "Rain" },
+            { key: "rate_w_temp", label: "Temperature shift" },
+          ];
+          const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
+          return (
+            <div className="card" style={{ padding: 14, marginBottom: 10 }}>
+              {RW.map((r) => (
+                <SliderRow key={r.key} label={`${r.label} — ${Math.round((s[r.key] ?? 0) / sum * 100)}% of weather`}
+                  min={0} max={1} step={0.01} value={s[r.key] ?? 0}
+                  display={(s[r.key] ?? 0).toFixed(2)} onChange={(v) => setS({ ...s, [r.key]: v })} />
+              ))}
+            </div>
+          );
+        })()}
+
+        <div className="card" style={{ padding: 14, marginBottom: 10 }}>
+          <strong style={{ fontSize: 14.5 }}>Regional rut peak</strong>
+          <p style={{ fontSize: 12, color: "var(--sub)", marginTop: 6, marginBottom: 10 }}>
+            The breeding-peak date for your area. The rating’s daylight-movement peak is set automatically to the seeking/chasing window ~10 days before this. Central Arkansas ≈ Dec 5; north AR ≈ Nov 13.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Peak month">
+              <select value={Math.round(s.rut_peak_month ?? 12)} onChange={(e) => setS({ ...s, rut_peak_month: +e.target.value })}>
+                {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+              </select>
+            </Field>
+            <Field label="Peak day">
+              <input type="number" min={1} max={31} value={Math.round(s.rut_peak_day ?? 5)}
+                onChange={(e) => setS({ ...s, rut_peak_day: Math.max(1, Math.min(31, +e.target.value)) })} />
+            </Field>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
+          <button className="btn" onClick={resetRating}>Reset rating weights</button>
+        </div>
+        <p style={{ color: "var(--sub)", fontSize: 11, marginTop: 12, fontStyle: "italic" }}>
+          Moon phase is intentionally excluded — MSU research found no significant effect on buck activity.
+        </p>
+      </>)}
+
+      {/* ── TAB: Trail Cameras ── */}
+      {tab === "cameras" && (
+        <CameraSettings settings={s} setSettings={setS} saveSettings={save} />
+      )}
+    </div>
+  );
+}
+
+/* ───────── trail-camera settings (Settings > Cameras tab) ───────── */
+function CameraSettings({ settings, setSettings, saveSettings }) {
+  const [cameras, setCameras] = useState(null);
+  const [stands, setStands] = useState([]);
+  const [wizard, setWizard] = useState(false);
+  const [busy, setBusy] = useState(null);
+  const [note, setNote] = useState(null);
+
+  const load = useCallback(async () => {
+    try { setCameras(await api("/cameras")); } catch { setCameras([]); }
+  }, []);
+  useEffect(() => { load(); api("/stands").then(setStands).catch(() => {}); }, [load]);
+
+  async function saveIntervals() {
+    await saveSettings();
+    setNote("Saved"); setTimeout(() => setNote(null), 1500);
+  }
+  async function verify(id) {
+    setBusy(id);
+    try { const r = await api(`/cameras/${id}/verify`, { method: "POST" }); setNote(r.ok ? "Credentials OK" : "Verify failed"); }
+    catch (e) { setNote(e.code === 501 ? "That brand isn’t wired up yet" : "Verify failed"); }
+    finally { setBusy(null); setTimeout(() => setNote(null), 2500); }
+  }
+  async function syncNow(id) {
+    setBusy(id);
+    try { const r = await api(`/cameras/${id}/sync`, { method: "POST" }); setNote(`Synced — ${r.new_sightings} new`); await load(); }
+    catch { setNote("Sync failed"); }
+    finally { setBusy(null); setTimeout(() => setNote(null), 2500); }
+  }
+  async function removeCam(id) {
+    await api(`/cameras/${id}`, { method: "DELETE" }); load();
+  }
+  const standName = (sid) => stands.find((x) => x.id === sid)?.name || "—";
+  const BRAND_LABEL = { spypoint: "SpyPoint", reveal: "Reveal", moultrie: "Moultrie", stealth_cam: "Stealth Cam", browning: "Browning", spartan: "Spartan" };
+
+  return (
+    <>
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <strong style={{ fontSize: 14.5 }}>Sync & storage</strong>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+          <Field label="Sync interval (minutes)">
+            <input type="number" min={5} max={720} value={Math.round(settings.camera_sync_interval_minutes ?? 30)}
+              onChange={(e) => setSettings({ ...settings, camera_sync_interval_minutes: +e.target.value })} />
+          </Field>
+          <Field label="Keep photos (days)">
+            <input type="number" min={1} max={365} value={Math.round(settings.image_retention_days ?? 60)}
+              onChange={(e) => setSettings({ ...settings, image_retention_days: +e.target.value })} />
+          </Field>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 8 }}>
+          Photos older than the retention window are deleted nightly; the sighting record is kept for model tuning. Interval changes take effect on the next app restart.
+        </div>
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={saveIntervals}><Save size={15} /> Save</button>
       </div>
-      <p style={{ color: "var(--sub)", fontSize: 12, marginTop: 12 }}>
-        For reference, stand scores run roughly 0–1, so a weight of 0.15 means a stand right on top of a feature can gain up to ~15 points of rank score per nearby feature of that type.
-      </p>
 
-      {/* ── separate block: daily 1-5 rating model weights ── */}
-      <h2 style={{ fontSize: 15, marginTop: 28, marginBottom: 6, paddingTop: 16, borderTop: "1px solid var(--bord)" }}>Daily deer rating — weather weights</h2>
-      <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
-        These tune the 1–5 daily movement rating, separately from stand ranking. They set how much each weather factor counts toward a day’s score. The values are relative — they’re balanced against each other automatically, so raising one lowers the others’ share. The rut/season drive is fixed and not adjustable here.
-      </p>
-      {(() => {
-        const RW = [
-          { key: "rate_w_pressure", label: "Barometric pressure" },
-          { key: "rate_w_wind", label: "Wind" },
-          { key: "rate_w_rain", label: "Rain" },
-          { key: "rate_w_temp", label: "Temperature shift" },
-        ];
-        const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
-        return (
-          <div className="card" style={{ padding: 14, marginBottom: 10 }}>
-            {RW.map((r) => (
-              <SliderRow key={r.key} label={`${r.label} — ${Math.round((s[r.key] ?? 0) / sum * 100)}% of weather`}
-                min={0} max={1} step={0.01} value={s[r.key] ?? 0}
-                display={(s[r.key] ?? 0).toFixed(2)} onChange={(v) => setS({ ...s, [r.key]: v })} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <strong style={{ fontSize: 14.5 }}>Cameras</strong>
+        <button className="btn btn-primary" onClick={() => setWizard(true)}><Plus size={15} /> Set up a new Camera</button>
+      </div>
+      {note && <div style={{ fontSize: 12.5, color: "var(--navy)", marginBottom: 8 }}>{note}</div>}
+
+      {cameras === null && <Empty>Loading…</Empty>}
+      {cameras && cameras.length === 0 && <Empty>No cameras yet. Click “Set up a new Camera” to connect one.</Empty>}
+      <div style={{ display: "grid", gap: 8 }}>
+        {(cameras || []).map((c) => (
+          <div key={c.id} className="card" style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+            <Camera size={18} color="var(--navy)" style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 500 }}>{c.name} <span style={{ fontSize: 12, color: "var(--sub)", fontWeight: 400 }}>· {BRAND_LABEL[c.brand] || c.brand}</span></div>
+              <div style={{ fontSize: 12, color: "var(--sub)" }}>
+                Stand: {standName(c.stand_id)}{c.last_sync_at ? ` · last sync ${new Date(c.last_sync_at).toLocaleString()}` : " · never synced"}
+              </div>
+            </div>
+            <button className="icon-btn" title="Verify credentials" disabled={busy === c.id} onClick={() => verify(c.id)}><CheckCircle2 size={15} /></button>
+            <button className="icon-btn" title="Sync now" disabled={busy === c.id} onClick={() => syncNow(c.id)}><RefreshCw size={15} /></button>
+            <button className="icon-btn" title="Remove" onClick={() => removeCam(c.id)}><Trash2 size={15} /></button>
+          </div>
+        ))}
+      </div>
+
+      {wizard && <CameraWizard stands={stands} onClose={() => setWizard(false)} onDone={() => { setWizard(false); load(); }} />}
+    </>
+  );
+}
+
+/* ───────── 3-step camera setup wizard ───────── */
+function CameraWizard({ stands, onClose, onDone }) {
+  const [step, setStep] = useState(1);
+  const [providers, setProviders] = useState([]);
+  const [brand, setBrand] = useState(null);
+  const [name, setName] = useState("");
+  const [creds, setCreds] = useState({});
+  const [standId, setStandId] = useState(stands[0]?.id ?? null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { api("/camera-providers").then((r) => setProviders(r.providers || [])).catch(() => {}); }, []);
+  const BRAND_LABEL = { spypoint: "SpyPoint", reveal: "Reveal", moultrie: "Moultrie", stealth_cam: "Stealth Cam", browning: "Browning", spartan: "Spartan" };
+  const meta = providers.find((p) => p.brand === brand);
+  const fields = meta?.credential_fields || ["username", "password"];
+
+  async function create() {
+    setBusy(true); setErr(null);
+    try {
+      const cam = await api("/cameras", { method: "POST", body: JSON.stringify({ name: name || BRAND_LABEL[brand], brand, stand_id: standId, credentials: creds }) });
+      // best-effort verify (won't block completion for unimplemented brands)
+      try { await api(`/cameras/${cam.id}/verify`, { method: "POST" }); } catch {}
+      onDone();
+    } catch { setErr("Couldn’t save the camera."); setBusy(false); }
+  }
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="card" style={{ padding: 18, border: "2px solid var(--navy)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <strong>Set up a camera</strong>
+          <button className="icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>Step {step} of 3</div>
+
+        {step === 1 && (<>
+          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Choose your camera brand:</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {providers.map((p) => (
+              <button key={p.brand} onClick={() => setBrand(p.brand)}
+                style={{
+                  padding: "12px 10px", borderRadius: 10, cursor: "pointer", textAlign: "left",
+                  border: brand === p.brand ? "2px solid var(--navy)" : "1px solid var(--bord2)",
+                  background: brand === p.brand ? "var(--surf)" : "var(--bg)", color: "var(--txt)",
+                }}>
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>{BRAND_LABEL[p.brand]}</div>
+                <div style={{ fontSize: 11, color: p.implemented ? "var(--green)" : "var(--amber)", marginTop: 3 }}>
+                  {p.implemented ? "supported" : "coming soon"}
+                </div>
+              </button>
             ))}
           </div>
-        );
-      })()}
-      <div style={{ display: "flex", gap: 8, margintop: 4 }}>
-        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
-        <button className="btn" onClick={resetRating}>Reset rating weights</button>
+          {brand && meta && !meta.implemented && (
+            <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 10, display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              {BRAND_LABEL[brand]} integration isn’t wired up yet. You can save it now, but photos won’t sync until it’s implemented.
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" disabled={!brand} onClick={() => setStep(2)}>Next</button>
+          </div>
+        </>)}
+
+        {step === 2 && (<>
+          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Sign in to your {BRAND_LABEL[brand]} account:</div>
+          <Field label="Camera name (label)"><input value={name} onChange={(e) => setName(e.target.value)} placeholder={`${BRAND_LABEL[brand]} — North ridge`} /></Field>
+          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+            {fields.map((f) => (
+              <Field key={f} label={f.charAt(0).toUpperCase() + f.slice(1)}>
+                <input type={f.toLowerCase().includes("pass") || f.toLowerCase().includes("token") ? "password" : "text"}
+                  value={creds[f] || ""} onChange={(e) => setCreds({ ...creds, [f]: e.target.value })} />
+              </Field>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8 }}>
+            Credentials are encrypted before storage. They’re only used to fetch your photos.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+            <button className="btn" onClick={() => setStep(1)}>Back</button>
+            <button className="btn btn-primary" onClick={() => setStep(3)}>Next</button>
+          </div>
+        </>)}
+
+        {step === 3 && (<>
+          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Pair this camera with a stand:</div>
+          <Field label="Stand">
+            <select value={standId ?? ""} onChange={(e) => setStandId(e.target.value ? +e.target.value : null)}>
+              <option value="">— none —</option>
+              {stands.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+            </select>
+          </Field>
+          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 8 }}>
+            Sightings from this camera boost the paired stand’s ranking when deer show up in daylight.
+          </div>
+          {err && <div style={{ fontSize: 12.5, color: "var(--red)", marginTop: 10 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+            <button className="btn" onClick={() => setStep(2)}>Back</button>
+            <button className="btn btn-primary" disabled={busy} onClick={create}><Save size={15} /> {busy ? "Saving…" : "Finish"}</button>
+          </div>
+        </>)}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -897,6 +1146,16 @@ function DeerRating({ rating }) {
           {bar("Wind", fac.wind)}
           {bar("Rain (1=dry)", fac.rain)}
           {bar("Temp shift", fac.temp_shift)}
+          {Array.isArray(rating.breakdown) && (
+            <div style={{ marginTop: 10, display: "grid", gap: 3 }}>
+              {rating.breakdown.map((b, i) => (
+                <div key={i} style={{ fontSize: 11, color: "var(--sub)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span><b style={{ color: "var(--txt)", fontWeight: 500 }}>{b.factor}:</b> {b.impact}</span>
+                  <span style={{ flexShrink: 0 }}>{b.weight === "multiplier" ? "×" : `w ${b.weight}`}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8, lineHeight: 1.5 }}>
             {rating.inputs.pressure_inhg != null && <>{rating.inputs.pressure_inhg}″ pressure · </>}
             {rating.inputs.wind_mph != null && <>{rating.inputs.wind_mph} mph wind · </>}
@@ -935,10 +1194,15 @@ function ProxToggle({ on, color, label, icon: Icon, onClick }) {
 
 function DayRankCard({ row }) {
   const { stand, periods, wins, proximity } = row;
+  const [open, setOpen] = useState(false);
   // border reflects the (first) period this stand wins, if any
   const winColor = wins.length ? PERIOD_COLORS[wins[0]] : undefined;
   const pct = (p) => periods[p] ? Math.round(periods[p].score.total * 100) : null;
   const proxTotal = proximity ? Math.round(proximity.total * 100) : 0;
+  // best-period camera boost (if any)
+  const bestP = row.best_period;
+  const cam = bestP && periods[bestP]?.score?.camera;
+  const camBoost = cam && cam.boost_pct > 0 ? cam.boost_pct : 0;
   return (
     <div className="card" style={{ padding: "12px 14px", marginBottom: 8, border: winColor ? `2px solid ${winColor}` : undefined }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -954,6 +1218,14 @@ function DayRankCard({ row }) {
             proximity +{proxTotal}
           </span>
         )}
+        {camBoost > 0 && (
+          <span title={cam.text} style={{ fontSize: 11.5, fontWeight: 500, color: "var(--navy)", background: "rgba(12,68,124,.12)", padding: "2px 8px", borderRadius: 6, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <Camera size={11} /> +{camBoost}%
+          </span>
+        )}
+        <button className="icon-btn" style={{ marginLeft: "auto" }} title="Score breakdown" onClick={() => setOpen((o) => !o)}>
+          <ChevronDown size={15} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+        </button>
       </div>
       <div style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap" }}>
         {["morning", "midday", "evening"].map((p) => {
@@ -976,6 +1248,26 @@ function DayRankCard({ row }) {
           );
         })}
       </div>
+      {open && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bord)" }}>
+          {["morning", "midday", "evening"].map((p) => {
+            const bd = periods[p]?.score?.breakdown;
+            if (!bd) return null;
+            return (
+              <div key={p} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: PERIOD_COLORS[p], marginBottom: 3 }}>{PERIOD_LABEL[p]}</div>
+                <div style={{ display: "grid", gap: 2 }}>
+                  {bd.map((b, i) => (
+                    <div key={i} style={{ fontSize: 11, color: "var(--sub)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <span><b style={{ color: "var(--txt)", fontWeight: 500 }}>{b.factor}:</b> {b.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -20,9 +20,16 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ambush}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ambushiq}
       APP_TOKEN: ${APP_TOKEN:-unused}
+      # used to derive the encryption key for stored camera credentials
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      CAMERA_IMAGE_DIR: /app/data/camera_images
+      # optional: DETECTOR_MODE=fallback to skip MegaDetector if too heavy on this host
+      DETECTOR_MODE: ${DETECTOR_MODE:-megadetector}
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - camera_images:/app/data/camera_images
     # Published to the host so your existing nginx reverse proxy can reach it.
     # APP_BIND defaults to 127.0.0.1 (loopback only) — correct when nginx runs on
     # the same host. If nginx is on a different machine, set APP_BIND=0.0.0.0 in
@@ -32,3 +39,4 @@ services:
 
 volumes:
   dbdata:
+  camera_images:

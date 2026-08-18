@@ -179,3 +179,30 @@ Weather inputs are daytime (sunrise–sunset) aggregates from Open-Meteo. The ru
 date is currently fixed for central Arkansas; it can be made configurable later.
 The factor weights are a reasoned synthesis of the cited research, not coefficients
 lifted verbatim from any single paper — tune against what you observe on your land.
+
+## v2.15 — Trail cameras, background sync, configurable rut
+
+- **Trail cameras**: connect cameras in Settings → Trail Cameras via a 3-step wizard
+  (brand → credentials → pair to a stand). SpyPoint has a working integration; the
+  other brands (Reveal, Moultrie, Stealth Cam, Browning, Spartan) are scaffolded but
+  not yet wired to real endpoints — they save but won't sync until implemented.
+  Credentials are encrypted at rest with a key derived from POSTGRES_PASSWORD.
+- **Background scheduler** (APScheduler): syncs cameras every N minutes (configurable),
+  runs photos through MegaDetector to keep only real animal detections, and records
+  daylight sightings. A nightly 3 AM job deletes photos older than the retention window
+  while keeping the sighting records for model tuning.
+- **Camera boost**: stands with recent (72h) daylight camera sightings matching the
+  current hunt period get a positive-only ranking boost, capped by max_camera_boost_pct.
+  Never penalizes stands without photos.
+- **Configurable rut date**: set your regional breeding-peak month/day in Settings →
+  Daily Rating (central AR ≈ Dec 5, north AR ≈ Nov 13).
+- **Score breakdowns**: stand rank cards and the daily rating expand to show itemized
+  factor contributions.
+- **Settings** reorganized into three tabs: Best Stand, Daily Rating, Trail Cameras.
+
+### Notes for operators
+- MegaDetector pulls PyTorch + a model download — the image is much larger and the
+  first build is slow. Set DETECTOR_MODE=fallback in .env to skip detection (every
+  photo counts as a low-confidence sighting) if it's too heavy on your host.
+- Camera JPEGs persist in the `camera_images` Docker volume and are served at
+  /static/camera_images/.
