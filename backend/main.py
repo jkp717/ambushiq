@@ -19,6 +19,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 import terrain as terrain_mod
 import scoring
 import deer_rating
+import cameras as cameras_mod
+import detection as detection_mod
 
 DB_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://ambush:ambush@db:5432/ambushiq")
 APP_TOKEN = os.environ.get("APP_TOKEN", "")  # shared secret; required in prod
@@ -35,6 +37,55 @@ def _read_version() -> str:
 
 APP_VERSION = _read_version()
 engine = create_engine(DB_URL, pool_pre_ping=True)
+
+# v2.15: trail cameras. credentials_json holds a Fernet-encrypted blob (never plaintext).
+CAMERA_BRANDS = ("spypoint", "reveal", "moultrie", "stealth_cam", "browning", "spartan")
+
+CAMERA_IMAGE_DIR = os.environ.get("CAMERA_IMAGE_DIR", "/app/data/camera_images")
+
+# home/hunt region center — stored separately; absent until the user sets it
+HOME_KEYS = ("home_lat", "home_lon")
+
+# default proximity weights + falloffs (meters)
+DEFAULT_SETTINGS = {
+    "weight_corridor": 0.15, "falloff_corridor": 150,
+    "weight_food": 0.15, "falloff_food": 200,
+    "weight_bedding": 0.10, "falloff_bedding": 250,
+    # deer day-rating weather factor weights (relative; normalized at use)
+    "rate_w_pressure": 0.32, "rate_w_wind": 0.20, "rate_w_rain": 0.28, "rate_w_temp": 0.20,
+    # v2.15: trail-camera + rut-date settings
+    "camera_sync_interval_minutes": 30,
+    "image_retention_days": 60,
+    "max_camera_boost_pct": 15.0,
+    "rut_peak_month": 12,
+    "rut_peak_day": 5,
+}
+
+
+# ---------- credential encryption (Fernet key derived from an existing secret) ----------
+# We derive a stable key from POSTGRES_PASSWORD (already managed by the owner) so no new
+# secret is needed. Tradeoff: rotating that password invalidates stored camera credentials
+# (they'd need re-entry). Fine for a single-user self-hosted app.
+def _fernet():
+    from cryptography.fernet import Fernet
+    import base64
+    import hashlib
+    secret = os.environ.get("POSTGRES_PASSWORD") or os.environ.get("DATABASE_URL", "ambushiq-fallback")
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_credentials(data: dict) -> str:
+    return _fernet().encrypt(json.dumps(data).encode()).decode()
+
+
+def decrypt_credentials(blob: Optional[str]) -> dict:
+    if not blob:
+        return {}
+    try:
+        return json.loads(_fernet().decrypt(blob.encode()).decode())
+    except Exception:
+        return {}
 
 
 class Base(DeclarativeBase):
@@ -90,17 +141,46 @@ class Setting(Base):
     value: Mapped[float] = mapped_column(Float)
 
 
-# default proximity weights + falloffs (meters)
-DEFAULT_SETTINGS = {
-    "weight_corridor": 0.15, "falloff_corridor": 150,
-    "weight_food": 0.15, "falloff_food": 200,
-    "weight_bedding": 0.10, "falloff_bedding": 250,
-    # deer day-rating weather factor weights (relative; normalized at use)
-    "rate_w_pressure": 0.32, "rate_w_wind": 0.20, "rate_w_rain": 0.28, "rate_w_temp": 0.20,
-}
+class Camera(Base):
+    __tablename__ = "cameras"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120))
+    brand: Mapped[str] = mapped_column(String(32))
+    credentials_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # encrypted
+    stand_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # FK stands.id
+    is_active: Mapped[int] = mapped_column(Integer, default=1)
+    last_sync_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
-# home/hunt region center — stored separately; absent until the user sets it
-HOME_KEYS = ("home_lat", "home_lon")
+    def to_dict(self) -> dict:
+        # NEVER expose credentials
+        return {
+            "id": self.id, "name": self.name, "brand": self.brand,
+            "stand_id": self.stand_id, "is_active": bool(self.is_active),
+            "last_sync_at": self.last_sync_at, "created_at": self.created_at,
+            "has_credentials": bool(self.credentials_json),
+        }
+
+
+class CameraSighting(Base):
+    __tablename__ = "camera_sightings"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    stand_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    timestamp: Mapped[str] = mapped_column(String(32))  # ISO of the sighting
+    confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
+    image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # NULL after cleanup
+    created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    def to_dict(self) -> dict:
+        img = None
+        if self.image_path:
+            img = "/static/camera_images/" + os.path.basename(self.image_path)
+        return {
+            "id": self.id, "stand_id": self.stand_id, "camera_id": self.camera_id,
+            "timestamp": self.timestamp, "confidence_score": self.confidence_score,
+            "image_url": img, "created_at": self.created_at,
+        }
 
 
 def init_db(retries: int = 30):
@@ -116,10 +196,18 @@ def init_db(retries: int = 30):
 
 app = FastAPI(title="AmbushIQ")
 
+# serve downloaded camera JPEGs
+os.makedirs(CAMERA_IMAGE_DIR, exist_ok=True)
+app.mount("/static/camera_images", StaticFiles(directory=CAMERA_IMAGE_DIR), name="camera_images")
+
 
 @app.on_event("startup")
 def _startup():
     init_db()
+    try:
+        start_scheduler()
+    except Exception:
+        pass  # scheduler is best-effort; app must boot regardless
 
 
 def require_token(authorization: str = Header(default="")):
@@ -653,8 +741,16 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     if not body.use_corridor: settings["weight_corridor"] = 0.0
     if not body.use_food: settings["weight_food"] = 0.0
     if not body.use_bedding: settings["weight_bedding"] = 0.0
+    max_cam_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
 
-    def score_period(stand, lo, hi, bonus):
+    # recent sightings per stand (last 72h handled inside camera_boost)
+    sightings_by_stand: dict[int, list] = {}
+    with Session(engine) as s:
+        for row in s.scalars(select(CameraSighting)).all():
+            sightings_by_stand.setdefault(row.stand_id, []).append(
+                {"timestamp": row.timestamp, "confidence_score": row.confidence_score})
+
+    def score_period(stand, lo, hi, bonus, period_name, sightings):
         best = None
         for i in day_idxs:
             hh = datetime.fromisoformat(h["time"][i]).hour
@@ -665,10 +761,19 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
                 "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
                 "time_h": hh, "sunrise_h": sr_h, "sunset_h": ss_h,
             }
-            sc = scoring.score_stand_hour(stand, hour)
-            sc["base_total"] = sc["total"]
-            sc["proximity_bonus"] = round(bonus["total"], 3)
-            sc["total"] = round(sc["total"] + bonus["total"], 3)
+            det = scoring.score_with_breakdown(
+                stand, hour, period=period_name, sightings=sightings,
+                max_boost_pct=max_cam_boost, proximity=bonus)
+            sc = {
+                "total": det["final_score"],
+                "base_total": det["base_score"],
+                "proximity_bonus": det["proximity_bonus"],
+                "camera": det["camera"],
+                "breakdown": det["breakdown"],
+                "scent_score": det["scent_score"],
+                "scent_to_deg": det["scent_to_deg"],
+                "thermal_phase": det["thermal_phase"],
+            }
             if best is None or sc["total"] > best["score"]["total"]:
                 best = {"hour": hour, "score": sc}
         return best
@@ -678,9 +783,10 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     period_best = {p: None for p in periods}  # (stand_id, total)
     for st in stands:
         bonus = proximity_bonus(st, zones, corridors_l, settings)
+        sightings = sightings_by_stand.get(st["id"], [])
         per = {}
         for p, (lo, hi) in periods.items():
-            b = score_period(st, lo, hi, bonus)
+            b = score_period(st, lo, hi, bonus, p, sightings)
             per[p] = b
             if b and (period_best[p] is None or b["score"]["total"] > period_best[p][1]):
                 period_best[p] = (st["id"], b["score"]["total"])
@@ -712,6 +818,11 @@ class SettingsIn(BaseModel):
     rate_w_wind: float | None = None
     rate_w_rain: float | None = None
     rate_w_temp: float | None = None
+    max_camera_boost_pct: float | None = None
+    camera_sync_interval_minutes: float | None = None
+    image_retention_days: float | None = None
+    rut_peak_month: float | None = None
+    rut_peak_day: float | None = None
 
 
 @app.get("/api/settings")
@@ -843,7 +954,9 @@ async def deer_ratings(_=Depends(require_token)):
             "baseline_f": round(baseline_f) if baseline_f is not None else None,
         }
         y, m, d = (int(x) for x in dk.split("-"))
-        rating = deer_rating.rate_day(_date(y, m, d), wx, rate_weights)
+        rating = deer_rating.rate_day(_date(y, m, d), wx, rate_weights,
+                                      rut_peak_month=int(_set.get("rut_peak_month", 12)),
+                                      rut_peak_day=int(_set.get("rut_peak_day", 5)))
         label = datetime.fromisoformat(dk + "T12:00").strftime("%a %b %-d")
         rating["day"] = dk
         rating["label"] = label
@@ -854,6 +967,231 @@ async def deer_ratings(_=Depends(require_token)):
         out.append(rating)
 
     return {"ratings": out}
+
+
+# ---------- v2.15: trail cameras ----------
+class CameraIn(BaseModel):
+    name: str
+    brand: str
+    stand_id: int | None = None
+    credentials: dict | None = None  # plaintext in; stored encrypted
+
+
+class CameraUpdateIn(BaseModel):
+    name: str | None = None
+    stand_id: int | None = None
+    is_active: bool | None = None
+    credentials: dict | None = None
+
+
+@app.get("/api/camera-providers")
+def camera_providers(_=Depends(require_token)):
+    """Brand metadata for the setup wizard (which are implemented + required fields)."""
+    return {"providers": cameras_mod.provider_meta()}
+
+
+@app.get("/api/cameras")
+def list_cameras(_=Depends(require_token)):
+    with Session(engine) as s:
+        return [c.to_dict() for c in s.scalars(select(Camera)).all()]
+
+
+@app.post("/api/cameras")
+def create_camera(body: CameraIn, _=Depends(require_token)):
+    if body.brand not in CAMERA_BRANDS:
+        raise HTTPException(400, "unknown brand")
+    now = datetime.utcnow().isoformat()
+    with Session(engine) as s:
+        cam = Camera(
+            name=body.name, brand=body.brand, stand_id=body.stand_id, is_active=1,
+            created_at=now,
+            credentials_json=encrypt_credentials(body.credentials) if body.credentials else None,
+        )
+        s.add(cam); s.commit(); s.refresh(cam)
+        return cam.to_dict()
+
+
+@app.put("/api/cameras/{camera_id}")
+def update_camera(camera_id: int, body: CameraUpdateIn, _=Depends(require_token)):
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam:
+            raise HTTPException(404, "not found")
+        if body.name is not None:
+            cam.name = body.name
+        if body.stand_id is not None:
+            cam.stand_id = body.stand_id
+        if body.is_active is not None:
+            cam.is_active = 1 if body.is_active else 0
+        if body.credentials is not None:
+            cam.credentials_json = encrypt_credentials(body.credentials)
+        s.commit(); s.refresh(cam)
+        return cam.to_dict()
+
+
+@app.delete("/api/cameras/{camera_id}")
+def delete_camera(camera_id: int, _=Depends(require_token)):
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if cam:
+            s.delete(cam); s.commit()
+    return {"ok": True}
+
+
+@app.post("/api/cameras/{camera_id}/verify")
+async def verify_camera(camera_id: int, _=Depends(require_token)):
+    """Test stored credentials against the provider."""
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam:
+            raise HTTPException(404, "not found")
+        creds = decrypt_credentials(cam.credentials_json)
+        brand = cam.brand
+    try:
+        prov = cameras_mod.get_provider(brand, creds)
+        ok = await prov.verify()
+        return {"ok": bool(ok), "implemented": prov.implemented}
+    except cameras_mod.NotImplementedProvider as e:
+        raise HTTPException(501, str(e))
+    except cameras_mod.CameraError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/cameras/{camera_id}/sync")
+async def sync_camera_now(camera_id: int, _=Depends(require_token)):
+    """Manually trigger a sync for one camera."""
+    n = await _sync_one_camera(camera_id)
+    return {"ok": True, "new_sightings": n}
+
+
+@app.get("/api/cameras/{camera_id}/sightings")
+def camera_sightings(camera_id: int, _=Depends(require_token)):
+    with Session(engine) as s:
+        rows = s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all()
+        return [r.to_dict() for r in rows]
+
+
+async def _sync_one_camera(camera_id: int) -> int:
+    """Fetch recent photos for a camera, run detection, record positive sightings.
+    Returns count of new sightings. Best-effort: never raises to the scheduler."""
+    import datetime as _dt
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam or not cam.is_active:
+            return 0
+        creds = decrypt_credentials(cam.credentials_json)
+        brand, stand_id, cid = cam.brand, cam.stand_id, cam.id
+    try:
+        prov = cameras_mod.get_provider(brand, creds)
+        if not prov.implemented:
+            return 0
+        photos = await prov.fetch_recent_photos()
+    except Exception:
+        return 0
+
+    os.makedirs(CAMERA_IMAGE_DIR, exist_ok=True)
+    new = 0
+    async with httpx.AsyncClient() as client:
+        for p in photos:
+            url = p.get("url")
+            if not url:
+                continue
+            # download
+            try:
+                r = await client.get(url, timeout=60)
+                if r.status_code != 200:
+                    continue
+            except Exception:
+                continue
+            fname = f"cam{cid}_{int(_dt.datetime.utcnow().timestamp()*1000)}_{new}.jpg"
+            fpath = os.path.join(CAMERA_IMAGE_DIR, fname)
+            try:
+                with open(fpath, "wb") as f:
+                    f.write(r.content)
+            except Exception:
+                continue
+            # detect
+            det = detection_mod.detect_animal(fpath)
+            if not det.get("is_animal"):
+                # not wildlife — discard the file, don't record
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+                continue
+            with Session(engine) as s:
+                s.add(CameraSighting(
+                    stand_id=stand_id, camera_id=cid,
+                    timestamp=p.get("taken_at") or _dt.datetime.utcnow().isoformat(),
+                    confidence_score=det.get("confidence", 0.0),
+                    image_path=fpath, created_at=_dt.datetime.utcnow().isoformat(),
+                ))
+                cam2 = s.get(Camera, cid)
+                if cam2:
+                    cam2.last_sync_at = _dt.datetime.utcnow().isoformat()
+                s.commit()
+            new += 1
+    return new
+
+
+async def sync_cameras_job():
+    """Scheduler job: sync every active camera."""
+    with Session(engine) as s:
+        ids = [c.id for c in s.scalars(select(Camera).where(Camera.is_active == 1)).all()]
+    for cid in ids:
+        try:
+            await _sync_one_camera(cid)
+        except Exception:
+            continue
+
+
+def auto_cleanup_job():
+    """Scheduler job (daily 3 AM): delete JPEGs older than retention; keep sighting rows."""
+    import datetime as _dt
+    settings = get_settings()
+    retention = int(settings.get("image_retention_days", 60))
+    cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=retention)
+    with Session(engine) as s:
+        rows = s.scalars(select(CameraSighting).where(CameraSighting.image_path.isnot(None))).all()
+        for row in rows:
+            try:
+                created = _dt.datetime.fromisoformat((row.created_at or row.timestamp).replace("Z", ""))
+            except Exception:
+                continue
+            if created < cutoff:
+                if row.image_path and os.path.exists(row.image_path):
+                    try:
+                        os.remove(row.image_path)
+                    except OSError:
+                        pass
+                row.image_path = None  # keep the sighting for model auto-tuning
+        s.commit()
+
+
+_scheduler = None
+
+
+def start_scheduler():
+    """Start APScheduler with the sync + cleanup jobs. Lazy import so app boots even
+    if apscheduler isn't installed (jobs simply won't run)."""
+    global _scheduler
+    if _scheduler is not None:
+        return
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.triggers.cron import CronTrigger
+    except Exception:
+        return
+    settings = get_settings()
+    interval = int(settings.get("camera_sync_interval_minutes", 30)) or 30
+    sched = AsyncIOScheduler()
+    sched.add_job(sync_cameras_job, IntervalTrigger(minutes=interval), id="sync_cameras",
+                  replace_existing=True, max_instances=1)
+    sched.add_job(auto_cleanup_job, CronTrigger(hour=3, minute=0), id="auto_cleanup",
+                  replace_existing=True, max_instances=1)
+    sched.start()
+    _scheduler = sched
 
 
 # ---------- static frontend ----------

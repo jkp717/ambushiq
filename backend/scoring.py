@@ -103,3 +103,123 @@ def score_stand_hour(stand: dict, hour: dict) -> dict:
         "thermal_phase": therm["phase"],
         "drainage_deg": round(drainage),
     }
+
+
+# ─────────────────────────── v2.15: camera boost + breakdowns ───────────────────────────
+# Hunt-period hour windows (local hour-of-day) used to match daylight sightings.
+PERIOD_WINDOWS = {
+    "morning": (5, 10),   # 5–10 AM
+    "midday": (10, 15),   # 10 AM–3 PM
+    "evening": (15, 20),  # 3–8 PM
+}
+
+
+def period_for_hour(hour_of_day: int) -> str | None:
+    for p, (lo, hi) in PERIOD_WINDOWS.items():
+        if lo <= hour_of_day < hi:
+            return p
+    return None
+
+
+def camera_boost(period: str, sightings: list[dict], max_boost_pct: float) -> dict:
+    """
+    Positive-only boost. Given a stand's recent camera sightings (each a dict with
+    'timestamp' ISO and 'confidence_score'), return a multiplier >= 1.0 and a
+    breakdown. Only DAYLIGHT sightings within the last 72h whose hour-of-day falls
+    in the CURRENT hunt period count. No penalty is ever applied.
+
+    Boost scales with how many qualifying sightings and their confidence, capped at
+    max_boost_pct (e.g. 15.0 -> up to +15% -> multiplier up to 1.15).
+    """
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    qualifying = []
+    for s in sightings or []:
+        ts = s.get("timestamp")
+        if not ts:
+            continue
+        try:
+            t = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=_dt.timezone.utc)
+        except Exception:
+            continue
+        age_h = (now - t).total_seconds() / 3600
+        if age_h < 0 or age_h > 72:
+            continue
+        if period_for_hour(t.hour) != period:
+            continue
+        qualifying.append(s)
+
+    if not qualifying:
+        return {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "no recent daylight photos"}
+
+    # accumulate: each qualifying sighting contributes, weighted by confidence,
+    # with diminishing returns; normalize so ~3 solid sightings approaches the cap.
+    accum = 0.0
+    for s in qualifying:
+        conf = max(0.1, min(1.0, float(s.get("confidence_score") or 0.0) or 0.5))
+        accum += conf
+    frac = min(1.0, accum / 3.0)
+    boost_pct = round(max_boost_pct * frac, 1)
+    mult = 1.0 + boost_pct / 100.0
+    return {
+        "multiplier": mult, "boost_pct": boost_pct, "count": len(qualifying),
+        "text": f"+{boost_pct}% from {len(qualifying)} daylight photo(s) in the last 72h",
+    }
+
+
+def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
+                         sightings: list[dict] | None = None, max_boost_pct: float = 0.0,
+                         proximity: dict | None = None) -> dict:
+    """
+    Wrap score_stand_hour with a structured, human-readable breakdown and an optional
+    positive-only camera boost. Returns final_score plus a breakdown list.
+    """
+    base = score_stand_hour(stand, hour)
+    base_total = base["total"]
+
+    breakdown = []
+    # wind / scent alignment
+    if stand.get("deer_approach_deg") is not None:
+        if base["scent_score"] > 0.6:
+            wtxt = "scent carries away from expected deer approach"
+        elif base["scent_score"] > 0.35:
+            wtxt = "scent crosses the deer approach"
+        else:
+            wtxt = "scent blows toward deer"
+    else:
+        wtxt = "no deer-approach set; scent direction only"
+    breakdown.append({"factor": "Wind / scent", "value": base["scent_score"],
+                      "text": f"{wtxt} (scent to {base['scent_to_deg']}°)"})
+    breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],
+                      "text": f"gust steadiness {base['steadiness']}"})
+    breakdown.append({"factor": "Terrain / thermals", "value": 1.0 if base["thermal_phase"] != "neutral" else 0.3,
+                      "text": f"thermals {base['thermal_phase']}, drainage {base['drainage_deg']}°"})
+
+    total = base_total
+    prox_total = 0.0
+    if proximity:
+        prox_total = float(proximity.get("total") or 0.0)
+        if prox_total > 0:
+            total += prox_total
+            breakdown.append({"factor": "Infrastructure proximity", "value": round(prox_total, 3),
+                              "text": f"+{round(prox_total*100)} from nearby corridor/food/bedding"})
+
+    cam = {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "camera boost off"}
+    if period and max_boost_pct and sightings is not None:
+        cam = camera_boost(period, sightings, max_boost_pct)
+        total *= cam["multiplier"]
+        breakdown.append({"factor": "Trail-camera boost", "value": cam["boost_pct"] / 100.0,
+                          "text": cam["text"]})
+
+    return {
+        "final_score": round(total, 3),
+        "base_score": round(base_total, 3),
+        "proximity_bonus": round(prox_total, 3),
+        "camera": cam,
+        "breakdown": breakdown,
+        "scent_to_deg": base["scent_to_deg"],
+        "thermal_phase": base["thermal_phase"],
+        "scent_score": base["scent_score"],
+    }
