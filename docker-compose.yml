@@ -25,6 +25,8 @@ services:
       CAMERA_IMAGE_DIR: /app/data/camera_images
       # optional: DETECTOR_MODE=fallback to skip MegaDetector if too heavy on this host
       DETECTOR_MODE: ${DETECTOR_MODE:-megadetector}
+      MEGADETECTOR_MODEL: ${DETECTOR_MODEL:-MDV6-yolov10-c}
+      DETECTOR_CONF: ${DETECTOR_CONF:-0.2}
     depends_on:
       db:
         condition: service_healthy
