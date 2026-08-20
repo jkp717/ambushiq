@@ -218,10 +218,10 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
   const [drawMode, setDrawMode] = useState(null);
   const [draftPoints, setDraftPoints] = useState([]);
   const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, zones: true, corridors: true });
-  const [pendingName, setPendingName] = useState(null); // {type:'zone'|'corridor', kind?, payload, title}
+  const [pendingName, setPendingName] = useState(null);
   const [useProx, setUseProx] = useState({ corridor: true, food: true, bedding: true });
   const [deerRatings, setDeerRatings] = useState(null);
-  const [home, setHome] = useState(null);  // {lat,lon,set} | null while loading
+  const [home, setHome] = useState(null);
 
   useEffect(() => { api("/home").then(setHome).catch(() => setHome({ set: false })); }, []);
 
@@ -230,7 +230,6 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     api("/deer-ratings").then((j) => setDeerRatings(j.ratings)).catch(() => {});
   }, [stands.length]);
 
-  // a draw request arriving from a list page
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
 
   useEffect(() => {
@@ -244,13 +243,12 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
         if (j.days[d].day === now.toISOString().slice(0, 10) && hi >= 0) { di = d; hp = hi; break; }
       }
       setDayIdx(di); setHourPos(hp);
-    }).catch(() => setErr("Couldn’t load forecast hours."));
+    }).catch(() => setErr("Couldn't load forecast hours."));
   }, [stands.length]);
 
   const curDay = days[dayIdx];
   const curHour = curDay?.hours[Math.min(hourPos, (curDay?.hours.length || 1) - 1)];
 
-  // hourly conditions drive the MAP ARROWS only
   useEffect(() => {
     if (!curHour) return;
     let cancel = false;
@@ -260,7 +258,6 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     return () => { cancel = true; };
   }, [curHour?.index]);
 
-  // day periods drive the RANKINGS (morning / midday / evening winners)
   useEffect(() => {
     if (!curDay) return;
     let cancel = false;
@@ -296,17 +293,13 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     try {
       if (pn.type === "zone") { await api("/zones", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadZones(); }
       else { await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadCorridors(); }
-    } catch { setErr(`Couldn’t save ${pn.type}.`); }
+    } catch { setErr(`Couldn't save ${pn.type}.`); }
   }
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
 
   if (!stands.length) {
-    // No stands yet. If the user came here to add their first stand (or any
-    // feature), still show the map so they can place it — the data panels need a
-    // stand to exist, so we show a stripped-down placement view until then.
     if (drawMode) {
-      // need a hunt-region center before the first placement
       if (home && !home.set) {
         return (
           <div>
@@ -346,99 +339,419 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     return <div><PageHead title="Hunt Planner" /><Empty>Add a stand first (Stand locations → Add) to see the map and rankings.</Empty></div>;
   }
 
+  const selectedRating = deerRatings?.find((r) => r.day === curDay?.day);
+
   return (
     <div>
-      <PageHead title="Hunt Planner" />
       {err && <Banner>{err}</Banner>}
 
-      {/* ── Card 1: When to hunt (outlook + selected-day rating) ── */}
-      <div className="panel">
-        {deerRatings && deerRatings.length > 0 && (
-          <DeerOutlook ratings={deerRatings} selectedDay={curDay?.day}
-            loadableDays={days.map((d) => d.day)}
-            onPick={(day) => { const i = days.findIndex((d) => d.day === day); if (i >= 0) { setDayIdx(i); setHourPos(0); } }} />
-        )}
-        {curDay?.confidence === "low" && (
-          <div style={{ fontSize: 12, color: "var(--amber)", background: "rgba(133,79,11,.12)", padding: "6px 10px", borderRadius: 8, marginTop: 12, display: "flex", gap: 6, alignItems: "center" }}>
-            <AlertTriangle size={14} /> This day is 8+ days out — wind direction this far ahead is uncertain, so the stand rankings are directional.
-          </div>
-        )}
-        {deerRatings && curDay && (() => {
-          const dr = deerRatings.find((r) => r.day === curDay.day);
-          return dr ? <div style={{ marginTop: 12 }}><DeerRating rating={dr} /></div> : null;
-        })()}
-      </div>
-
-      {/* ── Card 2: Map (slider above, layers overlaid, Add menu) ── */}
-      <div className="panel">
-        <div className="panel-head">
-          <div>
-            <strong>{curDay?.label || "Map"}</strong>
-            <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 2 }}>Tap a day in the outlook above to change the date</div>
-          </div>
-          <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
-        </div>
-
-        {curDay && curHour && (
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-              <span style={{ fontWeight: 500 }}>{curHour.label}</span>
-              <span style={{ fontSize: 12, color: "var(--sub)" }}>☀ {curDay.sunrise} · ☾ {curDay.sunset}{conditions && <> · {Math.round(conditions.time.temp)}° · {conditions.time.cloud}% cloud</>}</span>
-            </div>
-            <input type="range" min={0} max={curDay.hours.length - 1} value={Math.min(hourPos, curDay.hours.length - 1)} onChange={(e) => setHourPos(+e.target.value)} style={{ width: "100%" }} />
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--sub)" }}>
-              <span>{curDay.hours[0]?.label}</span><span>{curDay.hours[curDay.hours.length - 1]?.label}</span>
-            </div>
-          </div>
-        )}
-
-        {/* draw-mode instruction bar */}
-        {drawMode && (
-          <div style={{ fontSize: 13, color: "var(--amber)", marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {drawMode === "stand" && <>Click the map to place the stand.</>}
-            {(drawMode === "food" || drawMode === "bedding") && <>Click the map to drop the {drawMode} zone.</>}
-            {drawMode === "corridor" && <>Click points along the deer path ({draftPoints.length} set).</>}
-            {drawMode === "corridor" && <button className="btn" onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
-            <button className="btn" onClick={cancelDraw}>Cancel</button>
-          </div>
-        )}
-
-        {/* map with layer toggles overlaid */}
-        <div style={{ position: "relative" }}>
-          <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
-            drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
-            onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home} />
-          <div className="layer-overlay">
-            <LayerChip on={layers.wind} onClick={() => toggle("wind")} color="var(--navy)" label="Wind" />
-            <LayerChip on={layers.thermal} onClick={() => toggle("thermal")} color="#185FA5" dashed label="Thermal" />
-            <LayerChip on={layers.deer} onClick={() => toggle("deer")} color="#A35A1B" label="Deer" />
-            <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
-            <LayerChip on={layers.zones} onClick={() => toggle("zones")} color="#6B4FA0" label="Zones" />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Card 3: Best stands ── */}
-      {dayRanked && dayRanked.ranked.length > 0 && (
-        <div className="panel">
-          <div className="panel-head"><strong>Best stands — {dayRanked.day_label}</strong></div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10, fontSize: 12 }}>
-            <PeriodKey color={PERIOD_COLORS.morning} label="Morning best" />
-            <PeriodKey color={PERIOD_COLORS.midday} label="Midday best" />
-            <PeriodKey color={PERIOD_COLORS.evening} label="Evening best" />
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ fontSize: 12, color: "var(--sub)" }}>Proximity weights:</span>
-            <ProxToggle on={useProx.corridor} color="#A35A1B" label="Corridors" icon={Footprints} onClick={() => setUseProx((u) => ({ ...u, corridor: !u.corridor }))} />
-            <ProxToggle on={useProx.food} color="var(--green)" label="Food" icon={Wheat} onClick={() => setUseProx((u) => ({ ...u, food: !u.food }))} />
-            <ProxToggle on={useProx.bedding} color="#6B4FA0" label="Bedding" icon={Trees} onClick={() => setUseProx((u) => ({ ...u, bedding: !u.bedding }))} />
-          </div>
-          {dayRanked.ranked.map((row) => <DayRankCard key={row.stand.id} row={row} />)}
-        </div>
+      {/* ── 14-Day Weather-Style Forecast Carousel ── */}
+      {deerRatings && deerRatings.length > 0 && (
+        <ForecastCarousel
+          ratings={deerRatings}
+          selectedDay={curDay?.day}
+          loadableDays={days.map((d) => d.day)}
+          onPick={(day) => { const i = days.findIndex((d) => d.day === day); if (i >= 0) { setDayIdx(i); setHourPos(0); } }}
+        />
       )}
+
+      {/* ── Selected Day Intelligence Header ── */}
+      {selectedRating && curDay && (
+        <DayIntelligenceHeader rating={selectedRating} curDay={curDay} />
+      )}
+
+      {/* ── Main split layout: Map + Leaderboard ── */}
+      <div className="hunt-split">
+
+        {/* Left: Map + Hourly Scrubber */}
+        <div className="hunt-map-col">
+          <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--bord)" }}>
+              <div>
+                <strong style={{ fontSize: 14.5 }}>{curDay?.label || "Map"}</strong>
+                {curDay?.confidence === "low" && (
+                  <span style={{ fontSize: 11, color: "var(--amber)", marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <AlertTriangle size={11} /> est.
+                  </span>
+                )}
+              </div>
+              <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
+            </div>
+
+            {curDay && curHour && (
+              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--bord)", background: "var(--tert)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{curHour.label}</span>
+                  <span style={{ fontSize: 11.5, color: "var(--sub)" }}>
+                    ☀ {curDay.sunrise} · ☾ {curDay.sunset}
+                    {conditions && <> · {Math.round(conditions.time.temp)}°F · {conditions.time.cloud}% cloud</>}
+                  </span>
+                </div>
+                <input type="range" min={0} max={curDay.hours.length - 1} value={Math.min(hourPos, curDay.hours.length - 1)}
+                  onChange={(e) => setHourPos(+e.target.value)} style={{ width: "100%" }} />
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--sub)", marginTop: 2 }}>
+                  <span>{curDay.hours[0]?.label}</span><span>{curDay.hours[curDay.hours.length - 1]?.label}</span>
+                </div>
+              </div>
+            )}
+
+            {drawMode && (
+              <div style={{ padding: "8px 14px", background: "rgba(133,79,11,.08)", borderBottom: "1px solid var(--bord)", fontSize: 13, color: "var(--amber)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                {drawMode === "stand" && <>Click the map to place the stand.</>}
+                {(drawMode === "food" || drawMode === "bedding") && <>Click the map to drop the {drawMode} zone.</>}
+                {drawMode === "corridor" && <>Click points along the deer path ({draftPoints.length} set).</>}
+                {drawMode === "corridor" && <button className="btn" onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
+                <button className="btn" onClick={cancelDraw}>Cancel</button>
+              </div>
+            )}
+
+            <div style={{ position: "relative" }}>
+              <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
+                drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
+                onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home} />
+              <div className="layer-overlay">
+                <LayerChip on={layers.wind} onClick={() => toggle("wind")} color="var(--navy)" label="Wind" />
+                <LayerChip on={layers.thermal} onClick={() => toggle("thermal")} color="#185FA5" dashed label="Thermal" />
+                <LayerChip on={layers.deer} onClick={() => toggle("deer")} color="#A35A1B" label="Deer" />
+                <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
+                <LayerChip on={layers.zones} onClick={() => toggle("zones")} color="#6B4FA0" label="Zones" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Stand Leaderboard */}
+        <div className="hunt-rank-col">
+          {dayRanked && dayRanked.ranked.length > 0 ? (
+            <StandLeaderboard ranked={dayRanked} useProx={useProx} setUseProx={setUseProx} />
+          ) : (
+            <div className="panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 200 }}>
+              <Empty>Loading stand rankings…</Empty>
+            </div>
+          )}
+        </div>
+      </div>
 
       {pendingName && (
         <NamePrompt title={pendingName.title} onCancel={() => setPendingName(null)} onConfirm={confirmName} />
+      )}
+    </div>
+  );
+}
+
+/* ════════════════ WEATHER-STYLE FORECAST CAROUSEL ════════════════ */
+function ForecastCarousel({ ratings, selectedDay, onPick, loadableDays }) {
+  const scrollRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!scrollRef.current) return;
+    const sel = scrollRef.current.querySelector(".fc-card.selected");
+    if (sel) sel.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [selectedDay]);
+
+  const weatherIcon = (r) => {
+    const rain = r.inputs?.rain_mm ?? 0;
+    const wind = r.inputs?.wind_mph ?? 0;
+    if (rain > 5) return "🌧️";
+    if (rain > 1) return "🌦️";
+    if (wind > 15) return "💨";
+    if (r.rating >= 4) return "☀️";
+    if (r.rating === 3) return "⛅";
+    return "🌥️";
+  };
+
+  const movementColor = (rating) => {
+    if (rating >= 4) return { bg: "rgba(59,109,17,.12)", border: "rgba(59,109,17,.35)", text: "var(--green)" };
+    if (rating === 3) return { bg: "rgba(133,79,11,.1)", border: "rgba(133,79,11,.3)", text: "var(--amber)" };
+    return { bg: "rgba(163,45,45,.08)", border: "rgba(163,45,45,.25)", text: "var(--red)" };
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <h2 style={{ fontSize: 12, fontWeight: 600, color: "var(--sub)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+          14-Day Movement Outlook
+        </h2>
+        <span style={{ fontSize: 11, color: "var(--sub)" }}>← scroll →</span>
+      </div>
+      <div ref={scrollRef} className="fc-strip">
+        {ratings.map((r) => {
+          const sel = r.day === selectedDay;
+          const loadable = loadableDays.includes(r.day);
+          const low = r.confidence === "low";
+          const col = movementColor(r.rating);
+          return (
+            <button key={r.day}
+              className={"fc-card" + (sel ? " selected" : "")}
+              onClick={() => loadable && onPick(r.day)}
+              disabled={!loadable}
+              title={`${r.rating}/5 · ${r.rut?.phase || ""}${low ? " · est." : ""}`}
+              style={{
+                borderColor: sel ? "var(--navy)" : col.border,
+                background: sel ? "var(--navy)" : col.bg,
+              }}
+            >
+              <div className="fc-day" style={{ color: sel ? "rgba(255,255,255,0.75)" : "var(--sub)" }}>
+                {r.label}
+              </div>
+              <div className="fc-icon">{weatherIcon(r)}</div>
+              <div className="fc-rating-pill" style={{
+                background: sel ? "rgba(255,255,255,0.18)" : "transparent",
+                color: sel ? "#fff" : col.text,
+                border: `1px solid ${sel ? "rgba(255,255,255,0.3)" : col.border}`,
+              }}>
+                {"🦌".repeat(r.rating)}<span style={{ fontSize: 10, marginLeft: 3 }}>{r.rating}/5</span>
+              </div>
+              {r.inputs?.pressure_inhg != null && (
+                <div className="fc-meta" style={{ color: sel ? "rgba(255,255,255,0.65)" : "var(--sub)" }}>
+                  {r.inputs.pressure_inhg}″
+                  {(r.inputs.pressure_trend_inhg ?? 0) > 0.005 ? " ↑" : (r.inputs.pressure_trend_inhg ?? 0) < -0.005 ? " ↓" : ""}
+                </div>
+              )}
+              {r.inputs?.wind_mph != null && (
+                <div className="fc-meta" style={{ color: sel ? "rgba(255,255,255,0.65)" : "var(--sub)" }}>
+                  💨 {r.inputs.wind_mph}mph
+                </div>
+              )}
+              {low && <div className="fc-est" style={{ color: sel ? "rgba(255,255,255,0.45)" : "var(--sub)" }}>est.</div>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 6 }}>
+        Tap any day to load its map and stand rankings. Days marked "est." are 8+ days out — weather confidence softens past ~7 days.
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════ DAY INTELLIGENCE HEADER ════════════════ */
+function DayIntelligenceHeader({ rating, curDay }) {
+  const [open, setOpen] = useState(false);
+  const r = rating.rating;
+  const fac = rating.factors || {};
+  const inp = rating.inputs || {};
+  const tone = r >= 4 ? "var(--green)" : r === 3 ? "var(--amber)" : "var(--red)";
+  const phase = rating.rut?.phase || "";
+  const rutInt = rating.rut?.intensity ?? null;
+
+  return (
+    <div className="day-intel-header" style={{ borderLeft: `4px solid ${tone}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 22, letterSpacing: 1 }}>{"🦌".repeat(r)}{"·".repeat(5 - r)}</span>
+            <span style={{ fontWeight: 700, fontSize: 17, color: tone }}>{r}/5 Movement</span>
+            <span style={{ fontSize: 12, fontWeight: 600, background: tone + "22", color: tone, border: `1px solid ${tone}55`, padding: "2px 9px", borderRadius: 12 }}>
+              {phase}
+            </span>
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 4 }}>{curDay.label}</div>
+        </div>
+        <button className="btn" style={{ fontSize: 12, padding: "5px 10px" }} onClick={() => setOpen((o) => !o)}>
+          {open ? "▲ Less" : "▼ Details"}
+        </button>
+      </div>
+
+      <div className="intel-cards">
+        {rutInt != null && (
+          <div className="intel-card" style={{ borderLeft: `3px solid ${tone}` }}>
+            <div className="intel-icon">🦌</div>
+            <div>
+              <div className="intel-label">Rut Intensity</div>
+              <div className="intel-value" style={{ color: tone }}>{Math.round(rutInt * 100)}%</div>
+              <div className="intel-sub">{phase}</div>
+            </div>
+          </div>
+        )}
+        {inp.pressure_inhg != null && (
+          <div className="intel-card">
+            <div className="intel-icon">📈</div>
+            <div>
+              <div className="intel-label">Barometric</div>
+              <div className="intel-value">{inp.pressure_inhg}″</div>
+              <div className="intel-sub">{(inp.pressure_trend_inhg ?? 0) > 0.005 ? "Rising ↑" : (inp.pressure_trend_inhg ?? 0) < -0.005 ? "Falling ↓" : "Steady"}</div>
+            </div>
+          </div>
+        )}
+        {inp.wind_mph != null && (
+          <div className="intel-card">
+            <div className="intel-icon">💨</div>
+            <div>
+              <div className="intel-label">Wind Speed</div>
+              <div className="intel-value">{inp.wind_mph} mph</div>
+              <div className="intel-sub">{inp.wind_mph < 5 ? "Calm — scent pools" : inp.wind_mph > 15 ? "Strong — movement drops" : "Good scenting"}</div>
+            </div>
+          </div>
+        )}
+        {inp.day_high_f != null && (
+          <div className="intel-card">
+            <div className="intel-icon">🌡️</div>
+            <div>
+              <div className="intel-label">High Temp</div>
+              <div className="intel-value">{inp.day_high_f}°F</div>
+              {inp.baseline_f != null && <div className="intel-sub">{inp.day_high_f < inp.baseline_f ? "↓" : "↑"} {Math.abs(inp.day_high_f - inp.baseline_f)}° vs avg</div>}
+            </div>
+          </div>
+        )}
+        {inp.rain_mm != null && (
+          <div className="intel-card">
+            <div className="intel-icon">🌧️</div>
+            <div>
+              <div className="intel-label">Precipitation</div>
+              <div className="intel-value">{inp.rain_mm === 0 ? "Dry" : `${inp.rain_mm} mm`}</div>
+              <div className="intel-sub">{inp.rain_mm > 5 ? "Movement suppressed" : inp.rain_mm > 0 ? "Light rain — OK" : "Optimal"}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bord)" }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--sub)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.6 }}>Factor Breakdown</div>
+          {Object.entries(fac).map(([k, v]) => {
+            const pct = Math.round((v ?? 0) * 100);
+            const label = { pressure: "Barometric Pressure", wind: "Wind", rain: "Rain (1=dry)", temp_shift: "Temperature Shift" }[k] || k;
+            return (
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                <span style={{ fontSize: 12, color: "var(--sub)", width: 150, flexShrink: 0 }}>{label}</span>
+                <span style={{ flex: 1, height: 6, background: "var(--surf)", borderRadius: 3, overflow: "hidden" }}>
+                  <span style={{ display: "block", height: "100%", width: `${pct}%`, background: tone, borderRadius: 3 }} />
+                </span>
+                <span style={{ fontSize: 11, color: "var(--sub)", width: 28, textAlign: "right" }}>{pct}</span>
+              </div>
+            );
+          })}
+          {Array.isArray(rating.breakdown) && (
+            <div style={{ marginTop: 8, display: "grid", gap: 3 }}>
+              {rating.breakdown.map((b, i) => (
+                <div key={i} style={{ fontSize: 11, color: "var(--sub)", display: "flex", gap: 8 }}>
+                  <b style={{ color: "var(--txt)", fontWeight: 500 }}>{b.factor}:</b> {b.impact}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ════════════════ STAND LEADERBOARD ════════════════ */
+const PERIOD_COLORS = { morning: "#C28800", midday: "#1E7FB0", evening: "#7A3FA0" };
+const PERIOD_LABEL = { morning: "🌅 Morning", midday: "☀️ Midday", evening: "🌇 Evening" };
+
+function StandLeaderboard({ ranked, useProx, setUseProx }) {
+  const [activePeriod, setActivePeriod] = useState("morning");
+  return (
+    <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--bord)" }}>
+        <strong style={{ fontSize: 14.5 }}>Stand Rankings — {ranked.day_label}</strong>
+      </div>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--bord)", background: "var(--tert)" }}>
+        {["morning", "midday", "evening"].map((p) => (
+          <button key={p} onClick={() => setActivePeriod(p)}
+            style={{
+              flex: 1, padding: "9px 6px", border: "none", cursor: "pointer", fontSize: 12.5,
+              fontWeight: activePeriod === p ? 600 : 400,
+              background: activePeriod === p ? "var(--bg)" : "transparent",
+              color: activePeriod === p ? PERIOD_COLORS[p] : "var(--sub)",
+              borderBottom: activePeriod === p ? `2px solid ${PERIOD_COLORS[p]}` : "2px solid transparent",
+            }}>
+            {PERIOD_LABEL[p]}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--bord)", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "var(--sub)" }}>Proximity:</span>
+        <ProxToggle on={useProx.corridor} color="#A35A1B" label="Corridors" icon={Footprints} onClick={() => setUseProx((u) => ({ ...u, corridor: !u.corridor }))} />
+        <ProxToggle on={useProx.food} color="var(--green)" label="Food" icon={Wheat} onClick={() => setUseProx((u) => ({ ...u, food: !u.food }))} />
+        <ProxToggle on={useProx.bedding} color="#6B4FA0" label="Bedding" icon={Trees} onClick={() => setUseProx((u) => ({ ...u, bedding: !u.bedding }))} />
+      </div>
+      <div style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
+        {ranked.ranked.map((row, idx) => (
+          <LeaderboardCard key={row.stand.id} row={row} period={activePeriod} rank={idx} isWinner={row.wins.includes(activePeriod)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════ LEADERBOARD CARD ════════════════ */
+function LeaderboardCard({ row, period, rank, isWinner }) {
+  const [open, setOpen] = useState(false);
+  const { stand, periods, proximity } = row;
+  const sc = periods[period]?.score;
+  const hour = periods[period]?.hour;
+  const score = sc ? Math.round(sc.total * 100) : null;
+  const proxTotal = proximity ? Math.round(proximity.total * 100) : 0;
+  const camBoost = sc?.camera?.boost_pct > 0 ? sc.camera.boost_pct : 0;
+  return (
+    <div style={{
+      border: isWinner ? `2px solid ${PERIOD_COLORS[period]}` : "1px solid var(--bord)",
+      borderRadius: 10, background: "var(--bg)", overflow: "hidden",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--sub)", minWidth: 22 }}>
+          {isWinner ? "★" : `${rank + 1}.`}
+        </span>
+        <span style={{ fontWeight: 600, flex: 1 }}>{stand.name}</span>
+        {score != null && (
+          <span style={{
+            fontSize: 12.5, fontWeight: 700,
+            color: score >= 70 ? "var(--green)" : score >= 45 ? "var(--amber)" : "var(--red)",
+            background: score >= 70 ? "rgba(59,109,17,.12)" : score >= 45 ? "rgba(133,79,11,.12)" : "rgba(163,45,45,.1)",
+            padding: "2px 8px", borderRadius: 6,
+          }}>{score}</span>
+        )}
+        {isWinner && (
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: PERIOD_COLORS[period], padding: "2px 8px", borderRadius: 6 }}>
+            Best {period}
+          </span>
+        )}
+        <button className="icon-btn" style={{ padding: 4 }} onClick={() => setOpen((o) => !o)}>
+          <ChevronDown size={14} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+        </button>
+      </div>
+      {sc && hour && (
+        <div style={{ padding: "6px 12px 10px", display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, color: "var(--sub)", borderTop: "1px solid var(--bord)" }}>
+          <span>💨 {degToCompass(hour.wind_dir)} {Math.round(hour.wind_speed)}mph</span>
+          <span>🌡️ thermals {sc.thermal_phase}</span>
+          {stand.deer_approach_deg != null && (
+            <span style={{ color: sc.scent_score > 0.6 ? "var(--green)" : sc.scent_score > 0.35 ? "var(--amber)" : "var(--red)" }}>
+              {sc.scent_score > 0.6 ? "✓ Scent away" : sc.scent_score > 0.35 ? "~ Scent crosses" : "✗ Scent toward deer"}
+            </span>
+          )}
+          {proxTotal > 0 && <span style={{ color: "var(--green)" }}>+{proxTotal} prox</span>}
+          {camBoost > 0 && <span style={{ color: "var(--navy)", display: "inline-flex", alignItems: "center", gap: 3 }}><Camera size={10} /> +{camBoost}%</span>}
+        </div>
+      )}
+      {open && (
+        <div style={{ padding: "10px 12px", background: "var(--tert)", borderTop: "1px solid var(--bord)" }}>
+          {(() => {
+            const bd = periods[period]?.score?.breakdown;
+            if (!bd) return <div style={{ fontSize: 12, color: "var(--sub)" }}>No breakdown available.</div>;
+            return (
+              <div>
+                <div style={{ display: "grid", gap: 4 }}>
+                  {bd.map((b, i) => (
+                    <div key={i} style={{ fontSize: 11.5, display: "flex", gap: 8, color: "var(--sub)" }}>
+                      <b style={{ color: "var(--txt)", fontWeight: 500, minWidth: 90 }}>{b.factor}:</b>
+                      <span>{b.text}</span>
+                    </div>
+                  ))}
+                </div>
+                {proximity && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: "var(--sub)", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <span>Corridor +{Math.round(proximity.corridor * 100)}</span>
+                    <span>Food +{Math.round(proximity.food * 100)}</span>
+                    <span>Bedding +{Math.round(proximity.bedding * 100)}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
       )}
     </div>
   );
@@ -890,6 +1203,16 @@ function CameraSettings({ settings, setSettings, saveSettings }) {
     <>
       <div className="card" style={{ padding: 14, marginBottom: 14 }}>
         <strong style={{ fontSize: 14.5 }}>Sync & storage</strong>
+        <div style={{ marginTop: 10 }}>
+          <Field label="Image storage directory">
+            <input type="text" value={settings.camera_image_dir ?? "/app/data/camera_images"}
+              placeholder="/app/data/camera_images"
+              onChange={(e) => setSettings({ ...settings, camera_image_dir: e.target.value })} />
+          </Field>
+          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4 }}>
+            Base folder on the server where camera photos are saved. Images are stored in <code>[directory]/[Camera Brand]/[Camera Name]/</code>.
+          </div>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
           <Field label="Sync interval (minutes)">
             <input type="number" min={5} max={720} value={Math.round(settings.camera_sync_interval_minutes ?? 30)}
@@ -901,7 +1224,7 @@ function CameraSettings({ settings, setSettings, saveSettings }) {
           </Field>
         </div>
         <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 8 }}>
-          Photos older than the retention window are deleted nightly; the sighting record is kept for model tuning. Interval changes take effect on the next app restart.
+          Photos older than the retention window are deleted nightly; the sighting record is kept for model tuning.
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={saveIntervals}><Save size={15} /> Save</button>
       </div>

@@ -5,7 +5,8 @@ import math
 import json
 import secrets
 import time
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -59,7 +60,22 @@ DEFAULT_SETTINGS = {
     "max_camera_boost_pct": 15.0,
     "rut_peak_month": 12,
     "rut_peak_day": 5,
+    "camera_image_dir": CAMERA_IMAGE_DIR,
 }
+
+
+def _sanitize_path_component(name: str) -> str:
+    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in (name or "unnamed")).strip()
+    return safe or "unnamed"
+
+
+def get_camera_dir(brand: str, camera_name: str, base_dir: str | None = None) -> str:
+    if not base_dir:
+        settings = get_settings()
+        base_dir = str(settings.get("camera_image_dir") or CAMERA_IMAGE_DIR)
+    safe_brand = _sanitize_path_component(brand)
+    safe_name = _sanitize_path_component(camera_name)
+    return os.path.join(base_dir, safe_brand, safe_name)
 
 
 # ---------- credential encryption (Fernet key derived from an existing secret) ----------
@@ -138,7 +154,7 @@ class Corridor(Base):
 class Setting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[float] = mapped_column(Float)
+    value: Mapped[str] = mapped_column(Text)
 
 
 class Camera(Base):
@@ -174,8 +190,8 @@ class CameraSighting(Base):
 
     def to_dict(self) -> dict:
         img = None
-        if self.image_path:
-            img = "/static/camera_images/" + os.path.basename(self.image_path)
+        if self.image_path and os.path.exists(self.image_path):
+            img = f"/api/camera-sightings/{self.id}/image"
         return {
             "id": self.id, "stand_id": self.stand_id, "camera_id": self.camera_id,
             "timestamp": self.timestamp, "confidence_score": self.confidence_score,
@@ -184,9 +200,16 @@ class CameraSighting(Base):
 
 
 def init_db(retries: int = 30):
+    from sqlalchemy import text
     for attempt in range(retries):
         try:
             Base.metadata.create_all(engine)
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE settings ALTER COLUMN value TYPE TEXT;"))
+                    conn.commit()
+                except Exception:
+                    pass
             return
         except Exception as e:
             if attempt == retries - 1:
@@ -196,9 +219,27 @@ def init_db(retries: int = 30):
 
 app = FastAPI(title="AmbushIQ")
 
-# serve downloaded camera JPEGs
-os.makedirs(CAMERA_IMAGE_DIR, exist_ok=True)
-app.mount("/static/camera_images", StaticFiles(directory=CAMERA_IMAGE_DIR), name="camera_images")
+
+@app.get("/api/camera-sightings/{sighting_id}/image")
+def get_sighting_image(sighting_id: int):
+    with Session(engine) as s:
+        sighting = s.get(CameraSighting, sighting_id)
+        if not sighting or not sighting.image_path or not os.path.exists(sighting.image_path):
+            raise HTTPException(404, "image not found")
+        return FileResponse(sighting.image_path)
+
+
+@app.get("/static/camera_images/{subpath:path}")
+def get_static_camera_image(subpath: str):
+    settings = get_settings()
+    base_dir = str(settings.get("camera_image_dir") or CAMERA_IMAGE_DIR)
+    candidate = os.path.join(base_dir, subpath)
+    if os.path.isfile(candidate):
+        return FileResponse(candidate)
+    candidate_default = os.path.join(CAMERA_IMAGE_DIR, subpath)
+    if os.path.isfile(candidate_default):
+        return FileResponse(candidate_default)
+    raise HTTPException(404, "image not found")
 
 
 @app.on_event("startup")
@@ -211,12 +252,14 @@ def _startup():
 
 
 def require_token(authorization: str = Header(default="")):
-    # Authentication is handled by the upstream reverse proxy (Authentik forward
-    # auth). This app trusts that anything reaching it has already been
-    # authenticated, so this is a no-op. IMPORTANT: the app port must only be
-    # reachable THROUGH that proxy — keep APP_BIND=127.0.0.1 (or firewall the
-    # port) so the app is never directly exposed.
-    return
+    # If APP_TOKEN is empty or "unused", authentication is handled by an upstream
+    # reverse proxy (e.g. Authentik forward auth) or disabled.
+    # Otherwise, require the Bearer token.
+    if not APP_TOKEN or APP_TOKEN == "unused":
+        return
+    token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else authorization.strip()
+    if not token or not secrets.compare_digest(token, APP_TOKEN):
+        raise HTTPException(401, "unauthorized")
 
 
 # ---------- schemas ----------
@@ -261,7 +304,7 @@ class HourRankIn(BaseModel):
 # ---------- auth check (frontend pings this) ----------
 @app.get("/api/health")
 def health():
-    return {"ok": True, "auth_required": False, "version": APP_VERSION}
+    return {"ok": True, "auth_required": bool(APP_TOKEN and APP_TOKEN != "unused"), "version": APP_VERSION}
 
 
 @app.get("/api/verify")
@@ -335,7 +378,25 @@ async def analyze_stand_terrain(stand_id: int, _=Depends(require_token)):
 
 def get_settings() -> dict:
     with Session(engine) as s:
-        rows = {r.key: r.value for r in s.scalars(select(Setting)).all()}
+        rows = {}
+        for r in s.scalars(select(Setting)).all():
+            val = r.value
+            if r.key in DEFAULT_SETTINGS:
+                def_val = DEFAULT_SETTINGS[r.key]
+                if isinstance(def_val, float):
+                    try:
+                        rows[r.key] = float(val)
+                    except (ValueError, TypeError):
+                        rows[r.key] = def_val
+                elif isinstance(def_val, int):
+                    try:
+                        rows[r.key] = int(float(val))
+                    except (ValueError, TypeError):
+                        rows[r.key] = def_val
+                else:
+                    rows[r.key] = str(val)
+            else:
+                rows[r.key] = val
     return {**DEFAULT_SETTINGS, **rows}
 
 
@@ -808,12 +869,12 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
 
 
 class SettingsIn(BaseModel):
-    weight_corridor: float
-    falloff_corridor: float
-    weight_food: float
-    falloff_food: float
-    weight_bedding: float
-    falloff_bedding: float
+    weight_corridor: float | None = None
+    falloff_corridor: float | None = None
+    weight_food: float | None = None
+    falloff_food: float | None = None
+    weight_bedding: float | None = None
+    falloff_bedding: float | None = None
     rate_w_pressure: float | None = None
     rate_w_wind: float | None = None
     rate_w_rain: float | None = None
@@ -823,6 +884,7 @@ class SettingsIn(BaseModel):
     image_retention_days: float | None = None
     rut_peak_month: float | None = None
     rut_peak_day: float | None = None
+    camera_image_dir: str | None = None
 
 
 @app.get("/api/settings")
@@ -836,11 +898,12 @@ def write_settings(body: SettingsIn, _=Depends(require_token)):
         for k, v in body.model_dump().items():
             if v is None:
                 continue
+            str_val = str(v)
             row = s.get(Setting, k)
             if row:
-                row.value = v
+                row.value = str_val
             else:
-                s.add(Setting(key=k, value=v))
+                s.add(Setting(key=k, value=str_val))
         s.commit()
     return get_settings()
 
@@ -853,7 +916,13 @@ class HomeIn(BaseModel):
 @app.get("/api/home")
 def read_home(_=Depends(require_token)):
     with Session(engine) as s:
-        rows = {r.key: r.value for r in s.scalars(select(Setting)).all() if r.key in HOME_KEYS}
+        rows = {}
+        for r in s.scalars(select(Setting)).all():
+            if r.key in HOME_KEYS:
+                try:
+                    rows[r.key] = float(r.value)
+                except (ValueError, TypeError):
+                    pass
     if "home_lat" in rows and "home_lon" in rows:
         return {"lat": rows["home_lat"], "lon": rows["home_lon"], "set": True}
     return {"lat": None, "lon": None, "set": False}
@@ -865,11 +934,12 @@ def write_home(body: HomeIn, _=Depends(require_token)):
         raise HTTPException(400, "lat/lon out of range")
     with Session(engine) as s:
         for k, v in (("home_lat", body.lat), ("home_lon", body.lon)):
+            str_val = str(v)
             row = s.get(Setting, k)
             if row:
-                row.value = v
+                row.value = str_val
             else:
-                s.add(Setting(key=k, value=v))
+                s.add(Setting(key=k, value=str_val))
         s.commit()
     return {"lat": body.lat, "lon": body.lon, "set": True}
 
@@ -1000,7 +1070,7 @@ def list_cameras(_=Depends(require_token)):
 def create_camera(body: CameraIn, _=Depends(require_token)):
     if body.brand not in CAMERA_BRANDS:
         raise HTTPException(400, "unknown brand")
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     with Session(engine) as s:
         cam = Camera(
             name=body.name, brand=body.brand, stand_id=body.stand_id, is_active=1,
@@ -1074,13 +1144,18 @@ def camera_sightings(camera_id: int, _=Depends(require_token)):
 async def _sync_one_camera(camera_id: int) -> int:
     """Fetch recent photos for a camera, run detection, record positive sightings.
     Returns count of new sightings. Best-effort: never raises to the scheduler."""
-    import datetime as _dt
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if not cam or not cam.is_active:
             return 0
         creds = decrypt_credentials(cam.credentials_json)
-        brand, stand_id, cid = cam.brand, cam.stand_id, cam.id
+        brand, camera_name, stand_id, cid = cam.brand, cam.name, cam.stand_id, cam.id
+        # Deduplication: get all timestamps already recorded for this camera
+        existing_timestamps = set(
+            s.scalars(
+                select(CameraSighting.timestamp).where(CameraSighting.camera_id == cid)
+            ).all()
+        )
     try:
         prov = cameras_mod.get_provider(brand, creds)
         if not prov.implemented:
@@ -1089,13 +1164,19 @@ async def _sync_one_camera(camera_id: int) -> int:
     except Exception:
         return 0
 
-    os.makedirs(CAMERA_IMAGE_DIR, exist_ok=True)
+    # User-defined directory structure: [User defined directory]/[Camera Brand]/[Camera Name]/
+    cam_dir = get_camera_dir(brand, camera_name)
+    os.makedirs(cam_dir, exist_ok=True)
     new = 0
     async with httpx.AsyncClient() as client:
         for p in photos:
             url = p.get("url")
             if not url:
                 continue
+            taken_at = p.get("taken_at")
+            if taken_at and taken_at in existing_timestamps:
+                continue  # Skip already processed photo
+
             # download
             try:
                 r = await client.get(url, timeout=60)
@@ -1103,34 +1184,46 @@ async def _sync_one_camera(camera_id: int) -> int:
                     continue
             except Exception:
                 continue
-            fname = f"cam{cid}_{int(_dt.datetime.utcnow().timestamp()*1000)}_{new}.jpg"
-            fpath = os.path.join(CAMERA_IMAGE_DIR, fname)
+            fname = f"cam{cid}_{int(datetime.now(timezone.utc).timestamp()*1000)}_{new}.jpg"
+            fpath = os.path.join(cam_dir, fname)
             try:
                 with open(fpath, "wb") as f:
                     f.write(r.content)
             except Exception:
                 continue
-            # detect
-            det = detection_mod.detect_animal(fpath)
+
+            # offload CPU-bound ML detection to a worker thread so event loop remains non-blocking
+            det = await asyncio.to_thread(detection_mod.detect_animal, fpath)
             if not det.get("is_animal"):
                 # not wildlife — discard the file, don't record
                 try:
                     os.remove(fpath)
                 except OSError:
                     pass
+                if taken_at:
+                    existing_timestamps.add(taken_at)
                 continue
+
+            sighting_ts = taken_at or datetime.now(timezone.utc).isoformat()
             with Session(engine) as s:
                 s.add(CameraSighting(
                     stand_id=stand_id, camera_id=cid,
-                    timestamp=p.get("taken_at") or _dt.datetime.utcnow().isoformat(),
+                    timestamp=sighting_ts,
                     confidence_score=det.get("confidence", 0.0),
-                    image_path=fpath, created_at=_dt.datetime.utcnow().isoformat(),
+                    image_path=fpath, created_at=datetime.now(timezone.utc).isoformat(),
                 ))
-                cam2 = s.get(Camera, cid)
-                if cam2:
-                    cam2.last_sync_at = _dt.datetime.utcnow().isoformat()
                 s.commit()
+            if taken_at:
+                existing_timestamps.add(taken_at)
             new += 1
+
+    # Record sync completion timestamp on camera
+    with Session(engine) as s:
+        cam2 = s.get(Camera, cid)
+        if cam2:
+            cam2.last_sync_at = datetime.now(timezone.utc).isoformat()
+            s.commit()
+
     return new
 
 
@@ -1150,12 +1243,17 @@ def auto_cleanup_job():
     import datetime as _dt
     settings = get_settings()
     retention = int(settings.get("image_retention_days", 60))
-    cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=retention)
+    cutoff = datetime.now(timezone.utc) - _dt.timedelta(days=retention)
     with Session(engine) as s:
         rows = s.scalars(select(CameraSighting).where(CameraSighting.image_path.isnot(None))).all()
         for row in rows:
+            raw_ts = row.created_at or row.timestamp
+            if not raw_ts:
+                continue
             try:
-                created = _dt.datetime.fromisoformat((row.created_at or row.timestamp).replace("Z", ""))
+                created = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
             except Exception:
                 continue
             if created < cutoff:

@@ -35,11 +35,13 @@ cp .env.example .env
 nano .env            # set APP_TOKEN, POSTGRES_PASSWORD; adjust APP_BIND/APP_PORT if needed
 ```
 
-Generate a strong access key and DB password:
+Generate a strong DB password (and optional access key):
 ```sh
-openssl rand -base64 24   # use for APP_TOKEN
 openssl rand -base64 24   # use for POSTGRES_PASSWORD
+openssl rand -base64 24   # use for APP_TOKEN (or leave blank if using external auth)
 ```
+
+> **Authentication note**: `APP_TOKEN` can be left blank or set to `unused` if authentication will be handled by another process (such as Authentik, Authelia, or Cloudflare Access forward auth). When unset or `unused`, the app automatically disables its internal login prompt. If `APP_TOKEN` is set to a secret key, the app requires this access key on all API calls and prompts for it in the web UI.
 
 Build and start:
 ```sh
@@ -49,7 +51,7 @@ docker compose up -d --build
 The app is now listening on `127.0.0.1:8000` (default). Confirm it's up:
 ```sh
 curl -s http://127.0.0.1:8000/api/health
-# {"ok":true,"auth_required":true}
+# {"ok":true,"auth_required":true,"version":"2.15.0"}  (or "auth_required":false if token is blank/unused)
 ```
 
 ## Wire up nginx
@@ -66,7 +68,7 @@ curl -s http://127.0.0.1:8000/api/health
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Open `https://yourdomain`, enter your `APP_TOKEN` as the access key, and you're in.
+Open `https://yourdomain`. If `APP_TOKEN` is set, enter your access key to unlock; if authentication is handled upstream, you will be taken directly to the app.
 
 ### Where nginx lives
 
@@ -113,13 +115,14 @@ cat ambushiq-backup.sql | docker compose exec -T db psql -U ambush ambushiq
 
 ## Security notes
 
-- The whole API (except `/api/health`) requires the `APP_TOKEN` bearer key, so a
-  random visitor can't read or edit your stand locations.
+- When `APP_TOKEN` is set, all API endpoints (except `/api/health`) require the `APP_TOKEN`
+  bearer key, preventing unauthorized visitors from reading or editing your stands.
+- If authentication is handled upstream (e.g. Authentik forward auth), leave `APP_TOKEN` blank
+  or set to `unused`. The app will trust upstream requests without prompting for a key.
 - Postgres is only reachable inside the Docker network — not published to the host.
 - With the default `APP_BIND=127.0.0.1`, the app port isn't exposed beyond
   loopback; only your nginx proxy can reach it.
 - Keep `.env` out of version control (`.gitignore` already excludes it).
-- Single-user auth (one shared key). Fine for personal use.
 
 ## Notes & limits
 
@@ -204,5 +207,4 @@ lifted verbatim from any single paper — tune against what you observe on your 
 - MegaDetector pulls PyTorch + a model download — the image is much larger and the
   first build is slow. Set DETECTOR_MODE=fallback in .env to skip detection (every
   photo counts as a low-confidence sighting) if it's too heavy on your host.
-- Camera JPEGs persist in the `camera_images` Docker volume and are served at
-  /static/camera_images/.
+- Camera JPEGs are saved to the user-configured storage directory (defaults to `/app/data/camera_images` in the `camera_images` Docker volume) organized as `[directory]/[Camera Brand]/[Camera Name]/`.
