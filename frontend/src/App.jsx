@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -75,12 +75,40 @@ function Centered({ children }) {
    Shell — top bar + tab nav
    ════════════════════════════════════════════════════ */
 const NAV = [
-  { key: "today", label: "Outlook", icon: Sun },
-  { key: "map",   label: "Map",   icon: MapIcon },
-  { key: "stands",label: "Stands",icon: MapPin },
-  { key: "zones", label: "Zones", icon: Wheat },
-  { key: "settings", label: "Settings", icon: SettingsIcon },
+  { key: "today",   label: "Outlook",  icon: Sun },
+  { key: "map",     label: "Map",      icon: MapIcon },
+  { key: "stands",  label: "Stands",   icon: MapPin },
+  { key: "zones",   label: "Zones",    icon: Wheat },
+  { key: "cameras", label: "Cameras",  icon: Camera },
+  { key: "settings",label: "Settings", icon: SettingsIcon },
 ];
+
+/* Camera brand display metadata (shared across camera components) */
+const BRAND_LABELS = {
+  spypoint: "SpyPoint", reveal: "Reveal", moultrie: "Moultrie",
+  stealth_cam: "StealthCam", browning: "Browning", spartan: "Spartan",
+};
+const BRAND_COLORS = {
+  spypoint: "#E8650A", reveal: "#2563EB", moultrie: "#16A34A",
+  stealth_cam: "#7C3AED", browning: "#92400E", spartan: "#DC2626",
+};
+
+function formatRelTime(iso) {
+  if (!iso) return "never";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(diffMs / 3600000);
+  if (h < 1) return "just now";
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+function formatDateTime(iso) {
+  if (!iso) return "unknown";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
+           d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  } catch { return iso; }
+}
 
 function Shell({ onLogout, version }) {
   const [view, setView] = useState("today");
@@ -166,6 +194,7 @@ function Shell({ onLogout, version }) {
             editingZone={editingZone} setEditingZone={setEditingZone}
             editingCorridor={editingCorridor} setEditingCorridor={setEditingCorridor} />
         )}
+        {view === "cameras" && <CamerasPage stands={stands} />}
         {view === "settings" && <SettingsPage />}
       </main>
 
@@ -735,6 +764,414 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing }) {
 }
 
 /* ════════════════════════════════════════════════════
+   CAMERAS PAGE — list, wizard, sightings viewer
+   ════════════════════════════════════════════════════ */
+function CamerasPage({ stands }) {
+  const [cameras, setCameras] = useState([]);
+  const [providers, setProviders] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [editingCam, setEditingCam] = useState(null);
+  const [viewingCam, setViewingCam] = useState(null);
+  const [syncing, setSyncing] = useState({});
+  const [err, setErr] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [cams, provData] = await Promise.all([api("/cameras"), api("/camera-providers")]);
+      setCameras(cams);
+      setProviders(provData.providers || []);
+    } catch { setErr("Couldn't load cameras."); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function toggleActive(cam) {
+    try { await api(`/cameras/${cam.id}`, { method: "PUT", body: JSON.stringify({ is_active: !cam.is_active }) }); load(); } catch {}
+  }
+  async function deleteCamera(id) {
+    if (!confirm("Delete this camera and its sightings?")) return;
+    try { await api(`/cameras/${id}`, { method: "DELETE" }); load(); } catch {}
+  }
+  async function verify(cam) {
+    try {
+      const r = await api(`/cameras/${cam.id}/verify`, { method: "POST" });
+      if (r.implemented === false) alert("This brand isn't implemented yet — verification not available.");
+      else alert(r.ok ? "✓ Credentials verified successfully!" : "✗ Verification failed. Check credentials.");
+    } catch (e) { alert(`Error: ${e.message}`); }
+  }
+  async function syncNow(cam) {
+    setSyncing((s) => ({ ...s, [cam.id]: true }));
+    try {
+      const r = await api(`/cameras/${cam.id}/sync`, { method: "POST" });
+      alert(`Sync complete — ${r.new_sightings} new sighting(s) recorded.`);
+      load();
+    } catch (e) { alert(`Sync failed: ${e.message}`); }
+    finally { setSyncing((s) => ({ ...s, [cam.id]: false })); }
+  }
+
+  return (
+    <div className="list-page">
+      {err && <Banner>{err}</Banner>}
+      <div className="list-header">
+        <h1>Trail Cameras</h1>
+        <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus size={15} /> Add camera</button>
+      </div>
+      {!cameras.length && (
+        <div className="cameras-empty">
+          <Camera size={44} color="var(--bord2)" />
+          <p>No cameras yet. Add one to sync photos and boost stand rankings with real sighting data.</p>
+        </div>
+      )}
+      <div className="list-grid">
+        {cameras.map((cam) => {
+          const stand = stands.find((s) => s.id === cam.stand_id);
+          const prov  = providers.find((p) => p.brand === cam.brand);
+          const bc    = BRAND_COLORS[cam.brand] || "#888";
+          const bl    = BRAND_LABELS[cam.brand] || cam.brand;
+          return (
+            <div key={cam.id} className="list-card cam-card">
+              <div className="cam-brand-bar" style={{ borderLeftColor: bc }}>
+                <Camera size={13} color={bc} />
+                <span style={{ fontWeight: 600, fontSize: 12, color: bc }}>{bl}</span>
+                {!prov?.implemented && (
+                  <span className="cam-stub-badge">coming soon</span>
+                )}
+                <button
+                  className={"cam-active-chip " + (cam.is_active ? "active" : "")}
+                  onClick={() => toggleActive(cam)}
+                  title={cam.is_active ? "Click to deactivate" : "Click to activate"}
+                >
+                  {cam.is_active ? "● Active" : "○ Inactive"}
+                </button>
+              </div>
+              <div className="list-card-body">
+                <div className="list-card-name">{cam.name}</div>
+                <div className="list-card-sub">
+                  {stand ? <><MapPin size={11} style={{ verticalAlign: "text-bottom" }} /> {stand.name}</> : <span style={{ color: "var(--bord2)" }}>Unassigned</span>}
+                  {cam.last_sync_at && <> · synced {formatRelTime(cam.last_sync_at)}</>}
+                </div>
+              </div>
+              <div className="list-card-actions" style={{ flexWrap: "wrap" }}>
+                {prov?.implemented && <>
+                  <button className="icon-btn" title="Verify credentials" onClick={() => verify(cam)}><CheckCircle2 size={15} /></button>
+                  <button className="icon-btn" title="Sync now" disabled={!!syncing[cam.id]} onClick={() => syncNow(cam)}>
+                    <RefreshCw size={15} className={syncing[cam.id] ? "spin" : ""} />
+                  </button>
+                </>}
+                <button className="icon-btn" title="View sightings" onClick={() => setViewingCam(cam)}><ImageIcon size={15} /></button>
+                <button className="icon-btn" title="Edit" onClick={() => setEditingCam(cam)}><Edit3 size={15} /></button>
+                <button className="icon-btn" title="Delete" onClick={() => deleteCamera(cam.id)}><Trash2 size={15} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {adding && (
+        <Modal onClose={() => setAdding(false)}>
+          <CameraWizard providers={providers} stands={stands} onSaved={() => { setAdding(false); load(); }} onCancel={() => setAdding(false)} />
+        </Modal>
+      )}
+      {editingCam && (
+        <Modal onClose={() => setEditingCam(null)}>
+          <CameraEditor cam={editingCam} providers={providers} stands={stands}
+            onSaved={() => { setEditingCam(null); load(); }} onCancel={() => setEditingCam(null)} />
+        </Modal>
+      )}
+      {viewingCam && (
+        <Modal onClose={() => setViewingCam(null)}>
+          <SightingsPanel cam={viewingCam} onClose={() => setViewingCam(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ── Camera add wizard (3 steps) ── */
+function CameraWizard({ providers, stands, onSaved, onCancel }) {
+  const [step, setStep] = useState(1);
+  const [brand, setBrand] = useState(null);
+  const [name, setName] = useState("");
+  const [creds, setCreds] = useState({});
+  const [standId, setStandId] = useState("");
+  const [err, setErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const prov = providers.find((p) => p.brand === brand);
+
+  async function save() {
+    setSaving(true); setErr(null);
+    try {
+      await api("/cameras", { method: "POST", body: JSON.stringify({
+        name: name.trim(), brand,
+        stand_id: standId ? +standId : null,
+        credentials: prov?.implemented ? creds : null,
+      })});
+      onSaved();
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  }
+
+  const STEP_LABELS = ["Brand", "Setup", "Stand"];
+  return (
+    <div className="card" style={{ padding: 20, border: "2px solid var(--navy)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <strong>Add trail camera</strong>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="wizard-steps">
+            {STEP_LABELS.map((l, i) => (
+              <span key={i} className={"wizard-step" + (step === i + 1 ? " active" : "")} title={l}>{i + 1}</span>
+            ))}
+          </div>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+      </div>
+
+      {step === 1 && (
+        <>
+          <p style={{ fontSize: 13, color: "var(--sub)", marginBottom: 12 }}>Select your camera brand:</p>
+          <div className="brand-grid">
+            {providers.map((p) => (
+              <button key={p.brand}
+                className={"brand-btn" + (brand === p.brand ? " selected" : "")}
+                onClick={() => setBrand(p.brand)}>
+                <Camera size={20} />
+                <span>{BRAND_LABELS[p.brand] || p.brand}</span>
+                {!p.implemented && <span className="brand-stub">coming soon</span>}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button className="btn btn-primary" disabled={!brand} onClick={() => setStep(2)}>Next →</button>
+            <button className="btn" onClick={onCancel}>Cancel</button>
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <Field label="Camera name">
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Back-40 Oak Tree" />
+          </Field>
+          {prov?.implemented ? (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--txt)", marginBottom: 8 }}>
+                {BRAND_LABELS[brand]} cloud account credentials
+              </div>
+              {prov.credential_fields.map((field) => (
+                <div key={field} style={{ marginBottom: 8 }}>
+                  <Field label={field.charAt(0).toUpperCase() + field.slice(1)}>
+                    <input
+                      type={field === "password" ? "password" : "text"}
+                      value={creds[field] || ""}
+                      onChange={(e) => setCreds({ ...creds, [field]: e.target.value })}
+                      placeholder={field}
+                      autoComplete={field === "password" ? "current-password" : "username"}
+                    />
+                  </Field>
+                </div>
+              ))}
+              <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4 }}>
+                🔒 Credentials are encrypted at rest using your server secret.
+              </div>
+            </div>
+          ) : (
+            <div className="cam-not-impl">
+              <AlertTriangle size={14} />
+              <span><strong>{BRAND_LABELS[brand]}</strong> sync is not yet implemented. The camera will be recorded but won't auto-sync until the integration is added.</span>
+            </div>
+          )}
+          {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button className="btn" onClick={() => setStep(1)}>← Back</button>
+            <button className="btn btn-primary" disabled={!name.trim()} onClick={() => setStep(3)}>Next →</button>
+          </div>
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <p style={{ fontSize: 13, color: "var(--sub)", marginBottom: 12 }}>
+            Assign this camera to a stand so its sightings can boost that stand's ranking score.
+          </p>
+          <Field label="Stand (optional)">
+            <select value={standId} onChange={(e) => setStandId(e.target.value)}>
+              <option value="">— none —</option>
+              {stands.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </Field>
+          {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button className="btn" onClick={() => setStep(2)}>← Back</button>
+            <button className="btn btn-primary" disabled={saving} onClick={save}>
+              <Save size={15} /> {saving ? "Saving…" : "Add camera"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── Camera edit modal ── */
+function CameraEditor({ cam, providers, stands, onSaved, onCancel }) {
+  const [name, setName] = useState(cam.name || "");
+  const [standId, setStandId] = useState(cam.stand_id != null ? String(cam.stand_id) : "");
+  const [isActive, setIsActive] = useState(cam.is_active);
+  const [updateCreds, setUpdateCreds] = useState(false);
+  const [creds, setCreds] = useState({});
+  const [err, setErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const prov = providers.find((p) => p.brand === cam.brand);
+
+  async function save() {
+    setSaving(true); setErr(null);
+    try {
+      const body = {
+        name: name.trim() || cam.name,
+        // Explicitly send null to unassign; server uses model_fields_set to detect intent
+        stand_id: standId ? +standId : null,
+        is_active: isActive,
+      };
+      if (updateCreds && prov?.implemented) body.credentials = creds;
+      await api(`/cameras/${cam.id}`, { method: "PUT", body: JSON.stringify(body) });
+      onSaved();
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="card" style={{ padding: 20, border: "2px solid var(--navy)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <strong>Edit camera</strong>
+        <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+      </div>
+      <Field label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <div style={{ marginTop: 12 }}>
+        <Field label="Assigned stand">
+          <select value={standId} onChange={(e) => setStandId(e.target.value)}>
+            <option value="">— unassigned —</option>
+            {stands.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 12 }}>
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        Active (syncs on schedule)
+      </label>
+      {prov?.implemented && (
+        <div style={{ marginTop: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 8 }}>
+            <input type="checkbox" checked={updateCreds} onChange={(e) => setUpdateCreds(e.target.checked)} />
+            Update cloud credentials
+          </label>
+          {updateCreds && prov.credential_fields.map((field) => (
+            <div key={field} style={{ marginBottom: 8 }}>
+              <Field label={field.charAt(0).toUpperCase() + field.slice(1)}>
+                <input type={field === "password" ? "password" : "text"}
+                  value={creds[field] || ""} onChange={(e) => setCreds({ ...creds, [field]: e.target.value })}
+                  placeholder={field} />
+              </Field>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        <button className="btn btn-primary" disabled={saving} onClick={save}><Save size={15} /> {saving ? "Saving…" : "Save"}</button>
+        <button className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Sightings viewer modal ── */
+function SightingsPanel({ cam, onClose }) {
+  const [sightings, setSightings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [viewImg, setViewImg] = useState(null);
+  const PAGE = 48;
+
+  const fetchPage = useCallback(async (since = null) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: PAGE });
+      if (since) params.append("since", since);
+      const rows = await api(`/cameras/${cam.id}/sightings?${params}`);
+      setSightings((prev) => since ? [...prev, ...rows] : rows);
+      setHasMore(rows.length === PAGE);
+    } catch {}
+    finally { setLoading(false); }
+  }, [cam.id]);
+
+  useEffect(() => { fetchPage(); }, [fetchPage]);
+  function loadMore() {
+    const oldest = sightings[sightings.length - 1]?.timestamp;
+    if (oldest) fetchPage(oldest);
+  }
+
+  return (
+    <div className="sightings-modal">
+      <div className="sightings-modal-hd">
+        <div>
+          <strong style={{ fontSize: 15 }}>{cam.name} — Sightings</strong>
+          <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 2 }}>
+            {loading && !sightings.length ? "Loading…"
+              : sightings.length ? `${sightings.length}+ sightings${hasMore ? " (scroll for more)" : ""}`
+              : "No sightings yet"}
+            {cam.last_sync_at && <> · synced {formatRelTime(cam.last_sync_at)}</>}
+          </div>
+        </div>
+        <button className="icon-btn" onClick={onClose}><X size={16} /></button>
+      </div>
+
+      {!loading && !sightings.length && (
+        <div style={{ padding: "32px 16px", textAlign: "center", color: "var(--sub)" }}>
+          <Camera size={40} color="var(--bord2)" style={{ marginBottom: 10 }} />
+          <p style={{ margin: 0 }}>No sightings recorded yet. Sync the camera to fetch photos.</p>
+        </div>
+      )}
+
+      <div className="sightings-grid">
+        {sightings.map((s) => {
+          const conf = s.confidence_score;
+          const confCls = conf >= 0.7 ? "conf-high" : conf >= 0.4 ? "conf-med" : "conf-low";
+          return (
+            <div key={s.id} className="sighting-card" onClick={() => s.image_url && setViewImg(s.image_url)}>
+              {s.image_url
+                ? <img src={s.image_url} alt="sighting" className="sighting-thumb" loading="lazy" />
+                : <div className="sighting-nophoto"><Camera size={22} color="var(--bord2)" /></div>
+              }
+              <div className="sighting-meta">
+                <span className="sighting-ts">{formatDateTime(s.timestamp)}</span>
+                <span className={"conf-badge " + confCls}>{Math.round(conf * 100)}%</span>
+              </div>
+            </div>
+          );
+        })}
+        {loading && Array.from({ length: 6 }).map((_, i) => (
+          <div key={"sk" + i} className="sighting-card sighting-skeleton" />
+        ))}
+      </div>
+
+      {hasMore && !loading && (
+        <div style={{ padding: "12px 16px", textAlign: "center" }}>
+          <button className="btn" onClick={loadMore}>Load more</button>
+        </div>
+      )}
+
+      {viewImg && (
+        <div className="lightbox" onClick={() => setViewImg(null)}>
+          <img src={viewImg} alt="full-size sighting" className="lightbox-img" onClick={(e) => e.stopPropagation()} />
+          <button className="lightbox-close" onClick={() => setViewImg(null)}><X size={20} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════
    HOME SETUP
    ════════════════════════════════════════════════════ */
 function HomeSetup({ onSaved, onCancel }) {
@@ -766,9 +1203,9 @@ function HomeSetup({ onSaved, onCancel }) {
    ════════════════════════════════════════════════════ */
 function SettingsPage() {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
-  const [home, setHome] = useState(null); const [homeLat, setHomeLat] = useState(""); const [homeLon, setHomeLon] = useState(""); const [homeSaved, setHomeSaved] = useState(false);
+  const [homeLat, setHomeLat] = useState(""); const [homeLon, setHomeLon] = useState(""); const [homeSaved, setHomeSaved] = useState(false);
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn't load settings.")); }, []);
-  useEffect(() => { api("/home").then((h) => { setHome(h); if (h.set) { setHomeLat(String(h.lat)); setHomeLon(String(h.lon)); } }).catch(() => {}); }, []);
+  useEffect(() => { api("/home").then((h) => { if (h.set) { setHomeLat(String(h.lat)); setHomeLon(String(h.lon)); } }).catch(() => {}); }, []);
 
   async function save() {
     try { const r = await api("/settings", { method: "PUT", body: JSON.stringify(s) }); setS(r); setSaved(true); setTimeout(() => setSaved(false), 1800); }
@@ -779,7 +1216,7 @@ function SettingsPage() {
 
   const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) && +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
   async function saveHome() {
-    try { const h = await api("/home", { method: "PUT", body: JSON.stringify({ lat: +homeLat, lon: +homeLon }) }); setHome(h); setHomeSaved(true); setTimeout(() => setHomeSaved(false), 1800); }
+    try { await api("/home", { method: "PUT", body: JSON.stringify({ lat: +homeLat, lon: +homeLon }) }); setHomeSaved(true); setTimeout(() => setHomeSaved(false), 1800); }
     catch { setErr("Couldn't save."); }
   }
 
@@ -838,6 +1275,65 @@ function SettingsPage() {
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={resetRating}>Reset rating weights</button>
+      </div>
+
+      {/* ── Trail cameras ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 24 }}>
+        <Camera size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Trail cameras
+      </div>
+      <p className="settings-desc">Control how frequently cameras sync and how much recent sightings can boost stand rankings.</p>
+      <div className="settings-section">
+        <SliderRow label="Sync interval" min={5} max={120} step={5}
+          value={s.camera_sync_interval_minutes ?? 30}
+          display={`${Math.round(s.camera_sync_interval_minutes ?? 30)} min`}
+          onChange={(v) => setS({ ...s, camera_sync_interval_minutes: v })} />
+        <SliderRow label="Max camera boost (per stand)" min={0} max={50} step={1}
+          value={s.max_camera_boost_pct ?? 15}
+          display={`+${Math.round(s.max_camera_boost_pct ?? 15)}%`}
+          onChange={(v) => setS({ ...s, max_camera_boost_pct: v })} />
+        <SliderRow label="Image retention" min={7} max={365} step={7}
+          value={s.image_retention_days ?? 60}
+          display={`${Math.round(s.image_retention_days ?? 60)} days`}
+          onChange={(v) => setS({ ...s, image_retention_days: v })} />
+      </div>
+
+      {/* ── Image storage directory ── */}
+      <div className="settings-section">
+        <div className="settings-section-hd"><HardDrive size={15} color="var(--amber)" /><strong>Image storage directory</strong></div>
+        <p className="settings-desc" style={{ marginBottom: 8 }}>Absolute path on the server where downloaded trail-camera photos are stored. Changing this does not move existing files.</p>
+        <Field label="Server path">
+          <input value={s.camera_image_dir || ""} onChange={(e) => setS({ ...s, camera_image_dir: e.target.value })}
+            placeholder="/app/data/camera_images"
+            style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 13 }} />
+        </Field>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+      </div>
+
+      {/* ── Rut calendar ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
+        🦌 Rut calendar
+      </div>
+      <p className="settings-desc">Peak rut date for your region. Default is Dec 5 (central Arkansas). Move earlier for northern latitudes, later for deep South.</p>
+      <div className="settings-section">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Peak rut month">
+            <select value={s.rut_peak_month ?? 12} onChange={(e) => setS({ ...s, rut_peak_month: +e.target.value })}>
+              {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => (
+                <option key={i + 1} value={i + 1}>{m}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Peak rut day">
+            <select value={s.rut_peak_day ?? 5} onChange={(e) => setS({ ...s, rut_peak_day: +e.target.value })}>
+              {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </Field>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save all settings"}</button>
       </div>
     </div>
   );
