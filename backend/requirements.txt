@@ -6,4 +6,5 @@ httpx==0.28.1
 pydantic==2.10.4
 apscheduler==3.10.4
 cryptography==44.0.0
-megadetector==5.0.25
+PytorchWildlife>=1.2.0
+pillow>=10.0.0
