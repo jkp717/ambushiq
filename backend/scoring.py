@@ -1,6 +1,7 @@
 """Wind + thermal + scent scoring engine (server-side)."""
 from __future__ import annotations
 import math
+import datetime as _dt  # module-level import (was incorrectly inside camera_boost)
 
 DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
         "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
@@ -121,17 +122,26 @@ def period_for_hour(hour_of_day: int) -> str | None:
     return None
 
 
-def camera_boost(period: str, sightings: list[dict], max_boost_pct: float) -> dict:
+def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
+                 utc_offset_seconds: int = 0) -> dict:
     """
     Positive-only boost. Given a stand's recent camera sightings (each a dict with
     'timestamp' ISO and 'confidence_score'), return a multiplier >= 1.0 and a
-    breakdown. Only DAYLIGHT sightings within the last 72h whose hour-of-day falls
-    in the CURRENT hunt period count. No penalty is ever applied.
+    breakdown. Only DAYLIGHT sightings within the last 72h whose LOCAL hour-of-day
+    falls in the current hunt period count. No penalty is ever applied.
+
+    utc_offset_seconds is taken from the Open-Meteo forecast for the property's
+    location and is used to convert the stored UTC timestamps to local time before
+    period matching — without this, a UTC-5 property's 6 AM sighting (stored as
+    11:00 UTC) would be misclassified as "midday" instead of "morning".
+
+    NOTE: sightings currently record ANY animal detected by MegaDetector, not
+    exclusively deer. For hunting purposes "wildlife at this stand in this period"
+    is the signal; deer-species classification would require an additional model.
 
     Boost scales with how many qualifying sightings and their confidence, capped at
     max_boost_pct (e.g. 15.0 -> up to +15% -> multiplier up to 1.15).
     """
-    import datetime as _dt
     now = _dt.datetime.now(_dt.timezone.utc)
     qualifying = []
     for s in sightings or []:
@@ -147,18 +157,21 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float) -> di
         age_h = (now - t).total_seconds() / 3600
         if age_h < 0 or age_h > 72:
             continue
-        if period_for_hour(t.hour) != period:
+        # Convert UTC → local time using the property's UTC offset before period
+        # matching. timedelta handles sub-hour offsets (e.g. India UTC+5:30) correctly.
+        local_dt = t + _dt.timedelta(seconds=utc_offset_seconds)
+        if period_for_hour(local_dt.hour) != period:
             continue
         qualifying.append(s)
 
     if not qualifying:
         return {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "no recent daylight photos"}
 
-    # accumulate: each qualifying sighting contributes, weighted by confidence,
-    # with diminishing returns; normalize so ~3 solid sightings approaches the cap.
+    # Accumulate confidence with diminishing returns; ~3 solid sightings approaches cap.
     accum = 0.0
     for s in qualifying:
-        conf = max(0.1, min(1.0, float(s.get("confidence_score") or 0.0) or 0.5))
+        raw_conf = s.get("confidence_score")
+        conf = max(0.1, min(1.0, float(raw_conf) if raw_conf is not None else 0.5))
         accum += conf
     frac = min(1.0, accum / 3.0)
     boost_pct = round(max_boost_pct * frac, 1)
@@ -171,10 +184,15 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float) -> di
 
 def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          sightings: list[dict] | None = None, max_boost_pct: float = 0.0,
-                         proximity: dict | None = None) -> dict:
+                         proximity: dict | None = None,
+                         utc_offset_seconds: int = 0) -> dict:
     """
     Wrap score_stand_hour with a structured, human-readable breakdown and an optional
     positive-only camera boost. Returns final_score plus a breakdown list.
+
+    utc_offset_seconds: seconds east of UTC for the property's location, from the
+    Open-Meteo forecast response. Passed through to camera_boost so period matching
+    uses local time rather than UTC.
     """
     base = score_stand_hour(stand, hour)
     base_total = base["total"]
@@ -208,7 +226,7 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
 
     cam = {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "camera boost off"}
     if period and max_boost_pct and sightings is not None:
-        cam = camera_boost(period, sightings, max_boost_pct)
+        cam = camera_boost(period, sightings, max_boost_pct, utc_offset_seconds)
         total *= cam["multiplier"]
         breakdown.append({"factor": "Trail-camera boost", "value": cam["boost_pct"] / 100.0,
                           "text": cam["text"]})

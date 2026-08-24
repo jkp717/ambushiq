@@ -7,6 +7,12 @@ the app boots fine without it, and if the model/deps are unavailable the detecto
 degrades to a permissive fallback (treats every photo as a low-confidence sighting)
 so the pipeline still records data rather than crashing.
 
+DETECTOR_MODE env var:
+  "megadetector" (default) — run MegaDetector; on any model/dependency error, skip
+                              the photo rather than silently recording it as a sighting.
+  "fallback"               — explicit opt-in to treat every photo as a sighting with
+                              confidence 0.0 (useful for testing without a model).
+
 NOTE: inference is UNTESTED in the build sandbox (no model, no GPU/CPU torch there).
 First real run happens on the server. If MegaDetector proves too heavy on the
 target machine, set DETECTOR_MODE=fallback to skip it, or swap in a lighter model
@@ -14,11 +20,14 @@ inside _run_megadetector without touching callers.
 """
 from __future__ import annotations
 import os
+import logging
 import threading
 
 _MODEL = None
 _LOCK = threading.Lock()
 _MODE = os.environ.get("DETECTOR_MODE", "megadetector")  # "megadetector" | "fallback"
+
+log = logging.getLogger(__name__)
 
 # MegaDetector category 1 == animal. We treat animal detections above threshold as
 # a positive wildlife sighting. (Deer-species classification is a separate model;
@@ -43,8 +52,12 @@ def _load_model():
 
 def detect_animal(image_path: str) -> dict:
     """
-    Return {"is_animal": bool, "confidence": float}. Never raises for model issues —
-    falls back permissively so the sync pipeline keeps working.
+    Return {"is_animal": bool, "confidence": float, "detector": str}.
+
+    Never raises — but on model failure returns is_animal=False so that broken
+    or missing models do NOT silently flood the sightings table with false positives.
+    Only the explicit DETECTOR_MODE=fallback opt-in returns is_animal=True without
+    running the model.
     """
     if _MODE == "fallback":
         return {"is_animal": True, "confidence": 0.0, "detector": "fallback"}
@@ -57,6 +70,9 @@ def detect_animal(image_path: str) -> dict:
                 best = max(best, float(det.get("conf", 0.0)))
         return {"is_animal": best >= CONF_THRESHOLD, "confidence": round(best, 3),
                 "detector": "megadetector"}
-    except Exception as e:  # model missing, deps missing, bad image, etc.
-        # Degrade gracefully: record as a low-confidence sighting rather than dropping it.
-        return {"is_animal": True, "confidence": 0.0, "detector": f"fallback ({type(e).__name__})"}
+    except Exception as e:
+        # Model missing, deps missing, bad image, CUDA error, etc.
+        # Return is_animal=False so the sync pipeline skips rather than records
+        # everything. The error is logged so ops can diagnose the root cause.
+        log.warning("MegaDetector failed on %s: %s: %s", image_path, type(e).__name__, e)
+        return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})"}
