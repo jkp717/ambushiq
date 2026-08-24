@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Menu, ChevronLeft, Settings as SettingsIcon, Camera, ChevronDown } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Menu, ChevronLeft, Settings as SettingsIcon } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -218,10 +218,10 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
   const [drawMode, setDrawMode] = useState(null);
   const [draftPoints, setDraftPoints] = useState([]);
   const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, zones: true, corridors: true });
-  const [pendingName, setPendingName] = useState(null);
+  const [pendingName, setPendingName] = useState(null); // {type:'zone'|'corridor', kind?, payload, title}
   const [useProx, setUseProx] = useState({ corridor: true, food: true, bedding: true });
   const [deerRatings, setDeerRatings] = useState(null);
-  const [home, setHome] = useState(null);
+  const [home, setHome] = useState(null);  // {lat,lon,set} | null while loading
 
   useEffect(() => { api("/home").then(setHome).catch(() => setHome({ set: false })); }, []);
 
@@ -230,6 +230,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     api("/deer-ratings").then((j) => setDeerRatings(j.ratings)).catch(() => {});
   }, [stands.length]);
 
+  // a draw request arriving from a list page
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
 
   useEffect(() => {
@@ -243,12 +244,13 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
         if (j.days[d].day === now.toISOString().slice(0, 10) && hi >= 0) { di = d; hp = hi; break; }
       }
       setDayIdx(di); setHourPos(hp);
-    }).catch(() => setErr("Couldn't load forecast hours."));
+    }).catch(() => setErr("Couldn’t load forecast hours."));
   }, [stands.length]);
 
   const curDay = days[dayIdx];
   const curHour = curDay?.hours[Math.min(hourPos, (curDay?.hours.length || 1) - 1)];
 
+  // hourly conditions drive the MAP ARROWS only
   useEffect(() => {
     if (!curHour) return;
     let cancel = false;
@@ -258,6 +260,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     return () => { cancel = true; };
   }, [curHour?.index]);
 
+  // day periods drive the RANKINGS (morning / midday / evening winners)
   useEffect(() => {
     if (!curDay) return;
     let cancel = false;
@@ -293,13 +296,17 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     try {
       if (pn.type === "zone") { await api("/zones", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadZones(); }
       else { await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadCorridors(); }
-    } catch { setErr(`Couldn't save ${pn.type}.`); }
+    } catch { setErr(`Couldn’t save ${pn.type}.`); }
   }
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
 
   if (!stands.length) {
+    // No stands yet. If the user came here to add their first stand (or any
+    // feature), still show the map so they can place it — the data panels need a
+    // stand to exist, so we show a stripped-down placement view until then.
     if (drawMode) {
+      // need a hunt-region center before the first placement
       if (home && !home.set) {
         return (
           <div>
@@ -339,419 +346,99 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     return <div><PageHead title="Hunt Planner" /><Empty>Add a stand first (Stand locations → Add) to see the map and rankings.</Empty></div>;
   }
 
-  const selectedRating = deerRatings?.find((r) => r.day === curDay?.day);
-
   return (
     <div>
+      <PageHead title="Hunt Planner" />
       {err && <Banner>{err}</Banner>}
 
-      {/* ── 14-Day Weather-Style Forecast Carousel ── */}
-      {deerRatings && deerRatings.length > 0 && (
-        <ForecastCarousel
-          ratings={deerRatings}
-          selectedDay={curDay?.day}
-          loadableDays={days.map((d) => d.day)}
-          onPick={(day) => { const i = days.findIndex((d) => d.day === day); if (i >= 0) { setDayIdx(i); setHourPos(0); } }}
-        />
-      )}
+      {/* ── Card 1: When to hunt (outlook + selected-day rating) ── */}
+      <div className="panel">
+        {deerRatings && deerRatings.length > 0 && (
+          <DeerOutlook ratings={deerRatings} selectedDay={curDay?.day}
+            loadableDays={days.map((d) => d.day)}
+            onPick={(day) => { const i = days.findIndex((d) => d.day === day); if (i >= 0) { setDayIdx(i); setHourPos(0); } }} />
+        )}
+        {curDay?.confidence === "low" && (
+          <div style={{ fontSize: 12, color: "var(--amber)", background: "rgba(133,79,11,.12)", padding: "6px 10px", borderRadius: 8, marginTop: 12, display: "flex", gap: 6, alignItems: "center" }}>
+            <AlertTriangle size={14} /> This day is 8+ days out — wind direction this far ahead is uncertain, so the stand rankings are directional.
+          </div>
+        )}
+        {deerRatings && curDay && (() => {
+          const dr = deerRatings.find((r) => r.day === curDay.day);
+          return dr ? <div style={{ marginTop: 12 }}><DeerRating rating={dr} /></div> : null;
+        })()}
+      </div>
 
-      {/* ── Selected Day Intelligence Header ── */}
-      {selectedRating && curDay && (
-        <DayIntelligenceHeader rating={selectedRating} curDay={curDay} />
-      )}
+      {/* ── Card 2: Map (slider above, layers overlaid, Add menu) ── */}
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <strong>{curDay?.label || "Map"}</strong>
+            <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 2 }}>Tap a day in the outlook above to change the date</div>
+          </div>
+          <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
+        </div>
 
-      {/* ── Main split layout: Map + Leaderboard ── */}
-      <div className="hunt-split">
-
-        {/* Left: Map + Hourly Scrubber */}
-        <div className="hunt-map-col">
-          <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--bord)" }}>
-              <div>
-                <strong style={{ fontSize: 14.5 }}>{curDay?.label || "Map"}</strong>
-                {curDay?.confidence === "low" && (
-                  <span style={{ fontSize: 11, color: "var(--amber)", marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <AlertTriangle size={11} /> est.
-                  </span>
-                )}
-              </div>
-              <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
+        {curDay && curHour && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+              <span style={{ fontWeight: 500 }}>{curHour.label}</span>
+              <span style={{ fontSize: 12, color: "var(--sub)" }}>☀ {curDay.sunrise} · ☾ {curDay.sunset}{conditions && <> · {Math.round(conditions.time.temp)}° · {conditions.time.cloud}% cloud</>}</span>
             </div>
-
-            {curDay && curHour && (
-              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--bord)", background: "var(--tert)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ fontWeight: 600, fontSize: 13 }}>{curHour.label}</span>
-                  <span style={{ fontSize: 11.5, color: "var(--sub)" }}>
-                    ☀ {curDay.sunrise} · ☾ {curDay.sunset}
-                    {conditions && <> · {Math.round(conditions.time.temp)}°F · {conditions.time.cloud}% cloud</>}
-                  </span>
-                </div>
-                <input type="range" min={0} max={curDay.hours.length - 1} value={Math.min(hourPos, curDay.hours.length - 1)}
-                  onChange={(e) => setHourPos(+e.target.value)} style={{ width: "100%" }} />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--sub)", marginTop: 2 }}>
-                  <span>{curDay.hours[0]?.label}</span><span>{curDay.hours[curDay.hours.length - 1]?.label}</span>
-                </div>
-              </div>
-            )}
-
-            {drawMode && (
-              <div style={{ padding: "8px 14px", background: "rgba(133,79,11,.08)", borderBottom: "1px solid var(--bord)", fontSize: 13, color: "var(--amber)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                {drawMode === "stand" && <>Click the map to place the stand.</>}
-                {(drawMode === "food" || drawMode === "bedding") && <>Click the map to drop the {drawMode} zone.</>}
-                {drawMode === "corridor" && <>Click points along the deer path ({draftPoints.length} set).</>}
-                {drawMode === "corridor" && <button className="btn" onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
-                <button className="btn" onClick={cancelDraw}>Cancel</button>
-              </div>
-            )}
-
-            <div style={{ position: "relative" }}>
-              <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
-                drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
-                onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home} />
-              <div className="layer-overlay">
-                <LayerChip on={layers.wind} onClick={() => toggle("wind")} color="var(--navy)" label="Wind" />
-                <LayerChip on={layers.thermal} onClick={() => toggle("thermal")} color="#185FA5" dashed label="Thermal" />
-                <LayerChip on={layers.deer} onClick={() => toggle("deer")} color="#A35A1B" label="Deer" />
-                <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
-                <LayerChip on={layers.zones} onClick={() => toggle("zones")} color="#6B4FA0" label="Zones" />
-              </div>
+            <input type="range" min={0} max={curDay.hours.length - 1} value={Math.min(hourPos, curDay.hours.length - 1)} onChange={(e) => setHourPos(+e.target.value)} style={{ width: "100%" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--sub)" }}>
+              <span>{curDay.hours[0]?.label}</span><span>{curDay.hours[curDay.hours.length - 1]?.label}</span>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Right: Stand Leaderboard */}
-        <div className="hunt-rank-col">
-          {dayRanked && dayRanked.ranked.length > 0 ? (
-            <StandLeaderboard ranked={dayRanked} useProx={useProx} setUseProx={setUseProx} />
-          ) : (
-            <div className="panel" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 200 }}>
-              <Empty>Loading stand rankings…</Empty>
-            </div>
-          )}
+        {/* draw-mode instruction bar */}
+        {drawMode && (
+          <div style={{ fontSize: 13, color: "var(--amber)", marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {drawMode === "stand" && <>Click the map to place the stand.</>}
+            {(drawMode === "food" || drawMode === "bedding") && <>Click the map to drop the {drawMode} zone.</>}
+            {drawMode === "corridor" && <>Click points along the deer path ({draftPoints.length} set).</>}
+            {drawMode === "corridor" && <button className="btn" onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
+            <button className="btn" onClick={cancelDraw}>Cancel</button>
+          </div>
+        )}
+
+        {/* map with layer toggles overlaid */}
+        <div style={{ position: "relative" }}>
+          <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
+            drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
+            onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home} />
+          <div className="layer-overlay">
+            <LayerChip on={layers.wind} onClick={() => toggle("wind")} color="var(--navy)" label="Wind" />
+            <LayerChip on={layers.thermal} onClick={() => toggle("thermal")} color="#185FA5" dashed label="Thermal" />
+            <LayerChip on={layers.deer} onClick={() => toggle("deer")} color="#A35A1B" label="Deer" />
+            <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
+            <LayerChip on={layers.zones} onClick={() => toggle("zones")} color="#6B4FA0" label="Zones" />
+          </div>
         </div>
       </div>
+
+      {/* ── Card 3: Best stands ── */}
+      {dayRanked && dayRanked.ranked.length > 0 && (
+        <div className="panel">
+          <div className="panel-head"><strong>Best stands — {dayRanked.day_label}</strong></div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10, fontSize: 12 }}>
+            <PeriodKey color={PERIOD_COLORS.morning} label="Morning best" />
+            <PeriodKey color={PERIOD_COLORS.midday} label="Midday best" />
+            <PeriodKey color={PERIOD_COLORS.evening} label="Evening best" />
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+            <span style={{ fontSize: 12, color: "var(--sub)" }}>Proximity weights:</span>
+            <ProxToggle on={useProx.corridor} color="#A35A1B" label="Corridors" icon={Footprints} onClick={() => setUseProx((u) => ({ ...u, corridor: !u.corridor }))} />
+            <ProxToggle on={useProx.food} color="var(--green)" label="Food" icon={Wheat} onClick={() => setUseProx((u) => ({ ...u, food: !u.food }))} />
+            <ProxToggle on={useProx.bedding} color="#6B4FA0" label="Bedding" icon={Trees} onClick={() => setUseProx((u) => ({ ...u, bedding: !u.bedding }))} />
+          </div>
+          {dayRanked.ranked.map((row) => <DayRankCard key={row.stand.id} row={row} />)}
+        </div>
+      )}
 
       {pendingName && (
         <NamePrompt title={pendingName.title} onCancel={() => setPendingName(null)} onConfirm={confirmName} />
-      )}
-    </div>
-  );
-}
-
-/* ════════════════ WEATHER-STYLE FORECAST CAROUSEL ════════════════ */
-function ForecastCarousel({ ratings, selectedDay, onPick, loadableDays }) {
-  const scrollRef = React.useRef(null);
-
-  React.useEffect(() => {
-    if (!scrollRef.current) return;
-    const sel = scrollRef.current.querySelector(".fc-card.selected");
-    if (sel) sel.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-  }, [selectedDay]);
-
-  const weatherIcon = (r) => {
-    const rain = r.inputs?.rain_mm ?? 0;
-    const wind = r.inputs?.wind_mph ?? 0;
-    if (rain > 5) return "🌧️";
-    if (rain > 1) return "🌦️";
-    if (wind > 15) return "💨";
-    if (r.rating >= 4) return "☀️";
-    if (r.rating === 3) return "⛅";
-    return "🌥️";
-  };
-
-  const movementColor = (rating) => {
-    if (rating >= 4) return { bg: "rgba(59,109,17,.12)", border: "rgba(59,109,17,.35)", text: "var(--green)" };
-    if (rating === 3) return { bg: "rgba(133,79,11,.1)", border: "rgba(133,79,11,.3)", text: "var(--amber)" };
-    return { bg: "rgba(163,45,45,.08)", border: "rgba(163,45,45,.25)", text: "var(--red)" };
-  };
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <h2 style={{ fontSize: 12, fontWeight: 600, color: "var(--sub)", textTransform: "uppercase", letterSpacing: 0.8 }}>
-          14-Day Movement Outlook
-        </h2>
-        <span style={{ fontSize: 11, color: "var(--sub)" }}>← scroll →</span>
-      </div>
-      <div ref={scrollRef} className="fc-strip">
-        {ratings.map((r) => {
-          const sel = r.day === selectedDay;
-          const loadable = loadableDays.includes(r.day);
-          const low = r.confidence === "low";
-          const col = movementColor(r.rating);
-          return (
-            <button key={r.day}
-              className={"fc-card" + (sel ? " selected" : "")}
-              onClick={() => loadable && onPick(r.day)}
-              disabled={!loadable}
-              title={`${r.rating}/5 · ${r.rut?.phase || ""}${low ? " · est." : ""}`}
-              style={{
-                borderColor: sel ? "var(--navy)" : col.border,
-                background: sel ? "var(--navy)" : col.bg,
-              }}
-            >
-              <div className="fc-day" style={{ color: sel ? "rgba(255,255,255,0.75)" : "var(--sub)" }}>
-                {r.label}
-              </div>
-              <div className="fc-icon">{weatherIcon(r)}</div>
-              <div className="fc-rating-pill" style={{
-                background: sel ? "rgba(255,255,255,0.18)" : "transparent",
-                color: sel ? "#fff" : col.text,
-                border: `1px solid ${sel ? "rgba(255,255,255,0.3)" : col.border}`,
-              }}>
-                {"🦌".repeat(r.rating)}<span style={{ fontSize: 10, marginLeft: 3 }}>{r.rating}/5</span>
-              </div>
-              {r.inputs?.pressure_inhg != null && (
-                <div className="fc-meta" style={{ color: sel ? "rgba(255,255,255,0.65)" : "var(--sub)" }}>
-                  {r.inputs.pressure_inhg}″
-                  {(r.inputs.pressure_trend_inhg ?? 0) > 0.005 ? " ↑" : (r.inputs.pressure_trend_inhg ?? 0) < -0.005 ? " ↓" : ""}
-                </div>
-              )}
-              {r.inputs?.wind_mph != null && (
-                <div className="fc-meta" style={{ color: sel ? "rgba(255,255,255,0.65)" : "var(--sub)" }}>
-                  💨 {r.inputs.wind_mph}mph
-                </div>
-              )}
-              {low && <div className="fc-est" style={{ color: sel ? "rgba(255,255,255,0.45)" : "var(--sub)" }}>est.</div>}
-            </button>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 6 }}>
-        Tap any day to load its map and stand rankings. Days marked "est." are 8+ days out — weather confidence softens past ~7 days.
-      </div>
-    </div>
-  );
-}
-
-/* ════════════════ DAY INTELLIGENCE HEADER ════════════════ */
-function DayIntelligenceHeader({ rating, curDay }) {
-  const [open, setOpen] = useState(false);
-  const r = rating.rating;
-  const fac = rating.factors || {};
-  const inp = rating.inputs || {};
-  const tone = r >= 4 ? "var(--green)" : r === 3 ? "var(--amber)" : "var(--red)";
-  const phase = rating.rut?.phase || "";
-  const rutInt = rating.rut?.intensity ?? null;
-
-  return (
-    <div className="day-intel-header" style={{ borderLeft: `4px solid ${tone}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 22, letterSpacing: 1 }}>{"🦌".repeat(r)}{"·".repeat(5 - r)}</span>
-            <span style={{ fontWeight: 700, fontSize: 17, color: tone }}>{r}/5 Movement</span>
-            <span style={{ fontSize: 12, fontWeight: 600, background: tone + "22", color: tone, border: `1px solid ${tone}55`, padding: "2px 9px", borderRadius: 12 }}>
-              {phase}
-            </span>
-          </div>
-          <div style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 4 }}>{curDay.label}</div>
-        </div>
-        <button className="btn" style={{ fontSize: 12, padding: "5px 10px" }} onClick={() => setOpen((o) => !o)}>
-          {open ? "▲ Less" : "▼ Details"}
-        </button>
-      </div>
-
-      <div className="intel-cards">
-        {rutInt != null && (
-          <div className="intel-card" style={{ borderLeft: `3px solid ${tone}` }}>
-            <div className="intel-icon">🦌</div>
-            <div>
-              <div className="intel-label">Rut Intensity</div>
-              <div className="intel-value" style={{ color: tone }}>{Math.round(rutInt * 100)}%</div>
-              <div className="intel-sub">{phase}</div>
-            </div>
-          </div>
-        )}
-        {inp.pressure_inhg != null && (
-          <div className="intel-card">
-            <div className="intel-icon">📈</div>
-            <div>
-              <div className="intel-label">Barometric</div>
-              <div className="intel-value">{inp.pressure_inhg}″</div>
-              <div className="intel-sub">{(inp.pressure_trend_inhg ?? 0) > 0.005 ? "Rising ↑" : (inp.pressure_trend_inhg ?? 0) < -0.005 ? "Falling ↓" : "Steady"}</div>
-            </div>
-          </div>
-        )}
-        {inp.wind_mph != null && (
-          <div className="intel-card">
-            <div className="intel-icon">💨</div>
-            <div>
-              <div className="intel-label">Wind Speed</div>
-              <div className="intel-value">{inp.wind_mph} mph</div>
-              <div className="intel-sub">{inp.wind_mph < 5 ? "Calm — scent pools" : inp.wind_mph > 15 ? "Strong — movement drops" : "Good scenting"}</div>
-            </div>
-          </div>
-        )}
-        {inp.day_high_f != null && (
-          <div className="intel-card">
-            <div className="intel-icon">🌡️</div>
-            <div>
-              <div className="intel-label">High Temp</div>
-              <div className="intel-value">{inp.day_high_f}°F</div>
-              {inp.baseline_f != null && <div className="intel-sub">{inp.day_high_f < inp.baseline_f ? "↓" : "↑"} {Math.abs(inp.day_high_f - inp.baseline_f)}° vs avg</div>}
-            </div>
-          </div>
-        )}
-        {inp.rain_mm != null && (
-          <div className="intel-card">
-            <div className="intel-icon">🌧️</div>
-            <div>
-              <div className="intel-label">Precipitation</div>
-              <div className="intel-value">{inp.rain_mm === 0 ? "Dry" : `${inp.rain_mm} mm`}</div>
-              <div className="intel-sub">{inp.rain_mm > 5 ? "Movement suppressed" : inp.rain_mm > 0 ? "Light rain — OK" : "Optimal"}</div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {open && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bord)" }}>
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--sub)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.6 }}>Factor Breakdown</div>
-          {Object.entries(fac).map(([k, v]) => {
-            const pct = Math.round((v ?? 0) * 100);
-            const label = { pressure: "Barometric Pressure", wind: "Wind", rain: "Rain (1=dry)", temp_shift: "Temperature Shift" }[k] || k;
-            return (
-              <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                <span style={{ fontSize: 12, color: "var(--sub)", width: 150, flexShrink: 0 }}>{label}</span>
-                <span style={{ flex: 1, height: 6, background: "var(--surf)", borderRadius: 3, overflow: "hidden" }}>
-                  <span style={{ display: "block", height: "100%", width: `${pct}%`, background: tone, borderRadius: 3 }} />
-                </span>
-                <span style={{ fontSize: 11, color: "var(--sub)", width: 28, textAlign: "right" }}>{pct}</span>
-              </div>
-            );
-          })}
-          {Array.isArray(rating.breakdown) && (
-            <div style={{ marginTop: 8, display: "grid", gap: 3 }}>
-              {rating.breakdown.map((b, i) => (
-                <div key={i} style={{ fontSize: 11, color: "var(--sub)", display: "flex", gap: 8 }}>
-                  <b style={{ color: "var(--txt)", fontWeight: 500 }}>{b.factor}:</b> {b.impact}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ════════════════ STAND LEADERBOARD ════════════════ */
-const PERIOD_COLORS = { morning: "#C28800", midday: "#1E7FB0", evening: "#7A3FA0" };
-const PERIOD_LABEL = { morning: "🌅 Morning", midday: "☀️ Midday", evening: "🌇 Evening" };
-
-function StandLeaderboard({ ranked, useProx, setUseProx }) {
-  const [activePeriod, setActivePeriod] = useState("morning");
-  return (
-    <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--bord)" }}>
-        <strong style={{ fontSize: 14.5 }}>Stand Rankings — {ranked.day_label}</strong>
-      </div>
-      <div style={{ display: "flex", borderBottom: "1px solid var(--bord)", background: "var(--tert)" }}>
-        {["morning", "midday", "evening"].map((p) => (
-          <button key={p} onClick={() => setActivePeriod(p)}
-            style={{
-              flex: 1, padding: "9px 6px", border: "none", cursor: "pointer", fontSize: 12.5,
-              fontWeight: activePeriod === p ? 600 : 400,
-              background: activePeriod === p ? "var(--bg)" : "transparent",
-              color: activePeriod === p ? PERIOD_COLORS[p] : "var(--sub)",
-              borderBottom: activePeriod === p ? `2px solid ${PERIOD_COLORS[p]}` : "2px solid transparent",
-            }}>
-            {PERIOD_LABEL[p]}
-          </button>
-        ))}
-      </div>
-      <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--bord)", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 11, color: "var(--sub)" }}>Proximity:</span>
-        <ProxToggle on={useProx.corridor} color="#A35A1B" label="Corridors" icon={Footprints} onClick={() => setUseProx((u) => ({ ...u, corridor: !u.corridor }))} />
-        <ProxToggle on={useProx.food} color="var(--green)" label="Food" icon={Wheat} onClick={() => setUseProx((u) => ({ ...u, food: !u.food }))} />
-        <ProxToggle on={useProx.bedding} color="#6B4FA0" label="Bedding" icon={Trees} onClick={() => setUseProx((u) => ({ ...u, bedding: !u.bedding }))} />
-      </div>
-      <div style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
-        {ranked.ranked.map((row, idx) => (
-          <LeaderboardCard key={row.stand.id} row={row} period={activePeriod} rank={idx} isWinner={row.wins.includes(activePeriod)} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ════════════════ LEADERBOARD CARD ════════════════ */
-function LeaderboardCard({ row, period, rank, isWinner }) {
-  const [open, setOpen] = useState(false);
-  const { stand, periods, proximity } = row;
-  const sc = periods[period]?.score;
-  const hour = periods[period]?.hour;
-  const score = sc ? Math.round(sc.total * 100) : null;
-  const proxTotal = proximity ? Math.round(proximity.total * 100) : 0;
-  const camBoost = sc?.camera?.boost_pct > 0 ? sc.camera.boost_pct : 0;
-  return (
-    <div style={{
-      border: isWinner ? `2px solid ${PERIOD_COLORS[period]}` : "1px solid var(--bord)",
-      borderRadius: 10, background: "var(--bg)", overflow: "hidden",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--sub)", minWidth: 22 }}>
-          {isWinner ? "★" : `${rank + 1}.`}
-        </span>
-        <span style={{ fontWeight: 600, flex: 1 }}>{stand.name}</span>
-        {score != null && (
-          <span style={{
-            fontSize: 12.5, fontWeight: 700,
-            color: score >= 70 ? "var(--green)" : score >= 45 ? "var(--amber)" : "var(--red)",
-            background: score >= 70 ? "rgba(59,109,17,.12)" : score >= 45 ? "rgba(133,79,11,.12)" : "rgba(163,45,45,.1)",
-            padding: "2px 8px", borderRadius: 6,
-          }}>{score}</span>
-        )}
-        {isWinner && (
-          <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: PERIOD_COLORS[period], padding: "2px 8px", borderRadius: 6 }}>
-            Best {period}
-          </span>
-        )}
-        <button className="icon-btn" style={{ padding: 4 }} onClick={() => setOpen((o) => !o)}>
-          <ChevronDown size={14} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
-        </button>
-      </div>
-      {sc && hour && (
-        <div style={{ padding: "6px 12px 10px", display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, color: "var(--sub)", borderTop: "1px solid var(--bord)" }}>
-          <span>💨 {degToCompass(hour.wind_dir)} {Math.round(hour.wind_speed)}mph</span>
-          <span>🌡️ thermals {sc.thermal_phase}</span>
-          {stand.deer_approach_deg != null && (
-            <span style={{ color: sc.scent_score > 0.6 ? "var(--green)" : sc.scent_score > 0.35 ? "var(--amber)" : "var(--red)" }}>
-              {sc.scent_score > 0.6 ? "✓ Scent away" : sc.scent_score > 0.35 ? "~ Scent crosses" : "✗ Scent toward deer"}
-            </span>
-          )}
-          {proxTotal > 0 && <span style={{ color: "var(--green)" }}>+{proxTotal} prox</span>}
-          {camBoost > 0 && <span style={{ color: "var(--navy)", display: "inline-flex", alignItems: "center", gap: 3 }}><Camera size={10} /> +{camBoost}%</span>}
-        </div>
-      )}
-      {open && (
-        <div style={{ padding: "10px 12px", background: "var(--tert)", borderTop: "1px solid var(--bord)" }}>
-          {(() => {
-            const bd = periods[period]?.score?.breakdown;
-            if (!bd) return <div style={{ fontSize: 12, color: "var(--sub)" }}>No breakdown available.</div>;
-            return (
-              <div>
-                <div style={{ display: "grid", gap: 4 }}>
-                  {bd.map((b, i) => (
-                    <div key={i} style={{ fontSize: 11.5, display: "flex", gap: 8, color: "var(--sub)" }}>
-                      <b style={{ color: "var(--txt)", fontWeight: 500, minWidth: 90 }}>{b.factor}:</b>
-                      <span>{b.text}</span>
-                    </div>
-                  ))}
-                </div>
-                {proximity && (
-                  <div style={{ marginTop: 8, fontSize: 11, color: "var(--sub)", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <span>Corridor +{Math.round(proximity.corridor * 100)}</span>
-                    <span>Food +{Math.round(proximity.food * 100)}</span>
-                    <span>Bedding +{Math.round(proximity.bedding * 100)}</span>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-        </div>
       )}
     </div>
   );
@@ -1005,7 +692,6 @@ function SettingsPage() {
   const [homeLat, setHomeLat] = useState("");
   const [homeLon, setHomeLon] = useState("");
   const [homeSaved, setHomeSaved] = useState(false);
-  const [tab, setTab] = useState("stand");  // stand | rating | cameras
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn’t load settings.")); }, []);
   useEffect(() => { api("/home").then((h) => { setHome(h); if (h.set) { setHomeLat(String(h.lat)); setHomeLon(String(h.lon)); } }).catch(() => {}); }, []);
 
@@ -1013,8 +699,8 @@ function SettingsPage() {
     try { const r = await api("/settings", { method: "PUT", body: JSON.stringify(s) }); setS(r); setSaved(true); setTimeout(() => setSaved(false), 1800); }
     catch { setErr("Couldn’t save settings."); }
   }
-  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, max_camera_boost_pct: 15.0 }); }
-  function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20, rut_peak_month: 12, rut_peak_day: 5 }); }
+  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250 }); }
+  function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
 
   const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) &&
     +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
@@ -1030,338 +716,80 @@ function SettingsPage() {
     { key: "food", label: "Food zones", icon: Wheat, color: "var(--green)" },
     { key: "bedding", label: "Bedding zones", icon: Trees, color: "#6B4FA0" },
   ];
-  const TABS = [
-    { key: "stand", label: "Best Stand" },
-    { key: "rating", label: "Daily Rating" },
-    { key: "cameras", label: "Trail Cameras" },
-  ];
-  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
   return (
-    <div style={{ maxWidth: 600 }}>
-      <PageHead title="Settings" action={tab !== "cameras" ? <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved" : "Save"}</button> : null} />
+    <div style={{ maxWidth: 560 }}>
+      <PageHead title="Settings" action={<button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved" : "Save"}</button>} />
       {err && <Banner>{err}</Banner>}
 
-      {/* sub-nav tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "1px solid var(--bord)" }}>
-        {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            style={{
-              padding: "8px 14px", border: "none", background: "none", cursor: "pointer", fontSize: 14,
-              color: tab === t.key ? "var(--navy)" : "var(--sub)", fontWeight: tab === t.key ? 600 : 400,
-              borderBottom: tab === t.key ? "2px solid var(--navy)" : "2px solid transparent", marginBottom: -1,
-            }}>{t.label}</button>
-        ))}
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <MapPin size={17} color="var(--navy)" /><strong style={{ fontSize: 14.5 }}>Hunt region</strong>
+        </div>
+        <p style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 0, marginBottom: 10 }}>
+          Centers the map before you’ve placed any stands. Once you have stands, the map fits to them automatically.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+          <Field label="Latitude"><input value={homeLat} onChange={(e) => setHomeLat(e.target.value)} placeholder="34.7465" inputMode="decimal" /></Field>
+          <Field label="Longitude"><input value={homeLon} onChange={(e) => setHomeLon(e.target.value)} placeholder="-92.2896" inputMode="decimal" /></Field>
+          <button className="btn btn-primary" disabled={!homeValid} onClick={saveHome} style={{ height: 38 }}><Save size={15} /> {homeSaved ? "Saved" : "Save"}</button>
+        </div>
+        {home && !home.set && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 8 }}>Not set yet — you’ll be asked for this when you add your first stand.</div>}
       </div>
 
-      {/* ── TAB: Best Stand ── */}
-      {tab === "stand" && (<>
-        <div className="card" style={{ padding: 14, marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <MapPin size={17} color="var(--navy)" /><strong style={{ fontSize: 14.5 }}>Hunt region</strong>
+      <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 6 }}>Best Stand — proximity weights</h2>
+      <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
+        Stands near these features get a ranking boost. <b>Weight</b> sets how much each type can add to a stand’s score; <b>falloff</b> is the distance (meters) beyond which a feature stops helping. Bonuses from multiple nearby features of the same type stack.
+      </p>
+
+      {TYPES.map(({ key, label, icon: Icon, color }) => (
+        <div key={key} className="card" style={{ padding: 14, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <Icon size={17} color={color} /><strong style={{ fontSize: 14.5 }}>{label}</strong>
           </div>
-          <p style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 0, marginBottom: 10 }}>
-            Centers the map before you’ve placed any stands. Once you have stands, the map fits to them automatically.
-          </p>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
-            <Field label="Latitude"><input value={homeLat} onChange={(e) => setHomeLat(e.target.value)} placeholder="34.7465" inputMode="decimal" /></Field>
-            <Field label="Longitude"><input value={homeLon} onChange={(e) => setHomeLon(e.target.value)} placeholder="-92.2896" inputMode="decimal" /></Field>
-            <button className="btn btn-primary" disabled={!homeValid} onClick={saveHome} style={{ height: 38 }}><Save size={15} /> {homeSaved ? "Saved" : "Save"}</button>
+          <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`]}
+            display={s[`weight_${key}`].toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
+          <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`]}
+            display={`${Math.round(s[`falloff_${key}`])} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
+        </div>
+      ))}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
+        <button className="btn" onClick={reset}>Reset to defaults</button>
+      </div>
+      <p style={{ color: "var(--sub)", fontSize: 12, marginTop: 12 }}>
+        For reference, stand scores run roughly 0–1, so a weight of 0.15 means a stand right on top of a feature can gain up to ~15 points of rank score per nearby feature of that type.
+      </p>
+
+      {/* ── separate block: daily 1-5 rating model weights ── */}
+      <h2 style={{ fontSize: 15, marginTop: 28, marginBottom: 6, paddingTop: 16, borderTop: "1px solid var(--bord)" }}>Daily deer rating — weather weights</h2>
+      <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
+        These tune the 1–5 daily movement rating, separately from stand ranking. They set how much each weather factor counts toward a day’s score. The values are relative — they’re balanced against each other automatically, so raising one lowers the others’ share. The rut/season drive is fixed and not adjustable here.
+      </p>
+      {(() => {
+        const RW = [
+          { key: "rate_w_pressure", label: "Barometric pressure" },
+          { key: "rate_w_wind", label: "Wind" },
+          { key: "rate_w_rain", label: "Rain" },
+          { key: "rate_w_temp", label: "Temperature shift" },
+        ];
+        const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
+        return (
+          <div className="card" style={{ padding: 14, marginBottom: 10 }}>
+            {RW.map((r) => (
+              <SliderRow key={r.key} label={`${r.label} — ${Math.round((s[r.key] ?? 0) / sum * 100)}% of weather`}
+                min={0} max={1} step={0.01} value={s[r.key] ?? 0}
+                display={(s[r.key] ?? 0).toFixed(2)} onChange={(v) => setS({ ...s, [r.key]: v })} />
+            ))}
           </div>
-          {home && !home.set && <div style={{ fontSize: 11.5, color: "var(--amber)", marginTop: 8 }}>Not set yet — you’ll be asked for this when you add your first stand.</div>}
-        </div>
-
-        <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 6 }}>Proximity weights</h2>
-        <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
-          Stands near these features get a ranking boost. <b>Weight</b> sets how much each type can add to a stand’s score; <b>falloff</b> is the distance (meters) beyond which a feature stops helping. Bonuses from multiple nearby features of the same type stack.
-        </p>
-        {TYPES.map(({ key, label, icon: Icon, color }) => (
-          <div key={key} className="card" style={{ padding: 14, marginBottom: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <Icon size={17} color={color} /><strong style={{ fontSize: 14.5 }}>{label}</strong>
-            </div>
-            <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`]}
-              display={s[`weight_${key}`].toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
-            <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`]}
-              display={`${Math.round(s[`falloff_${key}`])} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
-          </div>
-        ))}
-
-        <div className="card" style={{ padding: 14, marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <Camera size={17} color="var(--navy)" /><strong style={{ fontSize: 14.5 }}>Trail-camera boost cap</strong>
-          </div>
-          <p style={{ fontSize: 12, color: "var(--sub)", marginTop: 0, marginBottom: 10 }}>
-            Max ranking boost a stand can get from recent daylight camera photos. Positive-only — cameras never lower a stand’s rank.
-          </p>
-          <SliderRow label="Max camera boost" min={0} max={30} step={1} value={s.max_camera_boost_pct ?? 15}
-            display={`${Math.round(s.max_camera_boost_pct ?? 15)}%`} onChange={(v) => setS({ ...s, max_camera_boost_pct: v })} />
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-          <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
-          <button className="btn" onClick={reset}>Reset to defaults</button>
-        </div>
-      </>)}
-
-      {/* ── TAB: Daily Rating ── */}
-      {tab === "rating" && (<>
-        <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 6 }}>Weather factor weights</h2>
-        <p style={{ color: "var(--sub)", fontSize: 13.5, marginTop: 0 }}>
-          These tune the 1–5 daily movement rating. They set how much each weather factor counts toward a day’s score. The values are relative — raising one lowers the others’ share automatically.
-        </p>
-        {(() => {
-          const RW = [
-            { key: "rate_w_pressure", label: "Barometric pressure" },
-            { key: "rate_w_wind", label: "Wind" },
-            { key: "rate_w_rain", label: "Rain" },
-            { key: "rate_w_temp", label: "Temperature shift" },
-          ];
-          const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
-          return (
-            <div className="card" style={{ padding: 14, marginBottom: 10 }}>
-              {RW.map((r) => (
-                <SliderRow key={r.key} label={`${r.label} — ${Math.round((s[r.key] ?? 0) / sum * 100)}% of weather`}
-                  min={0} max={1} step={0.01} value={s[r.key] ?? 0}
-                  display={(s[r.key] ?? 0).toFixed(2)} onChange={(v) => setS({ ...s, [r.key]: v })} />
-              ))}
-            </div>
-          );
-        })()}
-
-        <div className="card" style={{ padding: 14, marginBottom: 10 }}>
-          <strong style={{ fontSize: 14.5 }}>Regional rut peak</strong>
-          <p style={{ fontSize: 12, color: "var(--sub)", marginTop: 6, marginBottom: 10 }}>
-            The breeding-peak date for your area. The rating’s daylight-movement peak is set automatically to the seeking/chasing window ~10 days before this. Central Arkansas ≈ Dec 5; north AR ≈ Nov 13.
-          </p>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Peak month">
-              <select value={Math.round(s.rut_peak_month ?? 12)} onChange={(e) => setS({ ...s, rut_peak_month: +e.target.value })}>
-                {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-              </select>
-            </Field>
-            <Field label="Peak day">
-              <input type="number" min={1} max={31} value={Math.round(s.rut_peak_day ?? 5)}
-                onChange={(e) => setS({ ...s, rut_peak_day: Math.max(1, Math.min(31, +e.target.value)) })} />
-            </Field>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-          <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
-          <button className="btn" onClick={resetRating}>Reset rating weights</button>
-        </div>
-        <p style={{ color: "var(--sub)", fontSize: 11, marginTop: 12, fontStyle: "italic" }}>
-          Moon phase is intentionally excluded — MSU research found no significant effect on buck activity.
-        </p>
-      </>)}
-
-      {/* ── TAB: Trail Cameras ── */}
-      {tab === "cameras" && (
-        <CameraSettings settings={s} setSettings={setS} saveSettings={save} />
-      )}
+        );
+      })()}
+      <div style={{ display: "flex", gap: 8, margintop: 4 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save settings"}</button>
+        <button className="btn" onClick={resetRating}>Reset rating weights</button>
+      </div>
     </div>
-  );
-}
-
-/* ───────── trail-camera settings (Settings > Cameras tab) ───────── */
-function CameraSettings({ settings, setSettings, saveSettings }) {
-  const [cameras, setCameras] = useState(null);
-  const [stands, setStands] = useState([]);
-  const [wizard, setWizard] = useState(false);
-  const [busy, setBusy] = useState(null);
-  const [note, setNote] = useState(null);
-
-  const load = useCallback(async () => {
-    try { setCameras(await api("/cameras")); } catch { setCameras([]); }
-  }, []);
-  useEffect(() => { load(); api("/stands").then(setStands).catch(() => {}); }, [load]);
-
-  async function saveIntervals() {
-    await saveSettings();
-    setNote("Saved"); setTimeout(() => setNote(null), 1500);
-  }
-  async function verify(id) {
-    setBusy(id);
-    try { const r = await api(`/cameras/${id}/verify`, { method: "POST" }); setNote(r.ok ? "Credentials OK" : "Verify failed"); }
-    catch (e) { setNote(e.code === 501 ? "That brand isn’t wired up yet" : "Verify failed"); }
-    finally { setBusy(null); setTimeout(() => setNote(null), 2500); }
-  }
-  async function syncNow(id) {
-    setBusy(id);
-    try { const r = await api(`/cameras/${id}/sync`, { method: "POST" }); setNote(`Synced — ${r.new_sightings} new`); await load(); }
-    catch { setNote("Sync failed"); }
-    finally { setBusy(null); setTimeout(() => setNote(null), 2500); }
-  }
-  async function removeCam(id) {
-    await api(`/cameras/${id}`, { method: "DELETE" }); load();
-  }
-  const standName = (sid) => stands.find((x) => x.id === sid)?.name || "—";
-  const BRAND_LABEL = { spypoint: "SpyPoint", reveal: "Reveal", moultrie: "Moultrie", stealth_cam: "Stealth Cam", browning: "Browning", spartan: "Spartan" };
-
-  return (
-    <>
-      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
-        <strong style={{ fontSize: 14.5 }}>Sync & storage</strong>
-        <div style={{ marginTop: 10 }}>
-          <Field label="Image storage directory">
-            <input type="text" value={settings.camera_image_dir ?? "/app/data/camera_images"}
-              placeholder="/app/data/camera_images"
-              onChange={(e) => setSettings({ ...settings, camera_image_dir: e.target.value })} />
-          </Field>
-          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4 }}>
-            Base folder on the server where camera photos are saved. Images are stored in <code>[directory]/[Camera Brand]/[Camera Name]/</code>.
-          </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-          <Field label="Sync interval (minutes)">
-            <input type="number" min={5} max={720} value={Math.round(settings.camera_sync_interval_minutes ?? 30)}
-              onChange={(e) => setSettings({ ...settings, camera_sync_interval_minutes: +e.target.value })} />
-          </Field>
-          <Field label="Keep photos (days)">
-            <input type="number" min={1} max={365} value={Math.round(settings.image_retention_days ?? 60)}
-              onChange={(e) => setSettings({ ...settings, image_retention_days: +e.target.value })} />
-          </Field>
-        </div>
-        <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 8 }}>
-          Photos older than the retention window are deleted nightly; the sighting record is kept for model tuning.
-        </div>
-        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={saveIntervals}><Save size={15} /> Save</button>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <strong style={{ fontSize: 14.5 }}>Cameras</strong>
-        <button className="btn btn-primary" onClick={() => setWizard(true)}><Plus size={15} /> Set up a new Camera</button>
-      </div>
-      {note && <div style={{ fontSize: 12.5, color: "var(--navy)", marginBottom: 8 }}>{note}</div>}
-
-      {cameras === null && <Empty>Loading…</Empty>}
-      {cameras && cameras.length === 0 && <Empty>No cameras yet. Click “Set up a new Camera” to connect one.</Empty>}
-      <div style={{ display: "grid", gap: 8 }}>
-        {(cameras || []).map((c) => (
-          <div key={c.id} className="card" style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 12 }}>
-            <Camera size={18} color="var(--navy)" style={{ flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 500 }}>{c.name} <span style={{ fontSize: 12, color: "var(--sub)", fontWeight: 400 }}>· {BRAND_LABEL[c.brand] || c.brand}</span></div>
-              <div style={{ fontSize: 12, color: "var(--sub)" }}>
-                Stand: {standName(c.stand_id)}{c.last_sync_at ? ` · last sync ${new Date(c.last_sync_at).toLocaleString()}` : " · never synced"}
-              </div>
-            </div>
-            <button className="icon-btn" title="Verify credentials" disabled={busy === c.id} onClick={() => verify(c.id)}><CheckCircle2 size={15} /></button>
-            <button className="icon-btn" title="Sync now" disabled={busy === c.id} onClick={() => syncNow(c.id)}><RefreshCw size={15} /></button>
-            <button className="icon-btn" title="Remove" onClick={() => removeCam(c.id)}><Trash2 size={15} /></button>
-          </div>
-        ))}
-      </div>
-
-      {wizard && <CameraWizard stands={stands} onClose={() => setWizard(false)} onDone={() => { setWizard(false); load(); }} />}
-    </>
-  );
-}
-
-/* ───────── 3-step camera setup wizard ───────── */
-function CameraWizard({ stands, onClose, onDone }) {
-  const [step, setStep] = useState(1);
-  const [providers, setProviders] = useState([]);
-  const [brand, setBrand] = useState(null);
-  const [name, setName] = useState("");
-  const [creds, setCreds] = useState({});
-  const [standId, setStandId] = useState(stands[0]?.id ?? null);
-  const [err, setErr] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => { api("/camera-providers").then((r) => setProviders(r.providers || [])).catch(() => {}); }, []);
-  const BRAND_LABEL = { spypoint: "SpyPoint", reveal: "Reveal", moultrie: "Moultrie", stealth_cam: "Stealth Cam", browning: "Browning", spartan: "Spartan" };
-  const meta = providers.find((p) => p.brand === brand);
-  const fields = meta?.credential_fields || ["username", "password"];
-
-  async function create() {
-    setBusy(true); setErr(null);
-    try {
-      const cam = await api("/cameras", { method: "POST", body: JSON.stringify({ name: name || BRAND_LABEL[brand], brand, stand_id: standId, credentials: creds }) });
-      // best-effort verify (won't block completion for unimplemented brands)
-      try { await api(`/cameras/${cam.id}/verify`, { method: "POST" }); } catch {}
-      onDone();
-    } catch { setErr("Couldn’t save the camera."); setBusy(false); }
-  }
-
-  return (
-    <Modal onClose={onClose}>
-      <div className="card" style={{ padding: 18, border: "2px solid var(--navy)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <strong>Set up a camera</strong>
-          <button className="icon-btn" onClick={onClose}><X size={16} /></button>
-        </div>
-        <div style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>Step {step} of 3</div>
-
-        {step === 1 && (<>
-          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Choose your camera brand:</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {providers.map((p) => (
-              <button key={p.brand} onClick={() => setBrand(p.brand)}
-                style={{
-                  padding: "12px 10px", borderRadius: 10, cursor: "pointer", textAlign: "left",
-                  border: brand === p.brand ? "2px solid var(--navy)" : "1px solid var(--bord2)",
-                  background: brand === p.brand ? "var(--surf)" : "var(--bg)", color: "var(--txt)",
-                }}>
-                <div style={{ fontWeight: 600, fontSize: 13.5 }}>{BRAND_LABEL[p.brand]}</div>
-                <div style={{ fontSize: 11, color: p.implemented ? "var(--green)" : "var(--amber)", marginTop: 3 }}>
-                  {p.implemented ? "supported" : "coming soon"}
-                </div>
-              </button>
-            ))}
-          </div>
-          {brand && meta && !meta.implemented && (
-            <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 10, display: "flex", gap: 6, alignItems: "flex-start" }}>
-              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-              {BRAND_LABEL[brand]} integration isn’t wired up yet. You can save it now, but photos won’t sync until it’s implemented.
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-            <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" disabled={!brand} onClick={() => setStep(2)}>Next</button>
-          </div>
-        </>)}
-
-        {step === 2 && (<>
-          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Sign in to your {BRAND_LABEL[brand]} account:</div>
-          <Field label="Camera name (label)"><input value={name} onChange={(e) => setName(e.target.value)} placeholder={`${BRAND_LABEL[brand]} — North ridge`} /></Field>
-          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-            {fields.map((f) => (
-              <Field key={f} label={f.charAt(0).toUpperCase() + f.slice(1)}>
-                <input type={f.toLowerCase().includes("pass") || f.toLowerCase().includes("token") ? "password" : "text"}
-                  value={creds[f] || ""} onChange={(e) => setCreds({ ...creds, [f]: e.target.value })} />
-              </Field>
-            ))}
-          </div>
-          <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8 }}>
-            Credentials are encrypted before storage. They’re only used to fetch your photos.
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-            <button className="btn" onClick={() => setStep(1)}>Back</button>
-            <button className="btn btn-primary" onClick={() => setStep(3)}>Next</button>
-          </div>
-        </>)}
-
-        {step === 3 && (<>
-          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Pair this camera with a stand:</div>
-          <Field label="Stand">
-            <select value={standId ?? ""} onChange={(e) => setStandId(e.target.value ? +e.target.value : null)}>
-              <option value="">— none —</option>
-              {stands.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
-            </select>
-          </Field>
-          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 8 }}>
-            Sightings from this camera boost the paired stand’s ranking when deer show up in daylight.
-          </div>
-          {err && <div style={{ fontSize: 12.5, color: "var(--red)", marginTop: 10 }}>{err}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-            <button className="btn" onClick={() => setStep(2)}>Back</button>
-            <button className="btn btn-primary" disabled={busy} onClick={create}><Save size={15} /> {busy ? "Saving…" : "Finish"}</button>
-          </div>
-        </>)}
-      </div>
-    </Modal>
   );
 }
 
@@ -1469,16 +897,6 @@ function DeerRating({ rating }) {
           {bar("Wind", fac.wind)}
           {bar("Rain (1=dry)", fac.rain)}
           {bar("Temp shift", fac.temp_shift)}
-          {Array.isArray(rating.breakdown) && (
-            <div style={{ marginTop: 10, display: "grid", gap: 3 }}>
-              {rating.breakdown.map((b, i) => (
-                <div key={i} style={{ fontSize: 11, color: "var(--sub)", display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span><b style={{ color: "var(--txt)", fontWeight: 500 }}>{b.factor}:</b> {b.impact}</span>
-                  <span style={{ flexShrink: 0 }}>{b.weight === "multiplier" ? "×" : `w ${b.weight}`}</span>
-                </div>
-              ))}
-            </div>
-          )}
           <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8, lineHeight: 1.5 }}>
             {rating.inputs.pressure_inhg != null && <>{rating.inputs.pressure_inhg}″ pressure · </>}
             {rating.inputs.wind_mph != null && <>{rating.inputs.wind_mph} mph wind · </>}
@@ -1495,8 +913,8 @@ function DeerRating({ rating }) {
 }
 
 /* ───────── day-period ranking ───────── */
-// const PERIOD_COLORS = { morning: "#C28800", midday: "#1E7FB0", evening: "#7A3FA0" };
-// const PERIOD_LABEL = { morning: "Morning", midday: "Midday", evening: "Evening" };
+const PERIOD_COLORS = { morning: "#C28800", midday: "#1E7FB0", evening: "#7A3FA0" };
+const PERIOD_LABEL = { morning: "Morning", midday: "Midday", evening: "Evening" };
 
 function PeriodKey({ color, label }) {
   return (
@@ -1517,15 +935,10 @@ function ProxToggle({ on, color, label, icon: Icon, onClick }) {
 
 function DayRankCard({ row }) {
   const { stand, periods, wins, proximity } = row;
-  const [open, setOpen] = useState(false);
   // border reflects the (first) period this stand wins, if any
   const winColor = wins.length ? PERIOD_COLORS[wins[0]] : undefined;
   const pct = (p) => periods[p] ? Math.round(periods[p].score.total * 100) : null;
   const proxTotal = proximity ? Math.round(proximity.total * 100) : 0;
-  // best-period camera boost (if any)
-  const bestP = row.best_period;
-  const cam = bestP && periods[bestP]?.score?.camera;
-  const camBoost = cam && cam.boost_pct > 0 ? cam.boost_pct : 0;
   return (
     <div className="card" style={{ padding: "12px 14px", marginBottom: 8, border: winColor ? `2px solid ${winColor}` : undefined }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1541,14 +954,6 @@ function DayRankCard({ row }) {
             proximity +{proxTotal}
           </span>
         )}
-        {camBoost > 0 && (
-          <span title={cam.text} style={{ fontSize: 11.5, fontWeight: 500, color: "var(--navy)", background: "rgba(12,68,124,.12)", padding: "2px 8px", borderRadius: 6, display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <Camera size={11} /> +{camBoost}%
-          </span>
-        )}
-        <button className="icon-btn" style={{ marginLeft: "auto" }} title="Score breakdown" onClick={() => setOpen((o) => !o)}>
-          <ChevronDown size={15} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
-        </button>
       </div>
       <div style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap" }}>
         {["morning", "midday", "evening"].map((p) => {
@@ -1571,26 +976,6 @@ function DayRankCard({ row }) {
           );
         })}
       </div>
-      {open && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bord)" }}>
-          {["morning", "midday", "evening"].map((p) => {
-            const bd = periods[p]?.score?.breakdown;
-            if (!bd) return null;
-            return (
-              <div key={p} style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: PERIOD_COLORS[p], marginBottom: 3 }}>{PERIOD_LABEL[p]}</div>
-                <div style={{ display: "grid", gap: 2 }}>
-                  {bd.map((b, i) => (
-                    <div key={i} style={{ fontSize: 11, color: "var(--sub)", display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <span><b style={{ color: "var(--txt)", fontWeight: 500 }}>{b.factor}:</b> {b.text}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
