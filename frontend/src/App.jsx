@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -75,7 +75,7 @@ function Centered({ children }) {
    Shell — top bar + tab nav
    ════════════════════════════════════════════════════ */
 const NAV = [
-  { key: "today", label: "Today", icon: Sun },
+  { key: "today", label: "Outlook", icon: Sun },
   { key: "map",   label: "Map",   icon: MapIcon },
   { key: "stands",label: "Stands",icon: MapPin },
   { key: "zones", label: "Zones", icon: Wheat },
@@ -362,7 +362,7 @@ function DayDetailPanel({ rating, day, dayRanked, useProx, setUseProx }) {
 }
 
 /* ════════════════════════════════════════════════════
-   MAP PAGE — full-height map with compact controls
+   MAP PAGE — full-height map with time controls + play
    ════════════════════════════════════════════════════ */
 function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
                    drawRequest, clearDrawRequest, openStandEditor, onEditFeature, onDeleteFeature }) {
@@ -370,6 +370,7 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
   const [conditions, setConditions] = useState(null);
+  const [playing, setPlaying] = useState(false);
   const [drawMode, setDrawMode] = useState(null);
   const [draftPoints, setDraftPoints] = useState([]);
   const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, zones: true, corridors: true });
@@ -394,6 +395,23 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
 
   const curDay  = days[dayIdx];
   const curHour = curDay?.hours[Math.min(hourPos, (curDay?.hours.length || 1) - 1)];
+  const maxHour = (curDay?.hours.length || 1) - 1;
+
+  // pause when day changes
+  useEffect(() => { setPlaying(false); }, [dayIdx]);
+
+  // play loop — advances one hour every 750 ms
+  useEffect(() => {
+    if (!playing || !curDay) return;
+    const id = setInterval(() => {
+      setHourPos((p) => {
+        const max = curDay.hours.length - 1;
+        if (p >= max) { setPlaying(false); return p; }
+        return p + 1;
+      });
+    }, 750);
+    return () => clearInterval(id);
+  }, [playing, curDay]);
 
   useEffect(() => {
     if (!curHour) return;
@@ -438,21 +456,56 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
     <div className="map-page">
       {err && <div style={{ padding: "6px 12px" }}><Banner>{err}</Banner></div>}
 
-      {/* compact time controls */}
-      {curDay && curHour && (
-        <div className="map-timebar">
-          <select className="map-day-select" value={dayIdx}
-            onChange={(e) => { setDayIdx(+e.target.value); setHourPos(0); }}>
-            {days.map((d, i) => <option key={d.day} value={i}>{d.label}</option>)}
-          </select>
-          <input type="range" min={0} max={curDay.hours.length - 1}
-            value={Math.min(hourPos, curDay.hours.length - 1)}
-            onChange={(e) => setHourPos(+e.target.value)}
-            style={{ flex: 1, minWidth: 60 }} />
-          <span className="map-time-label">
-            {curHour.label}
-            {conditions && <> · {Math.round(conditions.time.temp)}° · {conditions.time.cloud}%☁</>}
-          </span>
+      {/* ── Time controls panel ── */}
+      {days.length > 0 && (
+        <div className="map-ctrl-panel">
+          {/* Row 1: date nav + play */}
+          <div className="map-ctrl-row">
+            <div className="map-day-nav">
+              <button className="icon-btn map-nav-btn"
+                onClick={() => { setDayIdx((i) => Math.max(0, i - 1)); setHourPos(0); }}
+                disabled={dayIdx === 0}><ChevronLeft size={18} /></button>
+              <span className="map-day-label">{curDay?.label ?? "—"}</span>
+              <button className="icon-btn map-nav-btn"
+                onClick={() => { setDayIdx((i) => Math.min(days.length - 1, i + 1)); setHourPos(0); }}
+                disabled={dayIdx >= days.length - 1}><ChevronRight size={18} /></button>
+            </div>
+            <button className={"btn map-play-btn" + (playing ? " playing" : "")}
+              onClick={() => setPlaying((p) => !p)} disabled={!curDay}>
+              {playing ? <><Pause size={15} /> Pause</> : <><Play size={15} /> Play</>}
+            </button>
+          </div>
+
+          {/* Row 2: slider + tick labels */}
+          {curDay && (
+            <>
+              <input type="range" className="map-hour-slider"
+                min={0} max={maxHour}
+                value={Math.min(hourPos, maxHour)}
+                onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }} />
+              <div className="map-slider-ticks">
+                <span>{curDay.hours[0]?.label}</span>
+                <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
+                <span>{curDay.hours[maxHour]?.label}</span>
+              </div>
+            </>
+          )}
+
+          {/* Row 3: big time + weather pills */}
+          {curHour && (
+            <div className="map-time-row">
+              <span className="map-time-big">{curHour.label}</span>
+              {conditions && (
+                <div className="map-weather-pills">
+                  <span className="map-wpill">☁ {conditions.time.cloud}%</span>
+                  <span className="map-wpill">🌡 {Math.round(conditions.time.temp)}°F</span>
+                  {conditions.time.wind_speed != null && (
+                    <span className="map-wpill">💨 {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -467,11 +520,14 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
         </div>
       )}
 
-      {/* map fills remaining height */}
-      <div className="map-body" style={{ position: "relative" }}>
-        <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
-          drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
-          onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home} />
+      {/* map fills all remaining vertical space */}
+      <div className="map-body">
+        <div className="map-fill">
+          <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
+            drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
+            onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home}
+            height="100%" />
+        </div>
         <div className="layer-overlay">
           <LayerChip on={layers.wind}      onClick={() => toggle("wind")}      color="var(--navy)" label="Wind" />
           <LayerChip on={layers.thermal}   onClick={() => toggle("thermal")}   color="#185FA5" dashed label="Thermal" />
