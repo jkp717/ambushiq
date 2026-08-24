@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import math
 import json
+import logging
 import secrets
 import time
 import asyncio
+
+log = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -701,7 +704,8 @@ async def list_hours(_=Depends(require_token)):
 @app.post("/api/map/conditions")
 async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     """Per-stand wind + thermal vectors at one forecast hour, plus a ranked list
-    in sync with that same hour. Drives the map indicators and the list together."""
+    in sync with that same hour. Drives the map indicators and the list together.
+    Camera boost is applied when configured so the map rank matches /api/day/ranked."""
     with Session(engine) as s:
         stands = [r.to_dict() for r in s.scalars(select(Stand)).all()]
         first = s.scalars(select(Stand).order_by(Stand.name)).first()
@@ -728,10 +732,33 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
         "time_h": datetime.fromisoformat(h["time"][i]).hour,
         "sunrise_h": sr_h, "sunset_h": ss_h,
     }
+
+    settings = get_settings()
+    max_cam_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
+    utc_offset = int(fc.get("utc_offset_seconds", 0))
+    period = scoring.period_for_hour(hour["time_h"])
+
+    # Load recent sightings per stand when boost is configured — keeps map rank in sync
+    # with /api/day/ranked which already applies camera boost.
+    sightings_by_stand: dict[int, list] = {}
+    if period and max_cam_boost:
+        with Session(engine) as s:
+            for row in s.scalars(select(CameraSighting)).all():
+                sightings_by_stand.setdefault(row.stand_id, []).append(
+                    {"timestamp": row.timestamp, "confidence_score": row.confidence_score})
+
     items = []
     for st in stands:
         vec = scoring.stand_hour_vectors(st, hour)
+        if period and max_cam_boost:
+            sightings = sightings_by_stand.get(st["id"], [])
+            if sightings:
+                boost = scoring.camera_boost(period, sightings, max_cam_boost, utc_offset)
+                vec = dict(vec)  # don't mutate the original
+                vec["total"] = round(vec["total"] * boost["multiplier"], 3)
+                vec["camera_boost"] = boost
         items.append({"stand": st, "vectors": vec})
+
     ranked = sorted(
         [{"stand": it["stand"], "avg": it["vectors"]["total"],
           "sample": {"hour": hour, "score": {
@@ -781,6 +808,10 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
             sr_h = sr.hour + sr.minute / 60
             ss_h = ss.hour + ss.minute / 60
 
+    # UTC offset for the property's location — used to convert stored UTC sighting
+    # timestamps to local time before period matching in camera_boost.
+    utc_offset = int(fc.get("utc_offset_seconds", 0))
+
     # period hour windows (clamped to available forecast hours for the day)
     periods = {
         "morning": (int(sr_h - 1), int(sr_h + 3)),
@@ -824,7 +855,8 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
             }
             det = scoring.score_with_breakdown(
                 stand, hour, period=period_name, sightings=sightings,
-                max_boost_pct=max_cam_boost, proximity=bonus)
+                max_boost_pct=max_cam_boost, proximity=bonus,
+                utc_offset_seconds=utc_offset)
             sc = {
                 "total": det["final_score"],
                 "base_total": det["base_score"],
@@ -905,7 +937,11 @@ def write_settings(body: SettingsIn, _=Depends(require_token)):
             else:
                 s.add(Setting(key=k, value=str_val))
         s.commit()
-    return get_settings()
+    result = get_settings()
+    # Live-reschedule the sync job if the interval changed — no restart required.
+    if body.camera_sync_interval_minutes is not None:
+        _reschedule_sync(int(body.camera_sync_interval_minutes) or 30)
+    return result
 
 
 class HomeIn(BaseModel):
@@ -1089,7 +1125,11 @@ def update_camera(camera_id: int, body: CameraUpdateIn, _=Depends(require_token)
             raise HTTPException(404, "not found")
         if body.name is not None:
             cam.name = body.name
-        if body.stand_id is not None:
+        # Use model_fields_set to distinguish "field not sent" from "field sent as null".
+        # {"stand_id": null}  → unassign camera from its stand (cam.stand_id = None)
+        # {"stand_id": 3}     → assign to stand 3
+        # {}                  → don't touch stand_id at all
+        if "stand_id" in body.model_fields_set:
             cam.stand_id = body.stand_id
         if body.is_active is not None:
             cam.is_active = 1 if body.is_active else 0
@@ -1135,10 +1175,20 @@ async def sync_camera_now(camera_id: int, _=Depends(require_token)):
 
 
 @app.get("/api/cameras/{camera_id}/sightings")
-def camera_sightings(camera_id: int, _=Depends(require_token)):
+def camera_sightings(
+    camera_id: int,
+    limit: int = 100,       # max rows returned; capped at 1000
+    since: Optional[str] = None,  # ISO timestamp — return only sightings newer than this
+    _=Depends(require_token),
+):
+    """Paginated sighting list. Default: 100 most-recent. Use `since` for incremental
+    loads (pass the last timestamp you received to get only newer records)."""
     with Session(engine) as s:
-        rows = s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all()
-        return [r.to_dict() for r in rows]
+        q = select(CameraSighting).where(CameraSighting.camera_id == camera_id)
+        if since:
+            q = q.where(CameraSighting.timestamp > since)
+        q = q.order_by(CameraSighting.timestamp.desc()).limit(max(1, min(limit, 1000)))
+        return [r.to_dict() for r in s.scalars(q).all()]
 
 
 async def _sync_one_camera(camera_id: int) -> int:
@@ -1150,17 +1200,31 @@ async def _sync_one_camera(camera_id: int) -> int:
             return 0
         creds = decrypt_credentials(cam.credentials_json)
         brand, camera_name, stand_id, cid = cam.brand, cam.name, cam.stand_id, cam.id
-        # Deduplication: get all timestamps already recorded for this camera
+        last_sync = cam.last_sync_at
+        # Deduplication: timestamps already recorded for this camera (incl. non-animal skips)
         existing_timestamps = set(
             s.scalars(
                 select(CameraSighting.timestamp).where(CameraSighting.camera_id == cid)
             ).all()
         )
+
+    # Parse last_sync_at into a timezone-aware datetime to send as `since` to the provider.
+    # This means we only fetch new photos since the last successful sync rather than re-fetching
+    # everything each time — important once a camera has accumulated thousands of photos.
+    since_dt = None
+    if last_sync:
+        try:
+            since_dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            pass  # malformed timestamp; fall back to full fetch
+
     try:
         prov = cameras_mod.get_provider(brand, creds)
         if not prov.implemented:
             return 0
-        photos = await prov.fetch_recent_photos()
+        photos = await prov.fetch_recent_photos(since=since_dt)
     except Exception:
         return 0
 
@@ -1174,8 +1238,17 @@ async def _sync_one_camera(camera_id: int) -> int:
             if not url:
                 continue
             taken_at = p.get("taken_at")
-            if taken_at and taken_at in existing_timestamps:
-                continue  # Skip already processed photo
+
+            # Require a timestamp for reliable deduplication and period matching.
+            # Photos without taken_at can't be deduplicated (they'd re-process every sync)
+            # and can't be matched to a hunt period for camera boost. Skip and warn.
+            if not taken_at:
+                log.warning("cam %s (%s): photo from %s has no taken_at timestamp — skipped",
+                            cid, brand, url[:80])
+                continue
+
+            if taken_at in existing_timestamps:
+                continue  # already processed (animal or non-animal) — skip
 
             # download
             try:
@@ -1195,26 +1268,24 @@ async def _sync_one_camera(camera_id: int) -> int:
             # offload CPU-bound ML detection to a worker thread so event loop remains non-blocking
             det = await asyncio.to_thread(detection_mod.detect_animal, fpath)
             if not det.get("is_animal"):
-                # not wildlife — discard the file, don't record
+                # not wildlife — discard the file, don't record a sighting row; but DO mark
+                # the timestamp as seen so this photo is never re-downloaded on the next sync.
                 try:
                     os.remove(fpath)
                 except OSError:
                     pass
-                if taken_at:
-                    existing_timestamps.add(taken_at)
+                existing_timestamps.add(taken_at)
                 continue
 
-            sighting_ts = taken_at or datetime.now(timezone.utc).isoformat()
             with Session(engine) as s:
                 s.add(CameraSighting(
                     stand_id=stand_id, camera_id=cid,
-                    timestamp=sighting_ts,
+                    timestamp=taken_at,
                     confidence_score=det.get("confidence", 0.0),
                     image_path=fpath, created_at=datetime.now(timezone.utc).isoformat(),
                 ))
                 s.commit()
-            if taken_at:
-                existing_timestamps.add(taken_at)
+            existing_timestamps.add(taken_at)
             new += 1
 
     # Record sync completion timestamp on camera
@@ -1267,6 +1338,21 @@ def auto_cleanup_job():
 
 
 _scheduler = None
+
+
+def _reschedule_sync(interval_minutes: int) -> None:
+    """Live-update the camera sync job interval without restarting the process.
+    Called from write_settings so changes take effect immediately."""
+    if _scheduler is None:
+        return
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+        _scheduler.reschedule_job(
+            "sync_cameras",
+            trigger=IntervalTrigger(minutes=max(1, interval_minutes)),
+        )
+    except Exception:
+        pass  # best-effort; scheduler may not be running yet
 
 
 def start_scheduler():

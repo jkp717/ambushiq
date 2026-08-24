@@ -92,9 +92,17 @@ class SpyPointProvider(CameraProvider):
             cam_ids = [c.get("id") for c in cams.json() if c.get("id")]
             if not cam_ids:
                 return out
-            resp = await client.post(f"{self.BASE}/api/v3/photo/all", headers=headers, timeout=30, json={
-                "camera": cam_ids, "dateEnd": "2100-01-01T00:00:00.000Z", "limit": 100,
-            })
+            payload: dict = {
+                "camera": cam_ids,
+                "dateEnd": "2100-01-01T00:00:00.000Z",
+                "limit": 100,
+            }
+            if since:
+                # Ensure UTC-aware; format as the SpyPoint API expects.
+                since_utc = since if since.tzinfo else since.replace(tzinfo=_dt.timezone.utc)
+                payload["dateBegin"] = since_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            resp = await client.post(f"{self.BASE}/api/v3/photo/all", headers=headers,
+                                     timeout=30, json=payload)
             resp.raise_for_status()
             for p in resp.json().get("photos", []):
                 urls = p.get("urls") or {}
