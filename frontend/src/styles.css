@@ -467,6 +467,161 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 }
 .menu-item:hover { background: var(--surf); }
 
+/* ══════════════════════════════════════
+   CAMERAS PAGE
+   ══════════════════════════════════════ */
+
+/* Empty state */
+.cameras-empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 12px; padding: 48px 16px; text-align: center; color: var(--sub);
+}
+.cameras-empty p { margin: 0; font-size: 14px; max-width: 340px; }
+
+/* Camera card — extends .list-card */
+.cam-card { flex-direction: column; padding: 0; overflow: hidden; gap: 0; }
+.cam-brand-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-left: 3px solid var(--bord2);
+  background: var(--surf);
+}
+.cam-stub-badge {
+  font-size: 10px; padding: 2px 5px; border-radius: 4px;
+  background: rgba(133,79,11,.12); color: var(--amber);
+}
+.cam-active-chip {
+  margin-left: auto; font-size: 11.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--bord); background: transparent; color: var(--sub);
+  transition: color .12s, border-color .12s, background .12s;
+}
+.cam-active-chip.active {
+  color: var(--green); border-color: rgba(59,109,17,.5);
+  background: rgba(59,109,17,.08);
+}
+.cam-active-chip:hover { opacity: 0.75; }
+
+/* "Provider not implemented" notice inside wizard */
+.cam-not-impl {
+  display: flex; gap: 8px; align-items: flex-start;
+  margin-top: 12px; padding: 12px; border-radius: 10px;
+  background: rgba(133,79,11,.08); color: var(--amber);
+  font-size: 13px; line-height: 1.5;
+}
+
+/* Brand selection grid in wizard */
+.brand-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
+@media (max-width: 440px) { .brand-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.brand-btn {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding: 14px 8px; border-radius: 10px;
+  border: 1.5px solid var(--bord); background: var(--bg);
+  cursor: pointer; font-size: 13px; font-weight: 500;
+  color: var(--txt); position: relative;
+  transition: border-color .15s, background .15s;
+}
+.brand-btn:hover { border-color: var(--bord2); }
+.brand-btn.selected {
+  border-color: var(--navy);
+  background: rgba(12,68,124,.07);
+}
+.brand-stub {
+  position: absolute; top: 4px; right: 4px;
+  font-size: 9px; padding: 1px 4px; border-radius: 3px;
+  background: rgba(133,79,11,.12); color: var(--amber);
+}
+
+/* Wizard step dots */
+.wizard-steps { display: flex; gap: 4px; align-items: center; }
+.wizard-step {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600;
+  background: var(--surf); color: var(--sub); border: 1px solid var(--bord2);
+  transition: background .15s, color .15s;
+}
+.wizard-step.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* Sightings modal */
+.sightings-modal {
+  background: var(--bg); border: 2px solid var(--navy);
+  border-radius: var(--radius); overflow: hidden;
+  display: flex; flex-direction: column;
+  max-height: min(85vh, 680px); width: 100%;
+}
+.sightings-modal-hd {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 16px 16px 12px; flex-shrink: 0;
+  border-bottom: 1px solid var(--bord);
+}
+
+/* Photo grid */
+.sightings-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 6px; padding: 12px; overflow-y: auto;
+  flex: 1;
+}
+@media (max-width: 420px) { .sightings-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.sighting-card {
+  border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--bord); background: var(--surf);
+  cursor: pointer; transition: transform .1s, box-shadow .1s;
+}
+.sighting-card:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,.18); }
+.sighting-thumb {
+  width: 100%; aspect-ratio: 4/3;
+  object-fit: cover; display: block;
+}
+.sighting-nophoto {
+  width: 100%; aspect-ratio: 4/3;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surf);
+}
+.sighting-skeleton {
+  aspect-ratio: 4/3; animation: pulse 1.4s ease-in-out infinite;
+  cursor: default;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+.sighting-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 6px;
+}
+.sighting-ts { font-size: 10.5px; color: var(--sub); }
+.conf-badge {
+  font-size: 10.5px; font-weight: 600;
+  padding: 1px 5px; border-radius: 4px;
+}
+.conf-high { background: rgba(59,109,17,.15); color: var(--green); }
+.conf-med  { background: rgba(133,79,11,.15); color: var(--amber); }
+.conf-low  { background: rgba(163,45,45,.15); color: var(--red); }
+
+/* Lightbox (full-size photo overlay) */
+.lightbox {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-out;
+}
+.lightbox-img {
+  max-width: 92vw; max-height: 88vh;
+  object-fit: contain; border-radius: 8px;
+  cursor: default;
+}
+.lightbox-close {
+  position: absolute; top: 14px; right: 14px;
+  background: rgba(255,255,255,.15); border: none; border-radius: 50%;
+  padding: 8px; cursor: pointer; color: #fff; display: flex;
+  transition: background .15s;
+}
+.lightbox-close:hover { background: rgba(255,255,255,.3); }
+
 /* mobile tweaks */
 @media (max-width: 540px) {
   .today-page { padding: 12px 12px 40px; }
