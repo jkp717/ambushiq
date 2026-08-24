@@ -83,6 +83,7 @@ export default function HuntMap({
   stands, zones, corridors, conditions,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
   layers, onEditFeature, onDeleteFeature, center,
+  height = 420,
 }) {
   const mapRef = useRef(null);
   const mapEl = useRef(null);
@@ -229,5 +230,5 @@ export default function HuntMap({
     }
   }, [draftPoints, ready]);
 
-  return <div ref={mapEl} style={{ height: 420, width: "100%", borderRadius: 12, overflow: "hidden", border: "1px solid var(--bord)" }} />;
+  return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
 }
