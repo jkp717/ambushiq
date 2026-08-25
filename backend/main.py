@@ -147,11 +147,18 @@ class Corridor(Base):
     __tablename__ = "corridors"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # usage frequency 1 (rarely used) – 10 (heavily used); scales proximity contribution
+    usage: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    # per-corridor falloff distance in metres; NULL → use global falloff_corridor setting
+    falloff_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # polyline as JSON list of [lat, lon] points
     points_json: Mapped[str] = mapped_column(Text)
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "points": json.loads(self.points_json)}
+        return {"id": self.id, "name": self.name,
+                "usage": self.usage if self.usage is not None else 5,
+                "falloff_m": self.falloff_m,
+                "points": json.loads(self.points_json)}
 
 
 class Setting(Base):
@@ -210,6 +217,13 @@ def init_db(retries: int = 30):
             with engine.connect() as conn:
                 try:
                     conn.execute(text("ALTER TABLE settings ALTER COLUMN value TYPE TEXT;"))
+                    conn.commit()
+                except Exception:
+                    pass
+                # v2.16: per-corridor usage rating and falloff distance
+                try:
+                    conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS usage INTEGER NOT NULL DEFAULT 5"))
+                    conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS falloff_m FLOAT"))
                     conn.commit()
                 except Exception:
                     pass
@@ -298,6 +312,8 @@ class ZoneIn(BaseModel):
 class CorridorIn(BaseModel):
     name: Optional[str] = None
     points: list[list[float]]
+    usage: int = 5          # 1 = rarely used, 10 = heavily used
+    falloff_m: Optional[float] = None  # None → inherit global falloff_corridor
 
 
 class HourRankIn(BaseModel):
@@ -444,19 +460,24 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict) -
             total += max(0.0, 1 - d / falloff) if falloff > 0 else 0
         return total
 
-    def corridor_factor(falloff):
+    def corridor_factor():
         total = 0.0
         for c in corridors:
+            # per-corridor falloff; fall back to global setting when not set
+            falloff = c.get("falloff_m") or settings["falloff_corridor"]
+            # usage 1-10 scales the contribution linearly (usage/10)
+            usage_scale = max(1, min(10, c.get("usage") or 5)) / 10.0
             pts = c["points"]
             dmin = None
             for i in range(len(pts) - 1):
                 d = _point_to_segment_m(slat, slon, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
                 dmin = d if dmin is None else min(dmin, d)
             if dmin is not None:
-                total += max(0.0, 1 - dmin / falloff) if falloff > 0 else 0
+                contrib = max(0.0, 1 - dmin / falloff) if falloff > 0 else 0
+                total += contrib * usage_scale
         return total
 
-    b_cor = corridor_factor(settings["falloff_corridor"]) * settings["weight_corridor"]
+    b_cor = corridor_factor() * settings["weight_corridor"]
     b_food = zone_factor("food", settings["falloff_food"]) * settings["weight_food"]
     b_bed = zone_factor("bedding", settings["falloff_bedding"]) * settings["weight_bedding"]
     return {"corridor": b_cor, "food": b_food, "bedding": b_bed, "total": b_cor + b_food + b_bed}
@@ -625,7 +646,8 @@ def create_corridor(body: CorridorIn, _=Depends(require_token)):
     if len(body.points) < 2:
         raise HTTPException(400, "a corridor needs at least 2 points")
     with Session(engine) as s:
-        c = Corridor(name=body.name, points_json=json.dumps(body.points))
+        c = Corridor(name=body.name, points_json=json.dumps(body.points),
+                     usage=max(1, min(10, body.usage)), falloff_m=body.falloff_m)
         s.add(c)
         s.commit()
         s.refresh(c)
@@ -639,6 +661,8 @@ def update_corridor(corridor_id: int, body: CorridorIn, _=Depends(require_token)
         if not c:
             raise HTTPException(404, "not found")
         c.name = body.name
+        c.usage = max(1, min(10, body.usage))
+        c.falloff_m = body.falloff_m
         if body.points and len(body.points) >= 2:
             c.points_json = json.dumps(body.points)
         s.commit()

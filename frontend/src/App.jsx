@@ -536,11 +536,11 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     } catch { setErr("Couldn't move corridor."); }
     setRelocating(null); setDraftPoints([]); setDrawMode(null);
   }
-  async function confirmName(name) {
+  async function confirmName(name, usage, falloffM) {
     const pn = pendingName; setPendingName(null); if (!pn) return;
     try {
       if (pn.type === "zone") { await api("/zones", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadZones(); }
-      else { await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadCorridors(); }
+      else { await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null, usage: usage ?? 5, falloff_m: falloffM ?? null }) }); await reloadCorridors(); }
     } catch { setErr(`Couldn't save ${pn.type}.`); }
   }
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); }
@@ -663,8 +663,11 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
         </div>
       </div>
 
-      {pendingName && (
+      {pendingName && pendingName.type !== "corridor" && (
         <NamePrompt title={pendingName.title} onCancel={() => setPendingName(null)} onConfirm={confirmName} />
+      )}
+      {pendingName && pendingName.type === "corridor" && (
+        <CorridorPrompt onCancel={() => setPendingName(null)} onConfirm={confirmName} />
       )}
     </div>
   );
@@ -804,11 +807,23 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
 
 function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOnMap }) {
   const [geom, setGeom] = useState(null);
-  useEffect(() => { if (editing) setGeom({ points: editing.points }); }, [editing && editing.id]);
+  const [editUsage, setEditUsage] = useState(5);
+  const [editFalloff, setEditFalloff] = useState("");
+  useEffect(() => {
+    if (editing) {
+      setGeom({ points: editing.points });
+      setEditUsage(editing.usage ?? 5);
+      setEditFalloff(editing.falloff_m != null ? editing.falloff_m : "");
+    }
+  }, [editing && editing.id]);
   async function save() {
     const pts = (geom && geom.points) || editing.points;
     try {
-      await api(`/corridors/${editing.id}`, { method: "PUT", body: JSON.stringify({ name: editing.name || null, points: pts }) });
+      await api(`/corridors/${editing.id}`, { method: "PUT", body: JSON.stringify({
+        name: editing.name || null, points: pts,
+        usage: editUsage,
+        falloff_m: editFalloff !== "" && editFalloff != null ? +editFalloff : null,
+      }) });
       setEditing(null); reload();
     } catch {}
   }
@@ -825,7 +840,10 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
             <div className="list-card-map"><MiniMap kind="corridor" feature={{ points: c.points }} height={110} /></div>
             <div className="list-card-body">
               <div className="list-card-name">{c.name || "Unnamed corridor"}</div>
-              <div className="list-card-sub">{c.points.length} points</div>
+              <div className="list-card-sub">
+                {c.points.length} points · Usage {c.usage ?? 5}/10
+                {c.falloff_m != null ? ` · ${Math.round(c.falloff_m)}m falloff` : " · global falloff"}
+              </div>
             </div>
             <div className="list-card-actions">
               <button className="icon-btn" onClick={() => setEditing({ ...c })}><Edit3 size={15} /></button>
@@ -842,6 +860,25 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
               <button className="icon-btn" onClick={() => setEditing(null)}><X size={16} /></button>
             </div>
             <Field label="Name"><input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="corridor" /></Field>
+            {/* Usage frequency */}
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <label style={{ fontSize: 13, fontWeight: 500 }}>Usage frequency</label>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)" }}>{editUsage}/10</span>
+              </div>
+              <input type="range" min={1} max={10} value={editUsage} onChange={(e) => setEditUsage(+e.target.value)} style={{ width: "100%" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--sub)", marginTop: 2 }}>
+                <span>Rarely used</span><span>Heavily used</span>
+              </div>
+            </div>
+            {/* Per-corridor falloff */}
+            <div style={{ marginTop: 14 }}>
+              <Field label="Falloff distance (m) — leave blank to use global setting">
+                <input type="number" value={editFalloff} min={50} max={2000} step={25}
+                  placeholder="global default"
+                  onChange={(e) => setEditFalloff(e.target.value)} />
+              </Field>
+            </div>
             <div style={{ marginTop: 12 }}>
               <span style={{ fontSize: 12, color: "var(--sub)", display: "block", marginBottom: 4 }}>Drag any point to reshape the path</span>
               <MiniMap kind="corridor" editable height={240} feature={{ points: editing.points }} onChange={(g) => setGeom(g)} />
@@ -1482,6 +1519,48 @@ function NamePrompt({ title, onConfirm, onCancel }) {
         </Field>
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
           <button className="btn btn-primary" onClick={() => onConfirm(name.trim())}><Save size={15} /> Save</button>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function CorridorPrompt({ onConfirm, onCancel }) {
+  const [name, setName] = useState("");
+  const [usage, setUsage] = useState(5);
+  const [falloff, setFalloff] = useState(150);
+  const usageLabel = usage <= 2 ? "Rarely used" : usage <= 4 ? "Occasionally used" : usage <= 6 ? "Moderately used" : usage <= 8 ? "Frequently used" : "Heavily used";
+  return (
+    <Modal onClose={onCancel}>
+      <div className="card" style={{ padding: 16, border: "2px solid var(--navy)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <strong>Name this corridor</strong>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+        <Field label="Name (optional)">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onConfirm(name.trim(), usage, falloff); }}
+            placeholder="e.g. Ridge pinch point" />
+        </Field>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>Usage frequency</label>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)" }}>{usage}/10 — {usageLabel}</span>
+          </div>
+          <input type="range" min={1} max={10} value={usage} onChange={(e) => setUsage(+e.target.value)} style={{ width: "100%" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--sub)", marginTop: 2 }}>
+            <span>Rarely used</span><span>Heavily used</span>
+          </div>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <Field label="Falloff distance (m) — how far the bonus extends from this corridor">
+            <input type="number" value={falloff} min={50} max={2000} step={25}
+              onChange={(e) => setFalloff(+e.target.value)} />
+          </Field>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={() => onConfirm(name.trim(), usage, falloff)}><Save size={15} /> Save</button>
           <button className="btn" onClick={onCancel}>Cancel</button>
         </div>
       </div>
