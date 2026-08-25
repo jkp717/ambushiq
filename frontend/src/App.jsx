@@ -536,11 +536,18 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     } catch { setErr("Couldn't move corridor."); }
     setRelocating(null); setDraftPoints([]); setDrawMode(null);
   }
-  async function confirmName(name, usage, falloffM) {
+  async function confirmName(name, extra1, extra2) {
     const pn = pendingName; setPendingName(null); if (!pn) return;
     try {
-      if (pn.type === "zone") { await api("/zones", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadZones(); }
-      else { await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null, usage: usage ?? 5, falloff_m: falloffM ?? null }) }); await reloadCorridors(); }
+      if (pn.type === "zone") {
+        const body = { ...pn.payload, name: name || null };
+        if (pn.kind === "food" && extra1 != null) body.quality = extra1;
+        await api("/zones", { method: "POST", body: JSON.stringify(body) });
+        await reloadZones();
+      } else {
+        await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null, usage: extra1 ?? 5, falloff_m: extra2 ?? null }) });
+        await reloadCorridors();
+      }
     } catch { setErr(`Couldn't save ${pn.type}.`); }
   }
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); }
@@ -663,8 +670,11 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
         </div>
       </div>
 
-      {pendingName && pendingName.type !== "corridor" && (
+      {pendingName && pendingName.type === "zone" && pendingName.kind !== "food" && (
         <NamePrompt title={pendingName.title} onCancel={() => setPendingName(null)} onConfirm={confirmName} />
+      )}
+      {pendingName && pendingName.type === "zone" && pendingName.kind === "food" && (
+        <FoodZonePrompt onCancel={() => setPendingName(null)} onConfirm={confirmName} />
       )}
       {pendingName && pendingName.type === "corridor" && (
         <CorridorPrompt onCancel={() => setPendingName(null)} onConfirm={confirmName} />
@@ -749,11 +759,19 @@ function ZonesTabPage({ zones, corridors, onAdd, reloadZones, reloadCorridors,
    ════════════════════════════════════════════════════ */
 function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMap }) {
   const [geom, setGeom] = useState(null);
-  useEffect(() => { if (editing) setGeom({ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }); }, [editing && editing.id]);
+  const [editQuality, setEditQuality] = useState(5);
+  useEffect(() => {
+    if (editing) {
+      setGeom({ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m });
+      if (kind === "food") setEditQuality(editing.quality ?? 5);
+    }
+  }, [editing && editing.id]);
   async function save() {
     const g = geom || { lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m };
+    const body = { kind, name: editing.name || null, lat: g.lat, lon: g.lon, radius_m: +g.radius_m };
+    if (kind === "food") body.quality = editQuality;
     try {
-      await api(`/zones/${editing.id}`, { method: "PUT", body: JSON.stringify({ kind, name: editing.name || null, lat: g.lat, lon: g.lon, radius_m: +g.radius_m }) });
+      await api(`/zones/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       setEditing(null); reload();
     } catch {}
   }
@@ -771,7 +789,10 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
             <div className="list-card-map"><MiniMap kind={kind} feature={{ lat: z.lat, lon: z.lon, radius_m: z.radius_m }} height={110} /></div>
             <div className="list-card-body">
               <div className="list-card-name">{z.name || `Unnamed ${noun}`}</div>
-              <div className="list-card-sub">{(+z.lat).toFixed(4)}, {(+z.lon).toFixed(4)} · {z.radius_m} m radius</div>
+              <div className="list-card-sub">
+                {(+z.lat).toFixed(4)}, {(+z.lon).toFixed(4)} · {z.radius_m} m radius
+                {kind === "food" && <> · Quality {z.quality ?? 5}/10</>}
+              </div>
             </div>
             <div className="list-card-actions">
               <button className="icon-btn" onClick={() => setEditing({ ...z })}><Edit3 size={15} /></button>
@@ -788,6 +809,18 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
               <button className="icon-btn" onClick={() => setEditing(null)}><X size={16} /></button>
             </div>
             <Field label="Name"><input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={noun} /></Field>
+            {kind === "food" && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500 }}>Food quality</label>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--green)" }}>{editQuality}/10</span>
+                </div>
+                <input type="range" min={1} max={10} value={editQuality} onChange={(e) => setEditQuality(+e.target.value)} style={{ width: "100%" }} />
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--sub)", marginTop: 2 }}>
+                  <span>Poor</span><span>Premium</span>
+                </div>
+              </div>
+            )}
             <div style={{ marginTop: 12 }}>
               <span style={{ fontSize: 12, color: "var(--sub)", display: "block", marginBottom: 4 }}>Drag the center to move · drag the edge to resize</span>
               <MiniMap kind={kind} editable height={240} feature={{ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }} onChange={(g) => setGeom(g)} />
@@ -1519,6 +1552,42 @@ function NamePrompt({ title, onConfirm, onCancel }) {
         </Field>
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
           <button className="btn btn-primary" onClick={() => onConfirm(name.trim())}><Save size={15} /> Save</button>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function FoodZonePrompt({ onConfirm, onCancel }) {
+  const [name, setName] = useState("");
+  const [quality, setQuality] = useState(5);
+  const qualityLabel = quality <= 2 ? "Poor — low-value browse" : quality <= 4 ? "Below average" : quality <= 6 ? "Average food source" : quality <= 8 ? "Good — established plot or ag field" : "Premium — high-draw destination";
+  return (
+    <Modal onClose={onCancel}>
+      <div className="card" style={{ padding: 16, border: "2px solid var(--green)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <strong>Name this food zone</strong>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+        <Field label="Name (optional)">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onConfirm(name.trim(), quality); }}
+            placeholder="e.g. North food plot" />
+        </Field>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>Food quality</label>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--green)" }}>{quality}/10</span>
+          </div>
+          <input type="range" min={1} max={10} value={quality} onChange={(e) => setQuality(+e.target.value)} style={{ width: "100%" }} />
+          <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 4 }}>{qualityLabel}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--sub)", marginTop: 2 }}>
+            <span>Poor</span><span>Premium</span>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={() => onConfirm(name.trim(), quality)}><Save size={15} /> Save</button>
           <button className="btn" onClick={onCancel}>Cancel</button>
         </div>
       </div>
