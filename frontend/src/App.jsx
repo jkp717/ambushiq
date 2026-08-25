@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
@@ -304,7 +304,7 @@ function HeroCard({ rating }) {
       <div className="hero-date">{isToday ? "Today" : rating.label}</div>
       <div className="hero-rating">
         <span className="hero-deer">{"🦌".repeat(r)}{"·".repeat(5 - r)}</span>
-        <span className="hero-score" style={{ color: tone }}>{r}/5</span>
+        <span className="hero-score" style={{ color: tone }}>{rating.score != null ? (1 + rating.score * 4).toFixed(1) : r}/5</span>
       </div>
       <div className="hero-label" style={{ color: tone }}>{label}</div>
       <div className="hero-rut">{rating.rut?.phase}</div>
@@ -324,8 +324,30 @@ function WeatherPill({ icon, label }) {
 /* ── 14-day horizontal strip ── */
 function OutlookStrip({ ratings, selectedDay, loadableDays, onPick }) {
   const today = new Date().toISOString().slice(0, 10);
+  const scrollRef = useRef(null);
+  const drag = useRef({ active: false, startX: 0, scrollLeft: 0, moved: false });
+
+  function onMouseDown(e) {
+    drag.current = { active: true, startX: e.clientX, scrollLeft: scrollRef.current.scrollLeft, moved: false };
+    scrollRef.current.style.cursor = "grabbing";
+  }
+  function onMouseMove(e) {
+    if (!drag.current.active) return;
+    const dx = e.clientX - drag.current.startX;
+    if (Math.abs(dx) > 4) drag.current.moved = true;
+    scrollRef.current.scrollLeft = drag.current.scrollLeft - dx;
+  }
+  function endDrag() {
+    drag.current.active = false;
+    if (scrollRef.current) scrollRef.current.style.cursor = "grab";
+  }
+
   return (
-    <div className="outlook-scroll">
+    <div className="outlook-scroll" ref={scrollRef}
+      onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+      onMouseUp={endDrag} onMouseLeave={endDrag}
+      onClickCapture={(e) => { if (drag.current.moved) e.stopPropagation(); }}
+      style={{ cursor: "grab", userSelect: "none" }}>
       <div className="outlook-strip">
         {ratings.map((r) => {
           const tone = r.rating >= 4 ? "var(--green)" : r.rating === 3 ? "var(--amber)" : "var(--red)";
@@ -335,10 +357,10 @@ function OutlookStrip({ ratings, selectedDay, loadableDays, onPick }) {
             <button key={r.day}
               className={"outlook-day" + (sel ? " selected" : "") + (r.confidence === "low" ? " low-conf" : "")}
               onClick={() => onPick(r.day)} disabled={!loadable}
-              title={`${r.rating}/5 · ${r.rut?.phase}${r.confidence === "low" ? " · est." : ""}`}>
+              title={`${r.score != null ? (1 + r.score * 4).toFixed(1) : r.rating}/5 · ${r.rut?.phase}${r.confidence === "low" ? " · est." : ""}`}>
               <div className="od-label">{r.day === today ? "Today" : r.label}</div>
               <div className="od-deer">{"🦌".repeat(r.rating)}</div>
-              <div className="od-score" style={{ color: tone }}>{r.rating}/5</div>
+              <div className="od-score" style={{ color: tone }}>{r.score != null ? (1 + r.score * 4).toFixed(1) : r.rating}/5</div>
               {r.confidence === "low" && <div className="od-est">est.</div>}
             </button>
           );
@@ -511,7 +533,14 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
               <input type="range" className="map-hour-slider"
                 min={0} max={maxHour}
                 value={Math.min(hourPos, maxHour)}
-                onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }} />
+                onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
+                onTouchMove={(e) => {
+                  const t = e.touches[0];
+                  const rect = e.target.getBoundingClientRect();
+                  const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
+                  setPlaying(false);
+                  setHourPos(Math.round(ratio * maxHour));
+                }} />
               <div className="map-slider-ticks">
                 <span>{curDay.hours[0]?.label}</span>
                 <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
@@ -527,7 +556,7 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
               {conditions && (
                 <div className="map-weather-pills">
                   <span className="map-wpill">☁ {conditions.time.cloud}%</span>
-                  <span className="map-wpill">🌡 {Math.round(conditions.time.temp)}°F</span>
+                  <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
                   {conditions.time.wind_speed != null && (
                     <span className="map-wpill">💨 {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
                   )}
@@ -1490,7 +1519,7 @@ function DeerRating({ rating }) {
     <div className="card" style={{ padding: "10px 12px", marginBottom: 10, borderLeft: `3px solid ${tone}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
         <span style={{ fontSize: 18, letterSpacing: 1 }} title={`${r} of 5`}>{deer}</span>
-        <span style={{ fontWeight: 600, color: tone }}>{r}/5 movement</span>
+        <span style={{ fontWeight: 600, color: tone }}>{rating.score != null ? (1 + rating.score * 4).toFixed(1) : r}/5 movement</span>
         <span style={{ fontSize: 12, color: "var(--sub)" }}>· {rating.rut?.phase}</span>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--sub)" }}>{open ? "hide ▲" : "why? ▼"}</span>
       </div>
@@ -1507,6 +1536,23 @@ function DeerRating({ rating }) {
             {rating.inputs?.day_high_f    != null && <>{rating.inputs.day_high_f}°F · </>}
             {rating.inputs?.rain_mm       != null && <>{rating.inputs.rain_mm} mm rain</>}
           </div>
+          {(() => {
+            const bd = rating.breakdown;
+            if (!bd || bd.length < 2) return null;
+            const rutEntry = bd[0];
+            const weatherFactors = bd.slice(1);
+            const top = weatherFactors.reduce((best, f) => {
+              const s = Math.abs((f.value || 0) - 0.5) * (typeof f.weight === "number" ? f.weight : 0);
+              const b = Math.abs((best.value || 0) - 0.5) * (typeof best.weight === "number" ? best.weight : 0);
+              return s > b ? f : best;
+            });
+            return (
+              <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 6, lineHeight: 1.5, borderTop: "1px solid var(--bord)", paddingTop: 6 }}>
+                <span style={{ fontWeight: 600, color: "var(--txt)" }}>Why this score: </span>
+                {rutEntry.impact}. Primary weather factor: {top.factor.toLowerCase()} — {top.impact}.
+              </div>
+            );
+          })()}
           <div style={{ fontSize: 10.5, color: "var(--sub)", marginTop: 6, fontStyle: "italic" }}>Moon phase intentionally excluded — MSU research found no significant effect on buck activity.</div>
         </div>
       )}
