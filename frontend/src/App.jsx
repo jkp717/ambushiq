@@ -119,6 +119,7 @@ function Shell({ onLogout, version }) {
   const [editingStand, setEditingStand] = useState(null);
   const [editingZone, setEditingZone] = useState(null);
   const [editingCorridor, setEditingCorridor] = useState(null);
+  const [relocateRequest, setRelocateRequest] = useState(null);
 
   const loadStands    = useCallback(async () => { try { setStands(await api("/stands")); } catch {} }, []);
   const loadZones     = useCallback(async () => { try { setZones(await api("/zones")); } catch {} }, []);
@@ -143,6 +144,14 @@ function Shell({ onLogout, version }) {
   function openStandEditor(coord) {
     setEditingStand({ id: null, name: "", lat: coord ? coord.lat.toFixed(6) : "", lon: coord ? coord.lon.toFixed(6) : "",
                       downhill_deg: null, deer_approach_deg: null, terrain: null });
+  }
+
+  function requestRelocate(kind, id) {
+    setRelocateRequest({ kind, id });
+    setEditingStand(null);
+    setEditingZone(null);
+    setEditingCorridor(null);
+    setView("map");
   }
 
   async function saveStand(body, id) {
@@ -182,6 +191,7 @@ function Shell({ onLogout, version }) {
           <MapPage stands={stands} zones={zones} corridors={corridors}
             reloadStands={loadStands} reloadZones={loadZones} reloadCorridors={loadCorridors}
             drawRequest={drawRequest} clearDrawRequest={() => setDrawRequest(null)}
+            relocateRequest={relocateRequest} clearRelocateRequest={() => setRelocateRequest(null)}
             openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature} />
         )}
         {view === "stands" && (
@@ -192,7 +202,8 @@ function Shell({ onLogout, version }) {
           <ZonesTabPage zones={zones} corridors={corridors}
             onAdd={goDraw} reloadZones={loadZones} reloadCorridors={loadCorridors}
             editingZone={editingZone} setEditingZone={setEditingZone}
-            editingCorridor={editingCorridor} setEditingCorridor={setEditingCorridor} />
+            editingCorridor={editingCorridor} setEditingCorridor={setEditingCorridor}
+            onMoveOnMap={requestRelocate} />
         )}
         {view === "cameras" && <CamerasPage stands={stands} />}
         {view === "settings" && <SettingsPage />}
@@ -200,7 +211,8 @@ function Shell({ onLogout, version }) {
 
       {editingStand && (
         <Modal onClose={() => setEditingStand(null)}>
-          <StandEditor stand={editingStand} onSave={saveStand} onCancel={() => setEditingStand(null)} reload={loadStands} />
+          <StandEditor stand={editingStand} onSave={saveStand} onCancel={() => setEditingStand(null)} reload={loadStands}
+            onMoveOnMap={editingStand.id ? (id) => requestRelocate("stand", id) : null} />
         </Modal>
       )}
     </div>
@@ -412,17 +424,28 @@ function DayDetailPanel({ rating, day, dayRanked, useProx, setUseProx }) {
   );
 }
 
+/* ── helper: index in day.hours closest to 15 min before sunrise ── */
+function morningStartIdx(day) {
+  if (!day) return 0;
+  const targetH = Math.max(0, (day.sunrise_h ?? 6.5) - 0.25);
+  let best = 0, bestDist = Infinity;
+  day.hours.forEach((h, i) => { const d = Math.abs(h.hour - targetH); if (d < bestDist) { bestDist = d; best = i; } });
+  return best;
+}
+
 /* ════════════════════════════════════════════════════
    MAP PAGE — full-height map with time controls + play
    ════════════════════════════════════════════════════ */
-function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
-                   drawRequest, clearDrawRequest, openStandEditor, onEditFeature, onDeleteFeature }) {
+function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCorridors,
+                   drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
+                   openStandEditor, onEditFeature, onDeleteFeature }) {
   const [days, setDays] = useState([]);
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
   const [conditions, setConditions] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [drawMode, setDrawMode] = useState(null);
+  const [relocating, setRelocating] = useState(null); // { kind, id }
   const [draftPoints, setDraftPoints] = useState([]);
   const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, zones: true, corridors: true });
   const [pendingName, setPendingName] = useState(null);
@@ -431,6 +454,7 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
 
   useEffect(() => { api("/home").then(setHome).catch(() => setHome({ set: false })); }, []);
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
+  useEffect(() => { if (relocateRequest) { setRelocating(relocateRequest); setDrawMode("relocate"); setDraftPoints([]); clearRelocateRequest(); } }, [relocateRequest, clearRelocateRequest]);
 
   useEffect(() => {
     if (!stands.length) return;
@@ -480,13 +504,37 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
                        payload: { kind: drawMode, lat: pt.lat, lon: pt.lon, radius_m: 80 } });
     } else if (drawMode === "corridor") {
       setDraftPoints((p) => [...p, pt]);
+    } else if (drawMode === "relocate" && relocating) {
+      const { kind, id } = relocating;
+      if (kind === "corridor") { setDraftPoints((p) => [...p, pt]); return; }
+      try {
+        if (kind === "stand") {
+          const s = stands.find((x) => x.id === id);
+          if (s) await api(`/stands/${id}`, { method: "PUT", body: JSON.stringify({ name: s.name, lat: pt.lat, lon: pt.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg }) });
+          await reloadStands();
+        } else if (kind === "food" || kind === "bedding") {
+          const z = zones.find((x) => x.id === id);
+          if (z) await api(`/zones/${id}`, { method: "PUT", body: JSON.stringify({ kind: z.kind, name: z.name, lat: pt.lat, lon: pt.lon, radius_m: z.radius_m }) });
+          await reloadZones();
+        }
+      } catch { setErr("Couldn't move feature."); }
+      setRelocating(null); setDrawMode(null);
     }
-  }, [drawMode, openStandEditor]);
+  }, [drawMode, relocating, stands, zones, openStandEditor, reloadStands, reloadZones]);
 
   function finishCorridor() {
     if (draftPoints.length >= 2)
       setPendingName({ type: "corridor", title: "Name this corridor", payload: { points: draftPoints.map((p) => [p.lat, p.lon]) } });
     setDraftPoints([]); setDrawMode(null);
+  }
+  async function finishRelocateCorridor() {
+    if (draftPoints.length < 2 || !relocating) return;
+    try {
+      const c = corridors.find((x) => x.id === relocating.id);
+      await api(`/corridors/${relocating.id}`, { method: "PUT", body: JSON.stringify({ name: c?.name || null, points: draftPoints.map((p) => [p.lat, p.lon]) }) });
+      await reloadCorridors();
+    } catch { setErr("Couldn't move corridor."); }
+    setRelocating(null); setDraftPoints([]); setDrawMode(null);
   }
   async function confirmName(name) {
     const pn = pendingName; setPendingName(null); if (!pn) return;
@@ -495,7 +543,7 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
       else { await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null }) }); await reloadCorridors(); }
     } catch { setErr(`Couldn't save ${pn.type}.`); }
   }
-  function cancelDraw() { setDraftPoints([]); setDrawMode(null); }
+  function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
 
   if (!stands.length) {
@@ -514,11 +562,11 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
           <div className="map-ctrl-row">
             <div className="map-day-nav">
               <button className="icon-btn map-nav-btn"
-                onClick={() => { setDayIdx((i) => Math.max(0, i - 1)); setHourPos(0); }}
+                onClick={() => { const ni = Math.max(0, dayIdx - 1); setDayIdx(ni); setHourPos(morningStartIdx(days[ni])); }}
                 disabled={dayIdx === 0}><ChevronLeft size={18} /></button>
               <span className="map-day-label">{curDay?.label ?? "—"}</span>
               <button className="icon-btn map-nav-btn"
-                onClick={() => { setDayIdx((i) => Math.min(days.length - 1, i + 1)); setHourPos(0); }}
+                onClick={() => { const ni = Math.min(days.length - 1, dayIdx + 1); setDayIdx(ni); setHourPos(morningStartIdx(days[ni])); }}
                 disabled={dayIdx >= days.length - 1}><ChevronRight size={18} /></button>
             </div>
             <button className={"btn map-play-btn" + (playing ? " playing" : "")}
@@ -527,27 +575,41 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
             </button>
           </div>
 
-          {/* Row 2: slider + tick labels */}
-          {curDay && (
-            <>
-              <input type="range" className="map-hour-slider"
-                min={0} max={maxHour}
-                value={Math.min(hourPos, maxHour)}
-                onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
-                onTouchMove={(e) => {
-                  const t = e.touches[0];
-                  const rect = e.target.getBoundingClientRect();
-                  const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
-                  setPlaying(false);
-                  setHourPos(Math.round(ratio * maxHour));
-                }} />
-              <div className="map-slider-ticks">
-                <span>{curDay.hours[0]?.label}</span>
-                <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
-                <span>{curDay.hours[maxHour]?.label}</span>
-              </div>
-            </>
-          )}
+          {/* Row 2: slider + period band + tick labels */}
+          {curDay && (() => {
+            const srH = curDay.sunrise_h ?? 6.5;
+            const ssH = curDay.sunset_h ?? 19.5;
+            const hPct = (h) => `${Math.max(0, Math.min(100, (h / maxHour) * 100)).toFixed(1)}%`;
+            const hW   = (a, b) => `${Math.max(0, Math.min(100, ((b - a) / maxHour) * 100)).toFixed(1)}%`;
+            const mStart = Math.max(0, srH - 0.25), mEnd = srH + 3;
+            const eStart = ssH - 3, eEnd = Math.min(maxHour, ssH + 0.25);
+            return (
+              <>
+                <input type="range" className="map-hour-slider"
+                  min={0} max={maxHour}
+                  value={Math.min(hourPos, maxHour)}
+                  onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
+                  onTouchMove={(e) => {
+                    const t = e.touches[0];
+                    const rect = e.target.getBoundingClientRect();
+                    const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
+                    setPlaying(false);
+                    setHourPos(Math.round(ratio * maxHour));
+                  }} />
+                {/* Period colour band */}
+                <div style={{ position: "relative", height: 5, borderRadius: 3, background: "var(--bord)", marginTop: 2, marginBottom: 3 }}>
+                  <div style={{ position: "absolute", left: hPct(mStart), width: hW(mStart, mEnd),  height: "100%", background: "#C28800", opacity: 0.75, borderRadius: 3 }} title="Morning" />
+                  <div style={{ position: "absolute", left: hPct(mEnd),   width: hW(mEnd, eStart),   height: "100%", background: "#1E7FB0", opacity: 0.75 }} title="Midday" />
+                  <div style={{ position: "absolute", left: hPct(eStart), width: hW(eStart, eEnd),   height: "100%", background: "#7A3FA0", opacity: 0.75, borderRadius: 3 }} title="Evening" />
+                </div>
+                <div className="map-slider-ticks">
+                  <span>{curDay.hours[0]?.label}</span>
+                  <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
+                  <span>{curDay.hours[maxHour]?.label}</span>
+                </div>
+              </>
+            );
+          })()}
 
           {/* Row 3: big time + weather pills */}
           {curHour && (
@@ -574,6 +636,9 @@ function MapPage({ stands, zones, corridors, reloadZones, reloadCorridors,
           {(drawMode === "food" || drawMode === "bedding") && `Click the map to drop the ${drawMode} zone.`}
           {drawMode === "corridor" && `Click points along the deer path (${draftPoints.length} set).`}
           {drawMode === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
+          {drawMode === "relocate" && relocating?.kind !== "corridor" && "Tap the map to move to the new location."}
+          {drawMode === "relocate" && relocating?.kind === "corridor" && `Click new path points (${draftPoints.length} set).`}
+          {drawMode === "relocate" && relocating?.kind === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishRelocateCorridor} disabled={draftPoints.length < 2}>Finish</button>}
           <button className="btn" style={{ marginLeft: 8 }} onClick={cancelDraw}>Cancel</button>
         </div>
       )}
@@ -647,7 +712,7 @@ function StandsPage({ stands, onAdd, onEdit, onDelete }) {
    ZONES TAB PAGE — food / bedding / corridors sub-tabs
    ════════════════════════════════════════════════════ */
 function ZonesTabPage({ zones, corridors, onAdd, reloadZones, reloadCorridors,
-                        editingZone, setEditingZone, editingCorridor, setEditingCorridor }) {
+                        editingZone, setEditingZone, editingCorridor, setEditingCorridor, onMoveOnMap }) {
   const [tab, setTab] = useState("food");
   const TABS = [
     { key: "food",      label: "Food",      icon: Wheat },
@@ -666,11 +731,11 @@ function ZonesTabPage({ zones, corridors, onAdd, reloadZones, reloadCorridors,
       {(tab === "food" || tab === "bedding") && (
         <ZonesPage kind={tab} zones={zones.filter((z) => z.kind === tab)}
           onAdd={() => onAdd(tab)} reload={reloadZones}
-          editing={editingZone} setEditing={setEditingZone} />
+          editing={editingZone} setEditing={setEditingZone} onMoveOnMap={onMoveOnMap} />
       )}
       {tab === "corridors" && (
         <CorridorsPage corridors={corridors} onAdd={() => onAdd("corridor")}
-          reload={reloadCorridors} editing={editingCorridor} setEditing={setEditingCorridor} />
+          reload={reloadCorridors} editing={editingCorridor} setEditing={setEditingCorridor} onMoveOnMap={onMoveOnMap} />
       )}
     </div>
   );
@@ -679,7 +744,7 @@ function ZonesTabPage({ zones, corridors, onAdd, reloadZones, reloadCorridors,
 /* ════════════════════════════════════════════════════
    ZONES / CORRIDORS (inner pages, used inside ZonesTabPage)
    ════════════════════════════════════════════════════ */
-function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing }) {
+function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMap }) {
   const [geom, setGeom] = useState(null);
   useEffect(() => { if (editing) setGeom({ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }); }, [editing && editing.id]);
   async function save() {
@@ -725,8 +790,9 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing }) {
               <MiniMap kind={kind} editable height={240} feature={{ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }} onChange={(g) => setGeom(g)} />
             </div>
             {geom && <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{geom.lat.toFixed(5)}, {geom.lon.toFixed(5)} · {Math.round(geom.radius_m)} m radius</div>}
-            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn btn-primary" onClick={save}><Save size={15} /> Save</button>
+              {onMoveOnMap && editing.id && <button className="btn" onClick={() => { onMoveOnMap(editing.kind || kind, editing.id); setEditing(null); }}><MapPin size={14} /> Move on Map</button>}
               <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
             </div>
           </div>
@@ -736,7 +802,7 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing }) {
   );
 }
 
-function CorridorsPage({ corridors, onAdd, reload, editing, setEditing }) {
+function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOnMap }) {
   const [geom, setGeom] = useState(null);
   useEffect(() => { if (editing) setGeom({ points: editing.points }); }, [editing && editing.id]);
   async function save() {
@@ -781,8 +847,9 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing }) {
               <MiniMap kind="corridor" editable height={240} feature={{ points: editing.points }} onChange={(g) => setGeom(g)} />
             </div>
             <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{((geom && geom.points) || editing.points).length} points</div>
-            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn btn-primary" onClick={save}><Save size={15} /> Save</button>
+              {onMoveOnMap && editing.id && <button className="btn" onClick={() => { onMoveOnMap("corridor", editing.id); setEditing(null); }}><MapPin size={14} /> Move on Map</button>}
               <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
             </div>
           </div>
@@ -1391,7 +1458,7 @@ function AddMenu({ drawMode, setDrawMode }) {
     <div style={{ position: "relative" }} ref={ref}>
       <button className="btn btn-primary" onClick={() => setOpen((o) => !o)} disabled={!!drawMode}><Plus size={15} /> Add</button>
       {open && (
-        <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 4px)", background: "var(--bg)", border: "1px solid var(--bord2)", borderRadius: 10, padding: 6, zIndex: 3000, minWidth: 168, boxShadow: "0 6px 24px rgba(0,0,0,.18)" }}>
+        <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "calc(100% + 4px)", background: "var(--bg)", border: "1px solid var(--bord2)", borderRadius: 10, padding: 6, zIndex: 3000, minWidth: 168, boxShadow: "0 6px 24px rgba(0,0,0,.18)" }}>
           {items.map(({ m, label, icon: Icon, color }) => (
             <button key={m} className="menu-item" onClick={() => pick(m)}><Icon size={15} color={color} /> {label}</button>
           ))}
@@ -1560,7 +1627,7 @@ function DeerRating({ rating }) {
   );
 }
 
-function StandEditor({ stand, onSave, onCancel, reload }) {
+function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
   const [s, setS] = useState({ ...stand });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
@@ -1607,11 +1674,12 @@ function StandEditor({ stand, onSave, onCancel, reload }) {
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
         <DirPicker label="Deer approach from (optional)" value={s.deer_approach_deg} onChange={(d) => setS({ ...s, deer_approach_deg: d })} allowNull />
       </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
         <button className="btn btn-primary" disabled={!valid}
           onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg }, savedId)}>
           <Save size={15} /> Save stand
         </button>
+        {onMoveOnMap && <button className="btn" onClick={() => { onMoveOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Move on Map</button>}
         <button className="btn" onClick={onCancel}>Cancel</button>
       </div>
     </div>
