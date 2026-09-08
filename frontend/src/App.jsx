@@ -135,6 +135,17 @@ function Shell({ onLogout, version }) {
   const loadZones     = useCallback(async () => { try { setZones(await api("/zones")); } catch {} }, []);
   const loadCorridors = useCallback(async () => { try { setCorridors(await api("/corridors")); } catch {} }, []);
   const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors()]); }, [loadStands, loadZones, loadCorridors]);
+
+  const toggleActiveStand = useCallback(async (stand) => {
+    try {
+      await api(`/stands/${stand.id}`, { method: "PUT", body: JSON.stringify({
+        name: stand.name, lat: stand.lat, lon: stand.lon,
+        is_active: !stand.is_active,
+        downhill_deg: stand.downhill_deg, deer_approach_deg: stand.deer_approach_deg,
+      })});
+      await loadStands();
+    } catch {}
+  }, [loadStands]);
   useEffect(() => { loadAll(); }, [loadAll]);
 
   const editFeature = useCallback((kind, id) => {
@@ -206,6 +217,7 @@ function Shell({ onLogout, version }) {
         )}
         {view === "stands" && (
           <StandsPage stands={stands} onAdd={() => goDraw("stand")} onEdit={setEditingStand}
+            onToggle={toggleActiveStand}
             onDelete={async (id) => { await api(`/stands/${id}`, { method: "DELETE" }); loadStands(); }} />
         )}
         {view === "zones" && (
@@ -709,7 +721,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
 /* ════════════════════════════════════════════════════
    STANDS PAGE
    ════════════════════════════════════════════════════ */
-function StandsPage({ stands, onAdd, onEdit, onDelete }) {
+function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
   return (
     <div className="list-page">
       <div className="list-header">
@@ -719,12 +731,15 @@ function StandsPage({ stands, onAdd, onEdit, onDelete }) {
       {!stands.length && <Empty>No stands yet — click "Add stand" to place one on the map.</Empty>}
       <div className="list-grid">
         {stands.map((s) => (
-          <div key={s.id} className="list-card">
+          <div key={s.id} className="list-card" style={!s.is_active ? { opacity: 0.55 } : undefined}>
             <div className="list-card-map">
               <MiniMap kind="stand" feature={{ lat: s.lat, lon: s.lon }} height={110} />
             </div>
             <div className="list-card-body">
-              <div className="list-card-name">{s.name || "Unnamed stand"}</div>
+              <div className="list-card-name">
+                {s.name || "Unnamed stand"}
+                {!s.is_active && <span className="cam-stub-badge" style={{ marginLeft: 6 }}>inactive</span>}
+              </div>
               <div className="list-card-sub">
                 {(+s.lat).toFixed(4)}, {(+s.lon).toFixed(4)}
                 {s.terrain && <> · {s.terrain.elevation}m · drains {degToCompass(s.terrain.drainage_deg)}</>}
@@ -734,6 +749,10 @@ function StandsPage({ stands, onAdd, onEdit, onDelete }) {
             </div>
             <div className="list-card-actions">
               {s.terrain && <Mountain size={13} color="var(--green)" title={"terrain: " + s.terrain.source} />}
+              <button className="icon-btn" title={s.is_active ? "Disable stand" : "Enable stand"}
+                onClick={() => onToggle(s)}>
+                {s.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+              </button>
               <button className="icon-btn" onClick={() => onEdit(s)}><Edit3 size={15} /></button>
               <button className="icon-btn" onClick={() => onDelete(s.id)}><Trash2 size={15} /></button>
             </div>
@@ -791,11 +810,21 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
   }, [editing && editing.id]);
   async function save() {
     const g = geom || { lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m };
-    const body = { kind, name: editing.name || null, lat: g.lat, lon: g.lon, radius_m: +g.radius_m };
+    const body = { kind, name: editing.name || null, lat: g.lat, lon: g.lon, radius_m: +g.radius_m,
+                   is_active: editing.is_active !== false };
     if (kind === "food") body.quality = editQuality;
     try {
       await api(`/zones/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       setEditing(null); reload();
+    } catch {}
+  }
+  async function toggleZone(z) {
+    try {
+      await api(`/zones/${z.id}`, { method: "PUT", body: JSON.stringify({
+        kind: z.kind, name: z.name || null, lat: z.lat, lon: z.lon,
+        radius_m: z.radius_m, is_active: !z.is_active, quality: z.quality ?? null,
+      })});
+      reload();
     } catch {}
   }
   const noun = kind === "food" ? "food zone" : "bedding zone";
@@ -808,16 +837,23 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
       {!zones.length && <Empty>No {noun}s yet — click "Add" to draw one on the map.</Empty>}
       <div className="list-grid">
         {zones.map((z) => (
-          <div key={z.id} className="list-card">
+          <div key={z.id} className="list-card" style={!z.is_active ? { opacity: 0.55 } : undefined}>
             <div className="list-card-map"><MiniMap kind={kind} feature={{ lat: z.lat, lon: z.lon, radius_m: z.radius_m }} height={110} /></div>
             <div className="list-card-body">
-              <div className="list-card-name">{z.name || `Unnamed ${noun}`}</div>
+              <div className="list-card-name">
+                {z.name || `Unnamed ${noun}`}
+                {!z.is_active && <span className="cam-stub-badge" style={{ marginLeft: 6 }}>inactive</span>}
+              </div>
               <div className="list-card-sub">
                 {(+z.lat).toFixed(4)}, {(+z.lon).toFixed(4)} · {z.radius_m} m radius
                 {kind === "food" && <> · Quality {z.quality ?? 5}/10</>}
               </div>
             </div>
             <div className="list-card-actions">
+              <button className="icon-btn" title={z.is_active ? "Disable zone" : "Enable zone"}
+                onClick={() => toggleZone(z)}>
+                {z.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+              </button>
               <button className="icon-btn" onClick={() => setEditing({ ...z })}><Edit3 size={15} /></button>
               <button className="icon-btn" onClick={async () => { await api(`/zones/${z.id}`, { method: "DELETE" }); reload(); }}><Trash2 size={15} /></button>
             </div>
@@ -849,6 +885,11 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
               <MiniMap kind={kind} editable height={240} feature={{ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }} onChange={(g) => setGeom(g)} />
             </div>
             {geom && <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{geom.lat.toFixed(5)}, {geom.lon.toFixed(5)} · {Math.round(geom.radius_m)} m radius</div>}
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14 }}>
+              <input type="checkbox" checked={editing.is_active !== false}
+                onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} />
+              Active — contributes to stand rankings this season
+            </label>
             <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn btn-primary" onClick={save}><Save size={15} /> Save</button>
               {onMoveOnMap && editing.id && <button className="btn" onClick={() => { onMoveOnMap(editing.kind || kind, editing.id); setEditing(null); }}><MapPin size={14} /> Move on Map</button>}
@@ -877,10 +918,22 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
     try {
       await api(`/corridors/${editing.id}`, { method: "PUT", body: JSON.stringify({
         name: editing.name || null, points: pts,
+        is_active: editing.is_active !== false,
         usage: editUsage,
         falloff_m: editFalloff !== "" && editFalloff != null ? +editFalloff : null,
       }) });
       setEditing(null); reload();
+    } catch {}
+  }
+  async function toggleCorridor(c) {
+    try {
+      await api(`/corridors/${c.id}`, { method: "PUT", body: JSON.stringify({
+        name: c.name || null, points: c.points,
+        is_active: !c.is_active,
+        usage: c.usage ?? 5,
+        falloff_m: c.falloff_m ?? null,
+      })});
+      reload();
     } catch {}
   }
   return (
@@ -892,16 +945,23 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
       {!corridors.length && <Empty>No corridors yet — click "Add corridor" to trace one on the map.</Empty>}
       <div className="list-grid">
         {corridors.map((c) => (
-          <div key={c.id} className="list-card">
+          <div key={c.id} className="list-card" style={!c.is_active ? { opacity: 0.55 } : undefined}>
             <div className="list-card-map"><MiniMap kind="corridor" feature={{ points: c.points }} height={110} /></div>
             <div className="list-card-body">
-              <div className="list-card-name">{c.name || "Unnamed corridor"}</div>
+              <div className="list-card-name">
+                {c.name || "Unnamed corridor"}
+                {!c.is_active && <span className="cam-stub-badge" style={{ marginLeft: 6 }}>inactive</span>}
+              </div>
               <div className="list-card-sub">
                 {c.points.length} points · Usage {c.usage ?? 5}/10
                 {c.falloff_m != null ? ` · ${Math.round(c.falloff_m)}m falloff` : " · global falloff"}
               </div>
             </div>
             <div className="list-card-actions">
+              <button className="icon-btn" title={c.is_active ? "Disable corridor" : "Enable corridor"}
+                onClick={() => toggleCorridor(c)}>
+                {c.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+              </button>
               <button className="icon-btn" onClick={() => setEditing({ ...c })}><Edit3 size={15} /></button>
               <button className="icon-btn" onClick={async () => { await api(`/corridors/${c.id}`, { method: "DELETE" }); reload(); }}><Trash2 size={15} /></button>
             </div>
@@ -940,6 +1000,11 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
               <MiniMap kind="corridor" editable height={240} feature={{ points: editing.points }} onChange={(g) => setGeom(g)} />
             </div>
             <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{((geom && geom.points) || editing.points).length} points</div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14 }}>
+              <input type="checkbox" checked={editing.is_active !== false}
+                onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} />
+              Active — contributes to stand rankings this season
+            </label>
             <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn btn-primary" onClick={save}><Save size={15} /> Save</button>
               {onMoveOnMap && editing.id && <button className="btn" onClick={() => { onMoveOnMap("corridor", editing.id); setEditing(null); }}><MapPin size={14} /> Move on Map</button>}
@@ -1836,7 +1901,7 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
     if (!valid) return; setLoading(true); setErr(null);
     try {
       let id = savedId;
-      const body = { name: s.name, lat: +s.lat, lon: +s.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg };
+      const body = { name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg };
       if (!id) { const created = await api("/stands", { method: "POST", body: JSON.stringify(body) }); id = created.id; setSavedId(id); }
       else { await api(`/stands/${id}`, { method: "PUT", body: JSON.stringify(body) }); }
       const updated = await api(`/stands/${id}/terrain`, { method: "POST" });
@@ -1872,9 +1937,14 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
         <DirPicker label="Deer approach from (optional)" value={s.deer_approach_deg} onChange={(d) => setS({ ...s, deer_approach_deg: d })} allowNull />
       </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
+        <input type="checkbox" checked={s.is_active !== false}
+          onChange={(e) => setS({ ...s, is_active: e.target.checked })} />
+        Active — included in rankings and map scoring
+      </label>
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
         <button className="btn btn-primary" disabled={!valid}
-          onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg }, savedId)}>
+          onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg }, savedId)}>
           <Save size={15} /> Save stand
         </button>
         {onMoveOnMap && <button className="btn" onClick={() => { onMoveOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Move on Map</button>}
