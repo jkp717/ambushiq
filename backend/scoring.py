@@ -95,9 +95,18 @@ def score_stand_hour(stand: dict, hour: dict) -> dict:
         steadiness -= 0.3
     steadiness = max(0.0, steadiness)
 
-    total = scent_score * 0.6 + steadiness * 0.25 + (0.15 if therm["phase"] != "neutral" else 0.05)
+    # "conditions" score: wind steadiness + thermal predictability (0..1).
+    # Scent direction is NOT included here — it is applied as a hard multiplicative
+    # gate in score_with_breakdown so that bad scent can never be rescued by
+    # proximity bonuses or trail-camera data.
+    conditions = steadiness * 0.7 + (0.3 if therm["phase"] != "neutral" else 0.1)
+
+    # "total" = conditions × scent — used for per-hour map display scores only.
+    total = conditions * scent_score
+
     return {
         "total": round(total, 3),
+        "conditions": round(conditions, 3),  # pre-scent, consumed by score_with_breakdown
         "scent_score": round(scent_score, 2),
         "steadiness": round(steadiness, 2),
         "scent_to_deg": round(scent_to),
@@ -195,27 +204,18 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
     uses local time rather than UTC.
     """
     base = score_stand_hour(stand, hour)
-    base_total = base["total"]
 
     breakdown = []
-    # wind / scent alignment
-    if stand.get("deer_approach_deg") is not None:
-        if base["scent_score"] > 0.6:
-            wtxt = "scent carries away from expected deer approach"
-        elif base["scent_score"] > 0.35:
-            wtxt = "scent crosses the deer approach"
-        else:
-            wtxt = "scent blows toward deer"
-    else:
-        wtxt = "no deer-approach set; scent direction only"
-    breakdown.append({"factor": "Wind / scent", "value": base["scent_score"],
-                      "text": f"{wtxt} (scent to {base['scent_to_deg']}°)"})
+
+    # ── Additive factors: steadiness + thermal predictability ──────────────
     breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],
-                      "text": f"gust steadiness {base['steadiness']}"})
+                      "text": f"speed {hour['wind_speed']} mph, gust steadiness {base['steadiness']:.2f}"})
     breakdown.append({"factor": "Terrain / thermals", "value": 1.0 if base["thermal_phase"] != "neutral" else 0.3,
                       "text": f"thermals {base['thermal_phase']}, drainage {base['drainage_deg']}°"})
 
-    total = base_total
+    # Start total from the pre-scent conditions score so that proximity and
+    # camera boosts are accumulated before the scent gate is applied.
+    total = base["conditions"]
     prox_total = 0.0
     if proximity:
         prox_total = float(proximity.get("total") or 0.0)
@@ -231,9 +231,26 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         breakdown.append({"factor": "Trail-camera boost", "value": cam["boost_pct"] / 100.0,
                           "text": cam["text"]})
 
+    # ── Scent gate: applied last so it overrides all other factors ─────────
+    # A stand where scent blows into the deer approach can never outscore one
+    # with favourable scent direction, regardless of proximity or camera data.
+    if stand.get("deer_approach_deg") is not None:
+        if base["scent_score"] > 0.6:
+            stxt = "scent carries away from expected deer approach"
+        elif base["scent_score"] > 0.35:
+            stxt = "scent crosses the deer approach"
+        else:
+            stxt = "scent blows toward deer — gates all other factors"
+    else:
+        stxt = "no deer-approach set; scent direction only"
+    breakdown.append({"factor": "Scent direction (gate)", "value": base["scent_score"],
+                      "text": f"{stxt} (blending to {base['scent_to_deg']}°)"})
+
+    total = round(total * base["scent_score"], 3)
+
     return {
-        "final_score": round(total, 3),
-        "base_score": round(base_total, 3),
+        "final_score": total,
+        "base_score": round(base["total"], 3),
         "proximity_bonus": round(prox_total, 3),
         "camera": cam,
         "breakdown": breakdown,
