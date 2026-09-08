@@ -48,14 +48,23 @@ function standIcon(vectors, rank) {
     : "";
 
   const ring = rank === 0 ? `<circle cx="${c}" cy="${c}" r="11" fill="none" stroke="${COLORS.stand}" stroke-width="2.5"/>` : "";
-  const html = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="overflow:visible">
-    ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, 30, 3) : ""}
-    ${vectors.thermal_to_deg != null ? arrow(vectors.thermal_to_deg, COLORS.thermal, true, 24, 2.5) : ""}
-    ${deerArrow}
-    ${ring}
-    <circle cx="${c}" cy="${c}" r="5.5" fill="${COLORS.stand}" stroke="#fff" stroke-width="1.5"/>
-  </svg>`;
-  return L.divIcon({ html, className: "stand-div-icon", iconSize: [size, size], iconAnchor: [c, c] });
+  // The clickable hit-area is a small div (dotPx × dotPx) centered on the stand dot.
+  // The SVG is absolutely offset so its visual center aligns with the div center, but
+  // pointer-events:none on the SVG means only the tiny div registers clicks — arrows
+  // don't expand the selection area.
+  const dotPx = 14, dotHalf = dotPx / 2;
+  const svgOff = dotHalf - c; // negative: shifts SVG up-left so (c,c) lands at (dotHalf,dotHalf)
+  const html = `<div style="position:relative;width:${dotPx}px;height:${dotPx}px;overflow:visible">
+    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"
+      style="overflow:visible;position:absolute;left:${svgOff}px;top:${svgOff}px;pointer-events:none">
+      ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, 30, 3) : ""}
+      ${vectors.thermal_to_deg != null ? arrow(vectors.thermal_to_deg, COLORS.thermal, true, 24, 2.5) : ""}
+      ${deerArrow}
+      ${ring}
+      <circle cx="${c}" cy="${c}" r="5.5" fill="${COLORS.stand}" stroke="#fff" stroke-width="1.5"/>
+    </svg>
+  </div>`;
+  return L.divIcon({ html, className: "stand-div-icon", iconSize: [dotPx, dotPx], iconAnchor: [dotHalf, dotHalf] });
 }
 
 // Build a popup with edit/delete buttons and wire them up after it opens.
