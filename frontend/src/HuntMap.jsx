@@ -159,12 +159,21 @@ export default function HuntMap({
     const g = layerGroups.current.zones; g.clearLayers();
     if (!layers.zones) return;
     zones.forEach((z) => {
+      const active = !!z.is_active;
+      const baseColor = COLORS[z.kind] || "#888";
       const circle = L.circle([z.lat, z.lon], {
-        radius: z.radius_m, color: COLORS[z.kind] || "#888", fillColor: COLORS[z.kind] || "#888",
-        fillOpacity: 0.18, weight: 2, interactive: !drawMode,
+        radius: z.radius_m,
+        color:       active ? baseColor : "#888",
+        fillColor:   active ? baseColor : "#888",
+        fillOpacity: active ? 0.18 : 0.04,
+        opacity:     active ? 1    : 0.4,
+        weight:      active ? 2    : 1.5,
+        dashArray:   active ? null : "6 5",
+        interactive: !drawMode,
       });
       if (!drawMode) bindFeaturePopup(circle, {
-        title: z.name || `${z.kind} zone`, subtitle: `${z.kind} · ${z.radius_m} m`,
+        title: z.name || `${z.kind} zone`,
+        subtitle: `${z.kind} · ${z.radius_m} m${active ? "" : " · inactive"}`,
         kind: z.kind === "food" ? "food" : "bedding", id: z.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });
       circle.addTo(g);
