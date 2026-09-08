@@ -3,6 +3,16 @@ import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, M
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
+/* ───────── timezone-aware "today" helper ───────── */
+// Returns the current date as a YYYY-MM-DD string in the property's local
+// timezone.  utcOffsetSeconds comes from Open-Meteo's forecast response for the
+// property coordinates (utc_offset_seconds field).  Using it avoids the UTC
+// calendar-date mismatch that occurs during the 5–8 hour UTC→local midnight gap
+// common for US hunting properties.
+function localDate(utcOffsetSeconds = 0) {
+  return new Date(Date.now() + utcOffsetSeconds * 1000).toISOString().slice(0, 10);
+}
+
 /* ───────── compass helpers ───────── */
 const DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
 const degToCompass = (d) => DIRS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
@@ -228,13 +238,18 @@ function TodayPage({ stands, onGoDraw }) {
   const [selectedDay, setSelectedDay] = useState(null);
   const [dayRanked, setDayRanked] = useState(null);
   const [useProx, setUseProx] = useState({ corridor: true, food: true, bedding: true });
+  const [utcOffset, setUtcOffset] = useState(0);
   const [err, setErr] = useState(null);
 
   useEffect(() => {
     if (!stands.length) return;
     api("/deer-ratings").then((j) => {
       setDeerRatings(j.ratings);
-      const today = new Date().toISOString().slice(0, 10);
+      // Use the property's UTC offset so "today" matches the local calendar date
+      // on the property rather than the UTC date in the browser or on the server.
+      const ofs = j.utc_offset_seconds ?? 0;
+      setUtcOffset(ofs);
+      const today = localDate(ofs);
       const hit = j.ratings.find((r) => r.day === today);
       setSelectedDay(hit ? today : j.ratings[0]?.day ?? null);
     }).catch(() => setErr("Couldn't load deer ratings."));
@@ -276,7 +291,7 @@ function TodayPage({ stands, onGoDraw }) {
 
       {/* Hero */}
       {selectedRating
-        ? <HeroCard rating={selectedRating} />
+        ? <HeroCard rating={selectedRating} utcOffset={utcOffset} />
         : <div className="hero-skeleton"><RefreshCw className="spin" size={20} /></div>}
 
       {/* 14-day strip */}
@@ -284,7 +299,7 @@ function TodayPage({ stands, onGoDraw }) {
         <section>
           <div className="section-label">14-Day Outlook</div>
           <OutlookStrip ratings={deerRatings} selectedDay={selectedDay}
-            loadableDays={loadableDays} onPick={setSelectedDay} />
+            loadableDays={loadableDays} onPick={setSelectedDay} utcOffset={utcOffset} />
         </section>
       )}
 
@@ -305,11 +320,11 @@ function TodayPage({ stands, onGoDraw }) {
 }
 
 /* ── Hero card ── */
-function HeroCard({ rating }) {
+function HeroCard({ rating, utcOffset = 0 }) {
   const r = rating.rating;
   const tone = r >= 4 ? "var(--green)" : r === 3 ? "var(--amber)" : "var(--red)";
   const label = r >= 4 ? "Great Movement" : r === 3 ? "Moderate Movement" : r >= 2 ? "Poor Movement" : "Very Poor Movement";
-  const isToday = rating.day === new Date().toISOString().slice(0, 10);
+  const isToday = rating.day === localDate(utcOffset);
   const inp = rating.inputs || {};
   return (
     <div className="hero-card" style={{ borderTopColor: tone }}>
@@ -334,8 +349,8 @@ function WeatherPill({ icon, label }) {
 }
 
 /* ── 14-day horizontal strip ── */
-function OutlookStrip({ ratings, selectedDay, loadableDays, onPick }) {
-  const today = new Date().toISOString().slice(0, 10);
+function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 0 }) {
+  const today = localDate(utcOffset);
   const scrollRef = useRef(null);
   const drag = useRef({ active: false, startX: 0, scrollLeft: 0, moved: false });
 
@@ -442,6 +457,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
   const [days, setDays] = useState([]);
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
+  const [utcOffset, setUtcOffset] = useState(0);
   const [conditions, setConditions] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [drawMode, setDrawMode] = useState(null);
@@ -460,10 +476,17 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
     if (!stands.length) return;
     api("/hours").then((j) => {
       setDays(j.days || []);
-      const now = new Date();
+      // Apply the property's UTC offset so both the date comparison and the
+      // current-hour lookup use property local time rather than the browser's
+      // clock timezone (which may differ) or a bare UTC date.
+      const ofs = j.utc_offset_seconds ?? 0;
+      setUtcOffset(ofs);
+      const localNow = new Date(Date.now() + ofs * 1000);
+      const todayStr  = localNow.toISOString().slice(0, 10);
+      const localHour = localNow.getUTCHours(); // after offset shift, UTC hours = local hours
       for (let d = 0; d < j.days.length; d++) {
-        const hi = j.days[d].hours.findIndex((h) => h.hour === now.getHours());
-        if (j.days[d].day === now.toISOString().slice(0, 10) && hi >= 0) { setDayIdx(d); setHourPos(hi); break; }
+        const hi = j.days[d].hours.findIndex((h) => h.hour === localHour);
+        if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi); break; }
       }
     }).catch(() => setErr("Couldn't load forecast."));
   }, [stands.length]);
@@ -1499,7 +1522,34 @@ function SettingsPage() {
         </div>
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save all settings"}</button>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+      </div>
+
+      {/* ── Property timezone ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 24 }}>
+        🕐 Property timezone
+      </div>
+      <p className="settings-desc">
+        Timezone where your hunting property is located. Keeps "Today" labels,
+        stand rankings, and the nightly cleanup job aligned with local time rather
+        than the server's UTC clock.
+      </p>
+      <div className="settings-section">
+        <Field label="Timezone">
+          <select value={s.property_timezone ?? "America/Chicago"}
+            onChange={(e) => setS({ ...s, property_timezone: e.target.value })}>
+            <option value="America/New_York">Eastern — New York, Atlanta, Miami (ET)</option>
+            <option value="America/Chicago">Central — Chicago, Dallas, Kansas City (CT)</option>
+            <option value="America/Denver">Mountain — Denver, Salt Lake City (MT)</option>
+            <option value="America/Phoenix">Mountain no-DST — Phoenix (MST year-round)</option>
+            <option value="America/Los_Angeles">Pacific — Los Angeles, Seattle (PT)</option>
+            <option value="America/Anchorage">Alaska (AKT)</option>
+            <option value="Pacific/Honolulu">Hawaii (no DST)</option>
+          </select>
+        </Field>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
       </div>
     </div>
   );

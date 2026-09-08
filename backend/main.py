@@ -9,7 +9,8 @@ import time
 import asyncio
 
 log = logging.getLogger(__name__)
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 import httpx
@@ -64,6 +65,7 @@ DEFAULT_SETTINGS = {
     "rut_peak_month": 12,
     "rut_peak_day": 5,
     "camera_image_dir": CAMERA_IMAGE_DIR,
+    "property_timezone": "America/Chicago",
 }
 
 
@@ -105,6 +107,33 @@ def decrypt_credentials(blob: Optional[str]) -> dict:
         return json.loads(_fernet().decrypt(blob.encode()).decode())
     except Exception:
         return {}
+
+
+def _to_utc_iso(ts_str: str, prop_tz_name: str) -> str:
+    """Normalize a raw camera provider timestamp to a UTC ISO string.
+
+    Camera providers may return naive local-time strings with no offset.  If no
+    timezone info is present the value is treated as property local time and
+    converted to UTC using the configured property_timezone.  Strings that already
+    carry an explicit UTC offset (Z or ±HH:MM) are simply converted to UTC.
+    Falls back to the original string if parsing fails so existing deduplication
+    based on the raw string still works.
+    """
+    if not ts_str:
+        return ts_str
+    s = str(ts_str).strip()
+    try:
+        normalized = s[:-1] + "+00:00" if s.upper().endswith("Z") else s
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            try:
+                tz: timezone | ZoneInfo = ZoneInfo(prop_tz_name)
+            except Exception:
+                tz = timezone.utc
+            dt = dt.replace(tzinfo=tz)  # type: ignore[arg-type]
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return s
 
 
 class Base(DeclarativeBase):
@@ -732,13 +761,18 @@ async def list_hours(_=Depends(require_token)):
         days[day]["hours"].append({"index": idx, "hour": dt.hour,
                                    "label": dt.strftime("%-I %p").lower()})
     from datetime import date as _date
+    # Derive the property's local "today" from the forecast's UTC offset so that
+    # confidence flags stay correct during the UTC-to-local-midnight gap (up to 8h
+    # wide for US timezones) when the server's UTC clock is already "tomorrow".
+    utc_offset = int(fc.get("utc_offset_seconds", 0))
+    local_today = (datetime.now(timezone.utc) + timedelta(seconds=utc_offset)).date()
     day_list = list(days.values())
     for dd in day_list:
         y, m, dnum = (int(x) for x in dd["day"].split("-"))
-        days_out = (_date(y, m, dnum) - _date.today()).days
+        days_out = (_date(y, m, dnum) - local_today).days
         dd["confidence"] = "high" if days_out <= 7 else "low"
         dd["days_out"] = days_out
-    return {"days": day_list}
+    return {"days": day_list, "utc_offset_seconds": utc_offset}
 
 
 @app.post("/api/map/conditions")
@@ -957,6 +991,7 @@ class SettingsIn(BaseModel):
     rut_peak_month: float | None = None
     rut_peak_day: float | None = None
     camera_image_dir: str | None = None
+    property_timezone: str | None = None
 
 
 @app.get("/api/settings")
@@ -978,9 +1013,11 @@ def write_settings(body: SettingsIn, _=Depends(require_token)):
                 s.add(Setting(key=k, value=str_val))
         s.commit()
     result = get_settings()
-    # Live-reschedule the sync job if the interval changed — no restart required.
+    # Live-reschedule jobs when relevant settings change — no restart required.
     if body.camera_sync_interval_minutes is not None:
         _reschedule_sync(int(body.camera_sync_interval_minutes) or 30)
+    if body.property_timezone is not None:
+        _reschedule_cleanup_tz(body.property_timezone)
     return result
 
 
@@ -1025,6 +1062,7 @@ def write_home(body: HomeIn, _=Depends(require_token)):
 async def deer_ratings(_=Depends(require_token)):
     """1-5 deer movement rating per forecast day, optimized for daytime movement."""
     from datetime import date as _date
+    # local_today derived from the forecast UTC offset below, after fc is fetched.
     with Session(engine) as s:
         first = s.scalars(select(Stand).order_by(Stand.name)).first()
         if not first:
@@ -1034,6 +1072,10 @@ async def deer_ratings(_=Depends(require_token)):
     h = fc["hourly"]
     sun = fc["daily"]
     times = h["time"]
+    # Derive today in property-local time from the forecast's UTC offset so that
+    # confidence flags and days_out are correct during the evening UTC↔local gap.
+    _utc_offset = int(fc.get("utc_offset_seconds", 0))
+    _local_today = (datetime.now(timezone.utc) + timedelta(seconds=_utc_offset)).date()
     _set = get_settings()
     rate_weights = {
         "pressure": _set.get("rate_w_pressure"), "wind": _set.get("rate_w_wind"),
@@ -1106,13 +1148,15 @@ async def deer_ratings(_=Depends(require_token)):
         label = datetime.fromisoformat(dk + "T12:00").strftime("%a %b %-d")
         rating["day"] = dk
         rating["label"] = label
-        # weather forecast is reliable ~7 days; flag beyond that
-        days_out = (_date(y, m, d) - _date.today()).days
+        # weather forecast is reliable ~7 days; flag beyond that.
+        # Use property-local today (derived from utc_offset_seconds) so the
+        # confidence flag doesn't flip prematurely during the evening UTC↔local gap.
+        days_out = (_date(y, m, d) - _local_today).days
         rating["confidence"] = "high" if days_out <= 7 else "low"
         rating["days_out"] = days_out
         out.append(rating)
 
-    return {"ratings": out}
+    return {"ratings": out, "utc_offset_seconds": _utc_offset}
 
 
 # ---------- v2.15: trail cameras ----------
@@ -1248,6 +1292,9 @@ async def _sync_one_camera(camera_id: int) -> int:
             ).all()
         )
 
+    # Resolve the property timezone once for taken_at normalization below.
+    prop_tz_name = str(get_settings().get("property_timezone") or "America/Chicago")
+
     # Parse last_sync_at into a timezone-aware datetime to send as `since` to the provider.
     # This means we only fetch new photos since the last successful sync rather than re-fetching
     # everything each time — important once a camera has accumulated thousands of photos.
@@ -1277,7 +1324,13 @@ async def _sync_one_camera(camera_id: int) -> int:
             url = p.get("url")
             if not url:
                 continue
-            taken_at = p.get("taken_at")
+            # Normalize taken_at to a UTC ISO string before any deduplication or
+            # storage.  Camera providers (especially SpyPoint) may return naive
+            # local-time strings with no UTC offset.  _to_utc_iso treats those as
+            # property local time and converts them so all stored timestamps are
+            # consistently UTC, matching created_at / last_sync_at.
+            raw_taken = p.get("taken_at")
+            taken_at = _to_utc_iso(str(raw_taken), prop_tz_name) if raw_taken else None
 
             # Require a timestamp for reliable deduplication and period matching.
             # Photos without taken_at can't be deduplicated (they'd re-process every sync)
@@ -1395,6 +1448,26 @@ def _reschedule_sync(interval_minutes: int) -> None:
         pass  # best-effort; scheduler may not be running yet
 
 
+def _reschedule_cleanup_tz(tz_name: str) -> None:
+    """Update the nightly cleanup job's fire-time timezone without restarting.
+    Called from write_settings when property_timezone changes so the 3 AM cron
+    fires at 3 AM in the new local timezone instead of UTC."""
+    if _scheduler is None:
+        return
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("America/Chicago")
+        _scheduler.reschedule_job(
+            "auto_cleanup",
+            trigger=CronTrigger(hour=3, minute=0, timezone=tz),
+        )
+    except Exception:
+        pass  # best-effort
+
+
 def start_scheduler():
     """Start APScheduler with the sync + cleanup jobs. Lazy import so app boots even
     if apscheduler isn't installed (jobs simply won't run)."""
@@ -1409,10 +1482,14 @@ def start_scheduler():
         return
     settings = get_settings()
     interval = int(settings.get("camera_sync_interval_minutes", 30)) or 30
+    try:
+        prop_tz: ZoneInfo | timezone = ZoneInfo(str(settings.get("property_timezone") or "America/Chicago"))
+    except Exception:
+        prop_tz = ZoneInfo("America/Chicago")
     sched = AsyncIOScheduler()
     sched.add_job(sync_cameras_job, IntervalTrigger(minutes=interval), id="sync_cameras",
                   replace_existing=True, max_instances=1)
-    sched.add_job(auto_cleanup_job, CronTrigger(hour=3, minute=0), id="auto_cleanup",
+    sched.add_job(auto_cleanup_job, CronTrigger(hour=3, minute=0, timezone=prop_tz), id="auto_cleanup",
                   replace_existing=True, max_instances=1)
     sched.start()
     _scheduler = sched

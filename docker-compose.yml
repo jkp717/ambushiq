@@ -31,7 +31,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - camera_images:/app/data/camera_images
+      - ${CAMERA_IMAGE_PATH:-./data/camera_images}:/app/data/camera_images
     # Published to the host so your existing nginx reverse proxy can reach it.
     # APP_BIND defaults to 127.0.0.1 (loopback only) — correct when nginx runs on
     # the same host. If nginx is on a different machine, set APP_BIND=0.0.0.0 in
@@ -41,4 +41,3 @@ services:
 
 volumes:
   dbdata:
-  camera_images:
