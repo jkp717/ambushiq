@@ -306,6 +306,13 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   display: flex; justify-content: space-between;
   font-size: 10.5px; color: var(--sub); margin-bottom: 8px;
 }
+/* thermal-switch markers on the period band */
+.map-thermal-marker {
+  position: absolute; top: 0;
+  transform: translateX(-50%);
+  font-size: 8px; line-height: 8px;
+  cursor: default; user-select: none;
+}
 
 /* time + weather row */
 .map-time-row {

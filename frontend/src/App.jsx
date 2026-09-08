@@ -451,13 +451,13 @@ function DayDetailPanel({ rating, day, dayRanked, useProx, setUseProx }) {
   );
 }
 
-/* ── helper: index in day.hours closest to 15 min before sunrise ── */
+/* ── helper: slot position (quarter-hour units) closest to 15 min before sunrise ── */
 function morningStartIdx(day) {
   if (!day) return 0;
   const targetH = Math.max(0, (day.sunrise_h ?? 6.5) - 0.25);
   let best = 0, bestDist = Infinity;
   day.hours.forEach((h, i) => { const d = Math.abs(h.hour - targetH); if (d < bestDist) { bestDist = d; best = i; } });
-  return best;
+  return best * 4; // return in quarter-hour slot units
 }
 
 /* ════════════════════════════════════════════════════
@@ -498,24 +498,27 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
       const localHour = localNow.getUTCHours(); // after offset shift, UTC hours = local hours
       for (let d = 0; d < j.days.length; d++) {
         const hi = j.days[d].hours.findIndex((h) => h.hour === localHour);
-        if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi); break; }
+        if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi * 4); break; }
       }
     }).catch(() => setErr("Couldn't load forecast."));
   }, [stands.length]);
 
-  const curDay  = days[dayIdx];
-  const curHour = curDay?.hours[Math.min(hourPos, (curDay?.hours.length || 1) - 1)];
-  const maxHour = (curDay?.hours.length || 1) - 1;
+  const curDay     = days[dayIdx];
+  const maxHour    = (curDay?.hours.length || 1) - 1;
+  const maxSlot    = (curDay?.hours.length || 1) * 4 - 1;
+  const curHourIdx = curDay ? Math.min(Math.floor(hourPos / 4), maxHour) : 0;
+  const curMinute  = (hourPos % 4) * 15;
+  const curHour    = curDay?.hours[curHourIdx];
 
   // pause when day changes
   useEffect(() => { setPlaying(false); }, [dayIdx]);
 
-  // play loop — advances one hour every 750 ms
+  // play loop — advances one 15-min slot every 750 ms
   useEffect(() => {
     if (!playing || !curDay) return;
     const id = setInterval(() => {
       setHourPos((p) => {
-        const max = curDay.hours.length - 1;
+        const max = curDay.hours.length * 4 - 1;
         if (p >= max) { setPlaying(false); return p; }
         return p + 1;
       });
@@ -617,32 +620,42 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
             </button>
           </div>
 
-          {/* Row 2: slider + period band + tick labels */}
+          {/* Row 2: slider (15-min steps) + period band + thermal-switch markers + tick labels */}
           {curDay && (() => {
             const srH = curDay.sunrise_h ?? 6.5;
             const ssH = curDay.sunset_h ?? 19.5;
-            const hPct = (h) => `${Math.max(0, Math.min(100, (h / maxHour) * 100)).toFixed(1)}%`;
-            const hW   = (a, b) => `${Math.max(0, Math.min(100, ((b - a) / maxHour) * 100)).toFixed(1)}%`;
+            const numSlots = curDay.hours.length * 4;
+            // Convert a decimal-hour value to a left-% position on the slider track
+            const hPct = (h) => `${Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100)).toFixed(1)}%`;
+            const hW   = (a, b) => `${Math.max(0, Math.min(100, ((b - a) * 4 / (numSlots - 1)) * 100)).toFixed(1)}%`;
             const mStart = Math.max(0, srH - 0.25), mEnd = srH + 3;
             const eStart = ssH - 3, eEnd = Math.min(maxHour, ssH + 0.25);
             return (
               <>
                 <input type="range" className="map-hour-slider"
-                  min={0} max={maxHour}
-                  value={Math.min(hourPos, maxHour)}
+                  min={0} max={maxSlot}
+                  value={Math.min(hourPos, maxSlot)}
                   onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
                   onTouchMove={(e) => {
                     const t = e.touches[0];
                     const rect = e.target.getBoundingClientRect();
                     const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
                     setPlaying(false);
-                    setHourPos(Math.round(ratio * maxHour));
+                    setHourPos(Math.round(ratio * maxSlot));
                   }} />
-                {/* Period colour band */}
-                <div style={{ position: "relative", height: 5, borderRadius: 3, background: "var(--bord)", marginTop: 2, marginBottom: 3 }}>
-                  <div style={{ position: "absolute", left: hPct(mStart), width: hW(mStart, mEnd),  height: "100%", background: "#C28800", opacity: 0.75, borderRadius: 3 }} title="Morning" />
-                  <div style={{ position: "absolute", left: hPct(mEnd),   width: hW(mEnd, eStart),   height: "100%", background: "#1E7FB0", opacity: 0.75 }} title="Midday" />
-                  <div style={{ position: "absolute", left: hPct(eStart), width: hW(eStart, eEnd),   height: "100%", background: "#7A3FA0", opacity: 0.75, borderRadius: 3 }} title="Evening" />
+                {/* Period colour band + thermal-switch markers */}
+                <div style={{ position: "relative", height: 13, marginTop: 2, marginBottom: 1 }}>
+                  {/* Background track */}
+                  <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 5, borderRadius: 3, background: "var(--bord)" }} />
+                  {/* Period colour fills */}
+                  <div style={{ position: "absolute", top: 8, left: hPct(mStart), width: hW(mStart, mEnd),  height: 5, background: "#C28800", opacity: 0.75, borderRadius: 3 }} title="Morning" />
+                  <div style={{ position: "absolute", top: 8, left: hPct(mEnd),   width: hW(mEnd, eStart),   height: 5, background: "#1E7FB0", opacity: 0.75 }} title="Midday" />
+                  <div style={{ position: "absolute", top: 8, left: hPct(eStart), width: hW(eStart, eEnd),   height: 5, background: "#7A3FA0", opacity: 0.75, borderRadius: 3 }} title="Evening" />
+                  {/* Thermal-switch markers: ▲ rising, ▽ dropping */}
+                  <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
+                    title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
+                  <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
+                    title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
                 </div>
                 <div className="map-slider-ticks">
                   <span>{curDay.hours[0]?.label}</span>
@@ -656,7 +669,12 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
           {/* Row 3: big time + weather pills */}
           {curHour && (
             <div className="map-time-row">
-              <span className="map-time-big">{curHour.label}</span>
+              <span className="map-time-big">{
+                (() => {
+                  const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
+                  return `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`;
+                })()
+              }</span>
               {conditions && (
                 <div className="map-weather-pills">
                   <span className="map-wpill">☁ {conditions.time.cloud}%</span>
