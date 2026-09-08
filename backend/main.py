@@ -146,6 +146,7 @@ class Stand(Base):
     name: Mapped[str] = mapped_column(String(120))
     lat: Mapped[float] = mapped_column(Float)
     lon: Mapped[float] = mapped_column(Float)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     downhill_deg: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     deer_approach_deg: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     terrain_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -153,6 +154,7 @@ class Stand(Base):
     def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "lat": self.lat, "lon": self.lon,
+            "is_active": bool(self.is_active if self.is_active is not None else 1),
             "downhill_deg": self.downhill_deg, "deer_approach_deg": self.deer_approach_deg,
             "terrain": json.loads(self.terrain_json) if self.terrain_json else None,
         }
@@ -166,12 +168,14 @@ class Zone(Base):
     lat: Mapped[float] = mapped_column(Float)
     lon: Mapped[float] = mapped_column(Float)
     radius_m: Mapped[int] = mapped_column(Integer, default=80)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     # food-zone quality 1 (poor) – 10 (premium); scales proximity contribution via steeper curve
     quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "kind": self.kind, "name": self.name,
                 "lat": self.lat, "lon": self.lon, "radius_m": self.radius_m,
+                "is_active": bool(self.is_active if self.is_active is not None else 1),
                 "quality": self.quality}
 
 
@@ -179,6 +183,7 @@ class Corridor(Base):
     __tablename__ = "corridors"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     # usage frequency 1 (rarely used) – 10 (heavily used); scales proximity contribution
     usage: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
     # per-corridor falloff distance in metres; NULL → use global falloff_corridor setting
@@ -188,6 +193,7 @@ class Corridor(Base):
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name,
+                "is_active": bool(self.is_active if self.is_active is not None else 1),
                 "usage": self.usage if self.usage is not None else 5,
                 "falloff_m": self.falloff_m,
                 "points": json.loads(self.points_json)}
@@ -265,6 +271,14 @@ def init_db(retries: int = 30):
                     conn.commit()
                 except Exception:
                     pass
+                # v2.16.3: per-stand / per-zone / per-corridor active flag
+                try:
+                    conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
+                    conn.execute(text("ALTER TABLE zones ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
+                    conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
+                    conn.commit()
+                except Exception:
+                    pass
             return
         except Exception as e:
             if attempt == retries - 1:
@@ -322,6 +336,7 @@ class StandIn(BaseModel):
     name: str
     lat: float
     lon: float
+    is_active: bool = True
     downhill_deg: Optional[int] = None
     deer_approach_deg: Optional[int] = None
 
@@ -345,12 +360,14 @@ class ZoneIn(BaseModel):
     lat: float
     lon: float
     radius_m: int = 80
+    is_active: bool = True
     quality: Optional[int] = None  # food zones only; 1=poor … 10=premium
 
 
 class CorridorIn(BaseModel):
     name: Optional[str] = None
     points: list[list[float]]
+    is_active: bool = True
     usage: int = 5          # 1 = rarely used, 10 = heavily used
     falloff_m: Optional[float] = None  # None → inherit global falloff_corridor
 
@@ -395,7 +412,7 @@ def update_stand(stand_id: int, body: StandIn, _=Depends(require_token)):
             raise HTTPException(404, "not found")
         moved = (st.lat != body.lat) or (st.lon != body.lon)
         for k, v in body.model_dump().items():
-            setattr(st, k, v)
+            setattr(st, k, 1 if (k == "is_active" and v) else (0 if k == "is_active" else v))
         if moved:
             st.terrain_json = None  # invalidate cached terrain on move
         s.commit()
@@ -593,7 +610,7 @@ async def forecast_endpoint(_=Depends(require_token)):
 @app.post("/api/rank/sit")
 async def rank_sit(body: SitRankIn, _=Depends(require_token)):
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand)).all()]
+        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
         first = s.scalars(select(Stand).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "no stands")
@@ -625,7 +642,7 @@ async def rank_sit(body: SitRankIn, _=Depends(require_token)):
 @app.post("/api/rank/manual")
 def rank_manual(body: ManualRankIn, _=Depends(require_token)):
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand)).all()]
+        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
     wind_from = scoring.compass_to_deg(body.wind_dir)
     time_h = {"morning": 7, "midday": 13, "evening": 18}.get(body.period, 13)
     solar = 500 if body.period == "midday" else 50
@@ -663,7 +680,7 @@ def update_zone(zone_id: int, body: ZoneIn, _=Depends(require_token)):
         if not z:
             raise HTTPException(404, "not found")
         for k, v in body.model_dump().items():
-            setattr(z, k, v)
+            setattr(z, k, 1 if (k == "is_active" and v) else (0 if k == "is_active" else v))
         s.commit()
         s.refresh(z)
         return z.to_dict()
@@ -692,6 +709,7 @@ def create_corridor(body: CorridorIn, _=Depends(require_token)):
         raise HTTPException(400, "a corridor needs at least 2 points")
     with Session(engine) as s:
         c = Corridor(name=body.name, points_json=json.dumps(body.points),
+                     is_active=1 if body.is_active else 0,
                      usage=max(1, min(10, body.usage)), falloff_m=body.falloff_m)
         s.add(c)
         s.commit()
@@ -706,6 +724,7 @@ def update_corridor(corridor_id: int, body: CorridorIn, _=Depends(require_token)
         if not c:
             raise HTTPException(404, "not found")
         c.name = body.name
+        c.is_active = 1 if body.is_active else 0
         c.usage = max(1, min(10, body.usage))
         c.falloff_m = body.falloff_m
         if body.points and len(body.points) >= 2:
@@ -781,7 +800,7 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     in sync with that same hour. Drives the map indicators and the list together.
     Camera boost is applied when configured so the map rank matches /api/day/ranked."""
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand)).all()]
+        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
         first = s.scalars(select(Stand).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "no stands")
@@ -865,7 +884,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     return the full ranked list (by best period score) with each stand tagged for
     any period it wins."""
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand)).all()]
+        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
         first = s.scalars(select(Stand).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "no stands")
@@ -899,8 +918,8 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
 
     # proximity inputs
     with Session(engine) as s:
-        zones = [z.to_dict() for z in s.scalars(select(Zone)).all()]
-        corridors_l = [c.to_dict() for c in s.scalars(select(Corridor)).all()]
+        zones = [z.to_dict() for z in s.scalars(select(Zone).where(Zone.is_active == 1)).all()]
+        corridors_l = [c.to_dict() for c in s.scalars(select(Corridor).where(Corridor.is_active == 1)).all()]
     settings = get_settings()
     # honor the per-type enable toggles from the rank list
     settings = dict(settings)
