@@ -1765,6 +1765,10 @@ function SettingsPage() {
           value={s.camera_sync_interval_minutes ?? 30}
           display={`${Math.round(s.camera_sync_interval_minutes ?? 30)} min`}
           onChange={(v) => setS({ ...s, camera_sync_interval_minutes: v })} />
+        <SliderRow label="Backfill on first sync" min={1} max={90} step={1}
+          value={s.camera_backfill_days ?? 7}
+          display={`${Math.round(s.camera_backfill_days ?? 7)} days`}
+          onChange={(v) => setS({ ...s, camera_backfill_days: v })} />
         <SliderRow label="Max camera boost (per stand)" min={0} max={50} step={1}
           value={s.max_camera_boost_pct ?? 15}
           display={`+${Math.round(s.max_camera_boost_pct ?? 15)}%`}
