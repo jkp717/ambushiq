@@ -18,8 +18,11 @@ Treat SpyPoint as best-effort-real and expect to adjust once run against a real 
 from __future__ import annotations
 from typing import Optional
 import datetime as _dt
+import logging
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 
 class CameraError(Exception):
@@ -85,12 +88,18 @@ class SpyPointProvider(CameraProvider):
     async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
         out: list[dict] = []
         async with httpx.AsyncClient() as client:
+            log.info("SpyPoint: logging in as %s", self.credentials.get("username"))
             token = await self._login(client)
+            log.info("SpyPoint: login OK — fetching camera list")
             headers = {"Authorization": f"Bearer {token}"}
             cams = await client.get(f"{self.BASE}/api/v3/camera/all", headers=headers, timeout=30)
             cams.raise_for_status()
-            cam_ids = [c.get("id") for c in cams.json() if c.get("id")]
+            cam_list = cams.json()
+            cam_ids = [c.get("id") for c in cam_list if c.get("id")]
+            log.info("SpyPoint: found %d camera(s) on account: %s",
+                     len(cam_ids), [c.get("config", {}).get("name", c.get("id")) for c in cam_list])
             if not cam_ids:
+                log.warning("SpyPoint: no cameras on account — nothing to fetch")
                 return out
             payload: dict = {
                 "camera": cam_ids,
@@ -101,10 +110,13 @@ class SpyPointProvider(CameraProvider):
                 # Ensure UTC-aware; format as the SpyPoint API expects.
                 since_utc = since if since.tzinfo else since.replace(tzinfo=_dt.timezone.utc)
                 payload["dateBegin"] = since_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            log.info("SpyPoint: fetching photos with payload %s", payload)
             resp = await client.post(f"{self.BASE}/api/v3/photo/all", headers=headers,
                                      timeout=30, json=payload)
             resp.raise_for_status()
-            for p in resp.json().get("photos", []):
+            raw_photos = resp.json().get("photos", [])
+            log.info("SpyPoint: API returned %d photo(s)", len(raw_photos))
+            for p in raw_photos:
                 urls = p.get("urls") or {}
                 host = p.get("hd", {}).get("host") or urls.get("host")
                 path = p.get("hd", {}).get("path") or urls.get("path")
@@ -114,7 +126,10 @@ class SpyPointProvider(CameraProvider):
                 elif isinstance(urls.get("large"), str):
                     url = urls["large"]
                 taken = p.get("date") or p.get("originDate")
+                log.debug("SpyPoint: photo cam=%s taken=%s url=%s",
+                          p.get("camera"), taken, url[:80] if url else None)
                 out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("camera"))})
+        log.info("SpyPoint: returning %d photo(s) to sync engine", len(out))
         return out
 
 
