@@ -1,0 +1,19 @@
+{
+  "name": "AmbushIQ",
+  "short_name": "AmbushIQ",
+  "description": "Hunting stand ranking and wind/thermal scent analysis",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#0C447C",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
