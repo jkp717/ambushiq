@@ -8,6 +8,10 @@ import secrets
 import time
 import asyncio
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "WARNING").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 log = logging.getLogger(__name__)
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
