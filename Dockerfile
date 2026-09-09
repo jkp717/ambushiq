@@ -15,6 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# PytorchWildlife's yolov5 dependency uses `import pkg_resources` which was
+# removed in setuptools>=70. Create a minimal shim so the import succeeds
+# without downgrading setuptools (which would break modern torch packages).
+RUN python -c "\
+import site, os; \
+shim = 'import packaging.version\nparse_version = packaging.version.parse\n'; \
+open(os.path.join(site.getsitepackages()[0], 'pkg_resources.py'), 'w').write(shim)"
 COPY backend/ ./
 COPY VERSION ./VERSION
 COPY --from=frontend /build/dist ./static
