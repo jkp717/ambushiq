@@ -63,6 +63,7 @@ DEFAULT_SETTINGS = {
     # v2.15: trail-camera + rut-date settings
     "camera_sync_interval_minutes": 30,
     "image_retention_days": 60,
+    "camera_backfill_days": 7,
     "max_camera_boost_pct": 15.0,
     "rut_peak_month": 12,
     "rut_peak_day": 5,
@@ -1127,6 +1128,7 @@ class SettingsIn(BaseModel):
     max_camera_boost_pct: float | None = None
     camera_sync_interval_minutes: float | None = None
     image_retention_days: float | None = None
+    camera_backfill_days: float | None = None
     rut_peak_month: float | None = None
     rut_peak_day: float | None = None
     camera_image_dir: str | None = None
@@ -1393,8 +1395,8 @@ async def verify_camera(camera_id: int, _=Depends(require_token)):
 @app.post("/api/cameras/{camera_id}/sync")
 async def sync_camera_now(camera_id: int, _=Depends(require_token)):
     """Manually trigger a sync for one camera."""
-    n = await _sync_one_camera(camera_id)
-    return {"ok": True, "new_sightings": n}
+    result = await _sync_one_camera(camera_id)
+    return {"ok": True, **result}
 
 
 @app.get("/api/cameras/{camera_id}/sightings")
@@ -1414,9 +1416,10 @@ def camera_sightings(
         return [r.to_dict() for r in s.scalars(q).all()]
 
 
-async def _sync_one_camera(camera_id: int) -> int:
+async def _sync_one_camera(camera_id: int) -> dict:
     """Fetch recent photos for a camera, run detection, record positive sightings.
-    Returns count of new sightings. Best-effort: never raises to the scheduler."""
+    Returns a summary dict: {new, fetched, skipped_non_animal, detection_errors}.
+    Best-effort: never raises to the scheduler."""
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if not cam or not cam.is_active:
@@ -1435,8 +1438,9 @@ async def _sync_one_camera(camera_id: int) -> int:
     prop_tz_name = str(get_settings().get("property_timezone") or "America/Chicago")
 
     # Parse last_sync_at into a timezone-aware datetime to send as `since` to the provider.
-    # This means we only fetch new photos since the last successful sync rather than re-fetching
-    # everything each time — important once a camera has accumulated thousands of photos.
+    # First sync (last_sync_at is None): use camera_backfill_days so we fetch recent history
+    # without pulling every photo ever on the account. Subsequent syncs are incremental.
+    backfill_days = int(get_settings().get("camera_backfill_days", 7) or 7)
     since_dt = None
     if last_sync:
         try:
@@ -1444,20 +1448,29 @@ async def _sync_one_camera(camera_id: int) -> int:
             if since_dt.tzinfo is None:
                 since_dt = since_dt.replace(tzinfo=timezone.utc)
         except Exception:
-            pass  # malformed timestamp; fall back to full fetch
+            pass  # malformed timestamp; fall back to backfill window
+    if since_dt is None:
+        # First sync — start from backfill_days ago instead of the beginning of time.
+        since_dt = datetime.now(timezone.utc) - timedelta(days=backfill_days)
+        log.info("cam %s (%s): first sync — backfilling %d day(s)", camera_id, brand, backfill_days)
 
     try:
         prov = cameras_mod.get_provider(brand, creds)
         if not prov.implemented:
-            return 0
+            return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
         photos = await prov.fetch_recent_photos(since=since_dt)
-    except Exception:
-        return 0
+    except Exception as exc:
+        log.warning("cam %s (%s): fetch_recent_photos failed: %s: %s",
+                    camera_id, brand if 'brand' in dir() else "?", type(exc).__name__, exc)
+        return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
 
     # User-defined directory structure: [User defined directory]/[Camera Brand]/[Camera Name]/
     cam_dir = get_camera_dir(brand, camera_name)
     os.makedirs(cam_dir, exist_ok=True)
     new = 0
+    skipped_non_animal = 0
+    detection_errors = 0
+    fetched = 0
     async with httpx.AsyncClient() as client:
         for p in photos:
             url = p.get("url")
@@ -1482,12 +1495,16 @@ async def _sync_one_camera(camera_id: int) -> int:
             if taken_at in existing_timestamps:
                 continue  # already processed (animal or non-animal) — skip
 
+            fetched += 1
+
             # download
             try:
                 r = await client.get(url, timeout=60)
                 if r.status_code != 200:
+                    fetched -= 1
                     continue
             except Exception:
+                fetched -= 1
                 continue
             fname = f"cam{cid}_{int(datetime.now(timezone.utc).timestamp()*1000)}_{new}.jpg"
             fpath = os.path.join(cam_dir, fname)
@@ -1495,18 +1512,41 @@ async def _sync_one_camera(camera_id: int) -> int:
                 with open(fpath, "wb") as f:
                     f.write(r.content)
             except Exception:
+                fetched -= 1
                 continue
 
             # offload CPU-bound ML detection to a worker thread so event loop remains non-blocking
             det = await asyncio.to_thread(detection_mod.detect_animal, fpath)
+
+            detector = det.get("detector", "")
+            if detector.startswith("error"):
+                # Detection threw an exception (model missing, PyTorch error, bad image, etc.).
+                # Record the sighting at confidence 0.0 so the user can see their photo — hiding
+                # it because the detector is broken would be worse than a false positive.
+                log.warning("cam %s (%s): detector error on %s (%s) — saving sighting at conf=0",
+                            cid, brand, fname, detector)
+                detection_errors += 1
+                with Session(engine) as s:
+                    s.add(CameraSighting(
+                        stand_id=stand_id, camera_id=cid,
+                        timestamp=taken_at,
+                        confidence_score=0.0,
+                        image_path=fpath, created_at=datetime.now(timezone.utc).isoformat(),
+                    ))
+                    s.commit()
+                existing_timestamps.add(taken_at)
+                new += 1
+                continue
+
             if not det.get("is_animal"):
-                # not wildlife — discard the file, don't record a sighting row; but DO mark
+                # Detector ran successfully but found no animal — discard the file and mark
                 # the timestamp as seen so this photo is never re-downloaded on the next sync.
                 try:
                     os.remove(fpath)
                 except OSError:
                     pass
                 existing_timestamps.add(taken_at)
+                skipped_non_animal += 1
                 continue
 
             with Session(engine) as s:
@@ -1520,6 +1560,9 @@ async def _sync_one_camera(camera_id: int) -> int:
             existing_timestamps.add(taken_at)
             new += 1
 
+    log.info("cam %s (%s): sync done — fetched=%d new=%d non_animal=%d det_errors=%d",
+             cid, brand, fetched, new, skipped_non_animal, detection_errors)
+
     # Record sync completion timestamp on camera
     with Session(engine) as s:
         cam2 = s.get(Camera, cid)
@@ -1527,7 +1570,8 @@ async def _sync_one_camera(camera_id: int) -> int:
             cam2.last_sync_at = datetime.now(timezone.utc).isoformat()
             s.commit()
 
-    return new
+    return {"new": new, "fetched": fetched,
+            "skipped_non_animal": skipped_non_animal, "detection_errors": detection_errors}
 
 
 async def sync_cameras_job():
@@ -1536,7 +1580,9 @@ async def sync_cameras_job():
         ids = [c.id for c in s.scalars(select(Camera).where(Camera.is_active == 1)).all()]
     for cid in ids:
         try:
-            await _sync_one_camera(cid)
+            res = await _sync_one_camera(cid)
+            if res.get("new"):
+                log.info("scheduler: cam %s — %d new sighting(s)", cid, res["new"])
         except Exception:
             continue
 

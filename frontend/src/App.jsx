@@ -1274,7 +1274,11 @@ function CamerasPage({ stands }) {
     setSyncing((s) => ({ ...s, [cam.id]: true }));
     try {
       const r = await api(`/cameras/${cam.id}/sync`, { method: "POST" });
-      alert(`Sync complete — ${r.new_sightings} new sighting(s) recorded.`);
+      const parts = [`${r.new} new sighting(s) recorded`];
+      if (r.skipped_non_animal > 0) parts.push(`${r.skipped_non_animal} non-animal photo(s) filtered`);
+      if (r.detection_errors > 0) parts.push(`⚠️ ${r.detection_errors} photo(s) saved without detection (model error — check logs)`);
+      if (r.fetched === 0 && r.new === 0) parts[0] = "no new photos found";
+      alert(`Sync complete — ${parts.join(", ")}.`);
       load();
     } catch (e) { alert(`Sync failed: ${e.message}`); }
     finally { setSyncing((s) => ({ ...s, [cam.id]: false })); }
@@ -1761,6 +1765,10 @@ function SettingsPage() {
           value={s.camera_sync_interval_minutes ?? 30}
           display={`${Math.round(s.camera_sync_interval_minutes ?? 30)} min`}
           onChange={(v) => setS({ ...s, camera_sync_interval_minutes: v })} />
+        <SliderRow label="Backfill on first sync" min={1} max={90} step={1}
+          value={s.camera_backfill_days ?? 7}
+          display={`${Math.round(s.camera_backfill_days ?? 7)} days`}
+          onChange={(v) => setS({ ...s, camera_backfill_days: v })} />
         <SliderRow label="Max camera boost (per stand)" min={0} max={50} step={1}
           value={s.max_camera_boost_pct ?? 15}
           display={`+${Math.round(s.max_camera_boost_pct ?? 15)}%`}

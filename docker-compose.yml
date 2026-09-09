@@ -32,6 +32,8 @@ services:
         condition: service_healthy
     volumes:
       - ${CAMERA_IMAGE_PATH:-./data/camera_images}:/app/data/camera_images
+      # persist the MegaDetector model download so it survives container rebuilds
+      - modelcache:/root/.cache
     # Published to the host so your existing nginx reverse proxy can reach it.
     # APP_BIND defaults to 127.0.0.1 (loopback only) — correct when nginx runs on
     # the same host. If nginx is on a different machine, set APP_BIND=0.0.0.0 in
@@ -41,3 +43,4 @@ services:
 
 volumes:
   dbdata:
+  modelcache:

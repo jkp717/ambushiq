@@ -95,7 +95,7 @@ class SpyPointProvider(CameraProvider):
             payload: dict = {
                 "camera": cam_ids,
                 "dateEnd": "2100-01-01T00:00:00.000Z",
-                "limit": 100,
+                "limit": 500,
             }
             if since:
                 # Ensure UTC-aware; format as the SpyPoint API expects.
