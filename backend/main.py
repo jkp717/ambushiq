@@ -1116,6 +1116,10 @@ class SettingsIn(BaseModel):
     falloff_food: float | None = None
     weight_bedding: float | None = None
     falloff_bedding: float | None = None
+    weight_scrape: float | None = None
+    falloff_scrape: float | None = None
+    weight_rub: float | None = None
+    falloff_rub: float | None = None
     rate_w_pressure: float | None = None
     rate_w_wind: float | None = None
     rate_w_rain: float | None = None
