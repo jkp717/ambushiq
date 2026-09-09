@@ -1260,8 +1260,12 @@ function CamerasPage({ stands }) {
     try { await api(`/cameras/${cam.id}`, { method: "PUT", body: JSON.stringify({ is_active: !cam.is_active }) }); load(); } catch {}
   }
   async function deleteCamera(id) {
-    if (!confirm("Delete this camera and its sightings?")) return;
-    try { await api(`/cameras/${id}`, { method: "DELETE" }); load(); } catch {}
+    if (!confirm("Delete this camera and all its sightings?")) return;
+    const delImages = confirm("Also delete the downloaded photos from storage?\n\nOK = yes, delete image files\nCancel = keep image files");
+    try {
+      await api(`/cameras/${id}?delete_images=${delImages}`, { method: "DELETE" });
+      load();
+    } catch {}
   }
   async function verify(cam) {
     try {
