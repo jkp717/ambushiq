@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -198,13 +198,11 @@ function Shell({ onLogout, version }) {
           <strong>AmbushIQ</strong>
           {version && <span className="top-bar-ver">v{version}</span>}
         </div>
-        {/* On map page: compact nav dropdown replaces the full tab bar */}
+        {/* On map page: burger menu dropdown (with Lock at bottom); other pages: lock icon */}
         {view === "map" ? (
           <div className="top-bar-nav-drop" ref={navDropRef}>
-            <button className="top-bar-nav-trigger" onClick={() => setNavOpen(o => !o)}>
-              {(() => { const n = NAV.find(x => x.key === view) || NAV[0]; return <n.icon size={15} />; })()}
-              <span>{NAV.find(x => x.key === view)?.label}</span>
-              <ChevronDown size={13} style={{ transition: "transform .2s", transform: navOpen ? "rotate(180deg)" : "none" }} />
+            <button className="top-bar-nav-trigger" onClick={() => setNavOpen(o => !o)} title="Menu">
+              <Menu size={18} />
             </button>
             {navOpen && (
               <div className="top-bar-nav-menu">
@@ -214,11 +212,16 @@ function Shell({ onLogout, version }) {
                     <Icon size={15} /><span>{label}</span>
                   </button>
                 ))}
+                <div className="top-bar-nav-divider" />
+                <button className="top-bar-nav-item" onClick={() => { setNavOpen(false); onLogout(); }}>
+                  <Lock size={15} /><span>Lock</span>
+                </button>
               </div>
             )}
           </div>
-        ) : <div />}
-        <button className="icon-btn" onClick={onLogout} title="Lock"><Lock size={16} /></button>
+        ) : (
+          <button className="icon-btn" onClick={onLogout} title="Lock"><Lock size={16} /></button>
+        )}
       </header>
 
       {/* tab bar — hidden on map page to reclaim vertical space */}
@@ -736,7 +739,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
                 <span className="map-wpill">☁ {conditions.time.cloud}%</span>
                 <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
                 {conditions.time.wind_speed != null && (
-                  <span className="map-wpill">💨 {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
+                  <span className="map-wpill"><Wind size={11} /> {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
                 )}
               </div>
             )}

@@ -85,7 +85,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   height: var(--top-bar-h);
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--bord);
-  position: sticky; top: 0; z-index: 200; flex-shrink: 0;
+  position: sticky; top: 0; z-index: 1000; flex-shrink: 0;
 }
 .top-bar-brand { display: flex; align-items: center; gap: 8px; }
 .top-bar-brand strong { font-size: 15px; }
@@ -99,7 +99,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   height: var(--tab-bar-h);
   display: flex; background: var(--bg);
   border-bottom: 1px solid var(--bord);
-  position: sticky; top: var(--top-bar-h); z-index: 199;
+  position: sticky; top: var(--top-bar-h); z-index: 999;
   overflow-x: auto; flex-shrink: 0;
   /* hide scrollbar */
   scrollbar-width: none;
@@ -413,23 +413,22 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 
 /* ── map-page nav dropdown in top bar ── */
 .top-bar-nav-drop {
-  flex: 1; display: flex; justify-content: center;
   position: relative;
+  margin-left: auto;
 }
 .top-bar-nav-trigger {
-  display: flex; align-items: center; gap: 6px;
-  background: var(--surf); border: 1px solid var(--bord);
-  border-radius: 8px; padding: 5px 11px;
-  font-size: 13.5px; font-weight: 600; color: var(--txt); cursor: pointer;
+  display: flex; align-items: center;
+  background: none; border: none;
+  border-radius: 8px; padding: 7px;
+  color: var(--sub); cursor: pointer;
   transition: background 0.12s;
 }
-.top-bar-nav-trigger:hover { background: var(--tert); }
+.top-bar-nav-trigger:hover { background: var(--surf); }
 .top-bar-nav-menu {
-  position: absolute; top: calc(100% + 6px); left: 50%;
-  transform: translateX(-50%);
+  position: absolute; top: calc(100% + 6px); right: 0;
   background: var(--bg); border: 1px solid var(--bord);
   border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
-  overflow: hidden; z-index: 700; min-width: 160px;
+  overflow: hidden; z-index: 1100; min-width: 160px;
 }
 .top-bar-nav-item {
   display: flex; align-items: center; gap: 10px;
@@ -440,6 +439,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 }
 .top-bar-nav-item:hover { background: var(--surf); }
 .top-bar-nav-item.active { color: var(--navy); font-weight: 700; background: rgba(12,68,124,.06); }
+.top-bar-nav-divider { height: 1px; background: var(--bord); margin: 4px 0; }
 
 /* ══════════════════════════════════════
    LIST PAGES (Stands, Zones, Corridors)
