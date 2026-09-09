@@ -234,9 +234,11 @@ class Camera(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(120))
     brand: Mapped[str] = mapped_column(String(32))
+    provider_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g. Spypoint cam ID
     credentials_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # encrypted
     stand_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # FK stands.id
     is_active: Mapped[int] = mapped_column(Integer, default=1)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)  # soft-delete: skip on re-discover
     last_sync_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
@@ -244,6 +246,7 @@ class Camera(Base):
         # NEVER expose credentials
         return {
             "id": self.id, "name": self.name, "brand": self.brand,
+            "provider_ref": self.provider_ref,
             "stand_id": self.stand_id, "is_active": bool(self.is_active),
             "last_sync_at": self.last_sync_at, "created_at": self.created_at,
             "has_credentials": bool(self.credentials_json),
@@ -300,6 +303,13 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
                     conn.execute(text("ALTER TABLE zones ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
+                    conn.commit()
+                except Exception:
+                    pass
+                # v2.17.26: provider_ref + is_deleted on cameras
+                try:
+                    conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS provider_ref VARCHAR(64)"))
+                    conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS is_deleted INTEGER NOT NULL DEFAULT 0"))
                     conn.commit()
                 except Exception:
                     pass
@@ -1319,6 +1329,11 @@ class CameraUpdateIn(BaseModel):
     credentials: dict | None = None
 
 
+class CameraDiscoverIn(BaseModel):
+    brand: str
+    credentials: dict
+
+
 @app.get("/api/camera-providers")
 def camera_providers(_=Depends(require_token)):
     """Brand metadata for the setup wizard (which are implemented + required fields)."""
@@ -1328,7 +1343,8 @@ def camera_providers(_=Depends(require_token)):
 @app.get("/api/cameras")
 def list_cameras(_=Depends(require_token)):
     with Session(engine) as s:
-        return [c.to_dict() for c in s.scalars(select(Camera)).all()]
+        return [c.to_dict() for c in
+                s.scalars(select(Camera).where(Camera.is_deleted == 0).order_by(Camera.name)).all()]
 
 
 @app.post("/api/cameras")
@@ -1344,6 +1360,61 @@ def create_camera(body: CameraIn, _=Depends(require_token)):
         )
         s.add(cam); s.commit(); s.refresh(cam)
         return cam.to_dict()
+
+
+@app.post("/api/cameras/discover")
+async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
+    """Connect a brand account and auto-create/update camera records from the provider.
+    Cameras previously soft-deleted by the user are skipped and never recreated."""
+    try:
+        prov = cameras_mod.get_provider(body.brand, body.credentials)
+    except cameras_mod.CameraError as e:
+        raise HTTPException(400, str(e))
+    if not prov.implemented:
+        raise HTTPException(501, f"{body.brand} sync is not implemented yet")
+    try:
+        sp_cameras = await prov.fetch_cameras()
+    except cameras_mod.CameraError as e:
+        raise HTTPException(400, str(e))
+
+    creds_enc = encrypt_credentials(body.credentials)
+    now = datetime.now(timezone.utc).isoformat()
+    created, updated, skipped_deleted = [], [], []
+
+    with Session(engine) as s:
+        for sp in sp_cameras:
+            ref = sp["id"]
+            name = sp["name"]
+            # Find any existing row (including soft-deleted) for this provider_ref
+            existing = s.scalars(
+                select(Camera).where(Camera.brand == body.brand, Camera.provider_ref == ref)
+            ).first()
+            if existing:
+                if existing.is_deleted:
+                    skipped_deleted.append({"name": name, "provider_ref": ref})
+                    continue
+                # Update name and credentials if changed
+                changed = existing.name != name or existing.credentials_json != creds_enc
+                if changed:
+                    existing.name = name
+                    existing.credentials_json = creds_enc
+                    s.commit()
+                    s.refresh(existing)
+                updated.append(existing.to_dict())
+            else:
+                cam = Camera(
+                    name=name, brand=body.brand, provider_ref=ref,
+                    credentials_json=creds_enc,
+                    stand_id=None, is_active=1, is_deleted=0, created_at=now,
+                )
+                s.add(cam)
+                s.commit()
+                s.refresh(cam)
+                created.append(cam.to_dict())
+
+    log.info("discover_cameras: brand=%s created=%d updated=%d skipped_deleted=%d",
+             body.brand, len(created), len(updated), len(skipped_deleted))
+    return {"created": created, "updated": updated, "skipped_deleted": skipped_deleted}
 
 
 @app.put("/api/cameras/{camera_id}")
@@ -1376,7 +1447,11 @@ def delete_camera(camera_id: int, delete_images: bool = False, _=Depends(require
         if cam:
             if delete_images:
                 deleted_dir = get_camera_dir(cam.brand, cam.name)
-            s.delete(cam)
+            # Delete all sightings for this camera
+            for sg in s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all():
+                s.delete(sg)
+            # Soft-delete so this camera is never auto-recreated by discover
+            cam.is_deleted = 1
             s.commit()
     if delete_images and deleted_dir:
         import shutil
@@ -1438,10 +1513,11 @@ async def _sync_one_camera(camera_id: int) -> dict:
     Best-effort: never raises to the scheduler."""
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
-        if not cam or not cam.is_active:
-            return 0
+        if not cam or not cam.is_active or cam.is_deleted:
+            return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
         creds = decrypt_credentials(cam.credentials_json)
         brand, camera_name, stand_id, cid = cam.brand, cam.name, cam.stand_id, cam.id
+        cam_provider_ref = cam.provider_ref  # Spypoint cam ID for photo filtering
         last_sync = cam.last_sync_at
         # Deduplication: timestamps already recorded for this camera (incl. non-animal skips)
         existing_timestamps = set(
@@ -1481,6 +1557,13 @@ async def _sync_one_camera(camera_id: int) -> dict:
         log.info("cam %s (%s): calling fetch_recent_photos ...", camera_id, brand)
         photos = await prov.fetch_recent_photos(since=since_dt)
         log.info("cam %s (%s): provider returned %d photo(s)", camera_id, brand, len(photos))
+        # Filter to only this camera's photos using provider_ref (Spypoint cam ID).
+        # Without this, the API returns photos from ALL cameras on the account.
+        if cam_provider_ref:
+            before = len(photos)
+            photos = [p for p in photos if p.get("camera_ref") == cam_provider_ref]
+            log.info("cam %s (%s): filtered by provider_ref=%s: %d → %d photo(s)",
+                     camera_id, brand, cam_provider_ref, before, len(photos))
     except Exception as exc:
         log.warning("cam %s (%s): fetch_recent_photos failed: %s: %s",
                     camera_id, brand if 'brand' in dir() else "?", type(exc).__name__, exc)
