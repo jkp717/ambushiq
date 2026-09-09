@@ -8,3 +8,4 @@ apscheduler==3.10.4
 cryptography==44.0.0
 PytorchWildlife>=1.2.0
 pillow>=10.0.0
+soundfile>=0.12.0
