@@ -1454,11 +1454,17 @@ async def _sync_one_camera(camera_id: int) -> dict:
         since_dt = datetime.now(timezone.utc) - timedelta(days=backfill_days)
         log.info("cam %s (%s): first sync — backfilling %d day(s)", camera_id, brand, backfill_days)
 
+    log.info("cam %s (%s): starting sync — since=%s existing_ts=%d",
+             camera_id, brand, since_dt.isoformat(), len(existing_timestamps))
+
     try:
         prov = cameras_mod.get_provider(brand, creds)
         if not prov.implemented:
+            log.warning("cam %s (%s): provider not implemented — skipping", camera_id, brand)
             return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
+        log.info("cam %s (%s): calling fetch_recent_photos ...", camera_id, brand)
         photos = await prov.fetch_recent_photos(since=since_dt)
+        log.info("cam %s (%s): provider returned %d photo(s)", camera_id, brand, len(photos))
     except Exception as exc:
         log.warning("cam %s (%s): fetch_recent_photos failed: %s: %s",
                     camera_id, brand if 'brand' in dir() else "?", type(exc).__name__, exc)
@@ -1472,59 +1478,70 @@ async def _sync_one_camera(camera_id: int) -> dict:
     detection_errors = 0
     fetched = 0
     async with httpx.AsyncClient() as client:
-        for p in photos:
+        for idx, p in enumerate(photos):
             url = p.get("url")
             if not url:
+                log.warning("cam %s (%s): photo[%d] has no URL — skipped (raw=%s)",
+                            cid, brand, idx, p)
                 continue
-            # Normalize taken_at to a UTC ISO string before any deduplication or
-            # storage.  Camera providers (especially SpyPoint) may return naive
-            # local-time strings with no UTC offset.  _to_utc_iso treats those as
-            # property local time and converts them so all stored timestamps are
-            # consistently UTC, matching created_at / last_sync_at.
+
             raw_taken = p.get("taken_at")
             taken_at = _to_utc_iso(str(raw_taken), prop_tz_name) if raw_taken else None
 
-            # Require a timestamp for reliable deduplication and period matching.
-            # Photos without taken_at can't be deduplicated (they'd re-process every sync)
-            # and can't be matched to a hunt period for camera boost. Skip and warn.
             if not taken_at:
-                log.warning("cam %s (%s): photo from %s has no taken_at timestamp — skipped",
-                            cid, brand, url[:80])
+                log.warning("cam %s (%s): photo[%d] url=%s has no taken_at timestamp — skipped",
+                            cid, brand, idx, url[:80])
                 continue
 
             if taken_at in existing_timestamps:
-                continue  # already processed (animal or non-animal) — skip
+                log.debug("cam %s (%s): photo[%d] taken_at=%s already in DB — skipped",
+                          cid, brand, idx, taken_at)
+                continue
 
+            log.info("cam %s (%s): photo[%d] taken_at=%s — downloading %s",
+                     cid, brand, idx, taken_at, url[:100])
             fetched += 1
 
             # download
             try:
                 r = await client.get(url, timeout=60)
                 if r.status_code != 200:
+                    log.warning("cam %s (%s): photo[%d] download HTTP %d — skipped",
+                                cid, brand, idx, r.status_code)
                     fetched -= 1
                     continue
-            except Exception:
+                log.info("cam %s (%s): photo[%d] downloaded %d bytes", cid, brand, idx, len(r.content))
+            except Exception as exc:
+                log.warning("cam %s (%s): photo[%d] download error: %s: %s",
+                            cid, brand, idx, type(exc).__name__, exc)
                 fetched -= 1
                 continue
+
             fname = f"cam{cid}_{int(datetime.now(timezone.utc).timestamp()*1000)}_{new}.jpg"
             fpath = os.path.join(cam_dir, fname)
             try:
                 with open(fpath, "wb") as f:
                     f.write(r.content)
-            except Exception:
+                log.info("cam %s (%s): photo[%d] saved to %s", cid, brand, idx, fpath)
+            except Exception as exc:
+                log.warning("cam %s (%s): photo[%d] save failed: %s: %s",
+                            cid, brand, idx, type(exc).__name__, exc)
                 fetched -= 1
                 continue
 
             # offload CPU-bound ML detection to a worker thread so event loop remains non-blocking
+            log.info("cam %s (%s): photo[%d] running animal detection ...", cid, brand, idx)
             det = await asyncio.to_thread(detection_mod.detect_animal, fpath)
+            log.info("cam %s (%s): photo[%d] detection result: is_animal=%s conf=%.3f detector=%s",
+                     cid, brand, idx, det.get("is_animal"), det.get("confidence", 0.0), det.get("detector"))
 
             detector = det.get("detector", "")
             if detector.startswith("error"):
                 # Detection threw an exception (model missing, PyTorch error, bad image, etc.).
                 # Record the sighting at confidence 0.0 so the user can see their photo — hiding
                 # it because the detector is broken would be worse than a false positive.
-                log.warning("cam %s (%s): detector error on %s (%s) — saving sighting at conf=0",
-                            cid, brand, fname, detector)
+                log.warning("cam %s (%s): photo[%d] detector error (%s) — saving sighting at conf=0",
+                            cid, brand, idx, detector)
                 detection_errors += 1
                 with Session(engine) as s:
                     s.add(CameraSighting(
@@ -1541,6 +1558,8 @@ async def _sync_one_camera(camera_id: int) -> dict:
             if not det.get("is_animal"):
                 # Detector ran successfully but found no animal — discard the file and mark
                 # the timestamp as seen so this photo is never re-downloaded on the next sync.
+                log.info("cam %s (%s): photo[%d] no animal detected (conf=%.3f) — discarding",
+                         cid, brand, idx, det.get("confidence", 0.0))
                 try:
                     os.remove(fpath)
                 except OSError:
@@ -1549,6 +1568,8 @@ async def _sync_one_camera(camera_id: int) -> dict:
                 skipped_non_animal += 1
                 continue
 
+            log.info("cam %s (%s): photo[%d] animal confirmed (conf=%.3f) — recording sighting",
+                     cid, brand, idx, det.get("confidence", 0.0))
             with Session(engine) as s:
                 s.add(CameraSighting(
                     stand_id=stand_id, camera_id=cid,
@@ -1560,7 +1581,7 @@ async def _sync_one_camera(camera_id: int) -> dict:
             existing_timestamps.add(taken_at)
             new += 1
 
-    log.info("cam %s (%s): sync done — fetched=%d new=%d non_animal=%d det_errors=%d",
+    log.info("cam %s (%s): sync complete — fetched=%d new=%d non_animal=%d det_errors=%d",
              cid, brand, fetched, new, skipped_non_animal, detection_errors)
 
     # Record sync completion timestamp on camera
