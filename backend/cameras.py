@@ -46,6 +46,10 @@ class CameraProvider:
         """Confirm credentials work. Raises CameraError on failure."""
         raise NotImplementedProvider(f"{self.brand} verification not implemented yet")
 
+    async def fetch_cameras(self) -> list[dict]:
+        """Return [{id, name}] for all cameras on this account."""
+        raise NotImplementedProvider(f"{self.brand} camera listing not implemented yet")
+
     async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
         """Return recent photos as [{url, taken_at, camera_ref}, ...]."""
         raise NotImplementedProvider(f"{self.brand} photo fetch not implemented yet")
@@ -84,6 +88,18 @@ class SpyPointProvider(CameraProvider):
         async with httpx.AsyncClient() as client:
             await self._login(client)
         return True
+
+    async def fetch_cameras(self) -> list[dict]:
+        """Return [{id, name}] for every camera on this Spypoint account."""
+        async with httpx.AsyncClient() as client:
+            token = await self._login(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            resp = await client.get(f"{self.BASE}/api/v3/camera/all", headers=headers, timeout=30)
+            resp.raise_for_status()
+            return [
+                {"id": c.get("id"), "name": c.get("config", {}).get("name") or c.get("id")}
+                for c in resp.json() if c.get("id")
+            ]
 
     async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
         out: list[dict] = []

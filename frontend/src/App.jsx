@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+﻿import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu, Layers } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
@@ -1289,7 +1289,7 @@ function CamerasPage({ stands }) {
       {err && <Banner>{err}</Banner>}
       <div className="list-header">
         <h1>Trail Cameras</h1>
-        <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus size={15} /> Add camera</button>
+        <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus size={15} /> Connect cameras</button>
       </div>
       {!cameras.length && (
         <div className="cameras-empty">
@@ -1344,7 +1344,7 @@ function CamerasPage({ stands }) {
 
       {adding && (
         <Modal onClose={() => setAdding(false)}>
-          <CameraWizard providers={providers} stands={stands} onSaved={() => { setAdding(false); load(); }} onCancel={() => setAdding(false)} />
+          <CameraDiscoverWizard providers={providers} onSaved={() => { setAdding(false); load(); }} onCancel={() => setAdding(false)} />
         </Modal>
       )}
       {editingCam && (
@@ -1363,34 +1363,31 @@ function CamerasPage({ stands }) {
 }
 
 /* ── Camera add wizard (3 steps) ── */
-function CameraWizard({ providers, stands, onSaved, onCancel }) {
+function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
   const [step, setStep] = useState(1);
   const [brand, setBrand] = useState(null);
-  const [name, setName] = useState("");
   const [creds, setCreds] = useState({});
-  const [standId, setStandId] = useState("");
+  const [discovering, setDiscovering] = useState(false);
+  const [result, setResult] = useState(null);
   const [err, setErr] = useState(null);
-  const [saving, setSaving] = useState(false);
   const prov = providers.find((p) => p.brand === brand);
 
-  async function save() {
-    setSaving(true); setErr(null);
+  async function discover() {
+    setDiscovering(true); setErr(null);
     try {
-      await api("/cameras", { method: "POST", body: JSON.stringify({
-        name: name.trim(), brand,
-        stand_id: standId ? +standId : null,
-        credentials: prov?.implemented ? creds : null,
-      })});
-      onSaved();
+      const r = await api("/cameras/discover", { method: "POST",
+        body: JSON.stringify({ brand, credentials: creds }) });
+      setResult(r);
+      setStep(3);
     } catch (e) { setErr(e.message); }
-    finally { setSaving(false); }
+    finally { setDiscovering(false); }
   }
 
-  const STEP_LABELS = ["Brand", "Setup", "Stand"];
+  const STEP_LABELS = ["Brand", "Connect", "Done"];
   return (
     <div className="card" style={{ padding: 20, border: "2px solid var(--navy)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <strong>Add trail camera</strong>
+        <strong>Connect trail cameras</strong>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div className="wizard-steps">
             {STEP_LABELS.map((l, i) => (
@@ -1415,8 +1412,14 @@ function CameraWizard({ providers, stands, onSaved, onCancel }) {
               </button>
             ))}
           </div>
+          {brand && !prov?.implemented && (
+            <div className="cam-not-impl" style={{ marginTop: 12 }}>
+              <AlertTriangle size={14} />
+              <span><strong>{BRAND_LABELS[brand]}</strong> sync is not yet implemented.</span>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button className="btn btn-primary" disabled={!brand} onClick={() => setStep(2)}>Next →</button>
+            <button className="btn btn-primary" disabled={!brand || !prov?.implemented} onClick={() => setStep(2)}>Next →</button>
             <button className="btn" onClick={onCancel}>Cancel</button>
           </div>
         </>
@@ -1424,70 +1427,82 @@ function CameraWizard({ providers, stands, onSaved, onCancel }) {
 
       {step === 2 && (
         <>
-          <Field label="Camera name">
-            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Back-40 Oak Tree" />
-          </Field>
-          {prov?.implemented ? (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--txt)", marginBottom: 8 }}>
-                {BRAND_LABELS[brand]} cloud account credentials
-              </div>
-              {prov.credential_fields.map((field) => (
-                <div key={field} style={{ marginBottom: 8 }}>
-                  <Field label={field.charAt(0).toUpperCase() + field.slice(1)}>
-                    <input
-                      type={field === "password" ? "password" : "text"}
-                      value={creds[field] || ""}
-                      onChange={(e) => setCreds({ ...creds, [field]: e.target.value })}
-                      placeholder={field}
-                      autoComplete={field === "password" ? "current-password" : "username"}
-                    />
-                  </Field>
-                </div>
-              ))}
-              <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4 }}>
-                🔒 Credentials are encrypted at rest using your server secret.
-              </div>
+          <p style={{ fontSize: 13, color: "var(--sub)", marginBottom: 12 }}>
+            Enter your <strong>{BRAND_LABELS[brand]}</strong> account credentials. All cameras on
+            your account will be imported automatically — then assign stands to each one.
+          </p>
+          {prov.credential_fields.map((field) => (
+            <div key={field} style={{ marginBottom: 10 }}>
+              <Field label={field.charAt(0).toUpperCase() + field.slice(1)}>
+                <input
+                  type={field === "password" ? "password" : "text"}
+                  value={creds[field] || ""}
+                  onChange={(e) => setCreds({ ...creds, [field]: e.target.value })}
+                  placeholder={field}
+                  autoComplete={field === "password" ? "current-password" : "username"}
+                />
+              </Field>
             </div>
-          ) : (
-            <div className="cam-not-impl">
-              <AlertTriangle size={14} />
-              <span><strong>{BRAND_LABELS[brand]}</strong> sync is not yet implemented. The camera will be recorded but won't auto-sync until the integration is added.</span>
-            </div>
-          )}
-          {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          ))}
+          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4, marginBottom: 12 }}>
+            🔒 Credentials are encrypted at rest using your server secret.
+          </div>
+          {err && <div style={{ color: "var(--red)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={() => setStep(1)}>← Back</button>
-            <button className="btn btn-primary" disabled={!name.trim()} onClick={() => setStep(3)}>Next →</button>
+            <button className="btn btn-primary" disabled={discovering ||
+              prov.credential_fields.some((f) => !creds[f]?.trim())} onClick={discover}>
+              {discovering ? <><RefreshCw size={14} className="spin" /> Discovering...</> : <><Camera size={14} /> Discover cameras</>}
+            </button>
           </div>
         </>
       )}
 
-      {step === 3 && (
+      {step === 3 && result && (
         <>
-          <p style={{ fontSize: 13, color: "var(--sub)", marginBottom: 12 }}>
-            Assign this camera to a stand so its sightings can boost that stand's ranking score.
-          </p>
-          <Field label="Stand (optional)">
-            <select value={standId} onChange={(e) => setStandId(e.target.value)}>
-              <option value="">— none —</option>
-              {stands.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </Field>
-          {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button className="btn" onClick={() => setStep(2)}>← Back</button>
-            <button className="btn btn-primary" disabled={saving} onClick={save}>
-              <Save size={15} /> {saving ? "Saving…" : "Add camera"}
-            </button>
-          </div>
+          <div style={{ fontSize: 14, marginBottom: 12 }}><strong>Discovery complete!</strong></div>
+          {result.created.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--green)", marginBottom: 4 }}>
+                {result.created.length} new camera(s) added:
+              </div>
+              {result.created.map((c) => (
+                <div key={c.id} style={{ fontSize: 13, paddingLeft: 12, color: "var(--txt)" }}>
+                  - {c.name} <span style={{ color: "var(--sub)", fontSize: 11 }}>(assign a stand via Edit)</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.updated.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--sub)", marginBottom: 4 }}>
+                {result.updated.length} already connected:
+              </div>
+              {result.updated.map((c) => (
+                <div key={c.id} style={{ fontSize: 13, paddingLeft: 12, color: "var(--sub)" }}>- {c.name}</div>
+              ))}
+            </div>
+          )}
+          {result.skipped_deleted.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--amber)", marginBottom: 4 }}>
+                {result.skipped_deleted.length} previously removed (skipped):
+              </div>
+              {result.skipped_deleted.map((c) => (
+                <div key={c.provider_ref} style={{ fontSize: 13, paddingLeft: 12, color: "var(--sub)" }}>- {c.name}</div>
+              ))}
+            </div>
+          )}
+          {result.created.length === 0 && result.updated.length === 0 && (
+            <p style={{ fontSize: 13, color: "var(--sub)" }}>No cameras found on this account.</p>
+          )}
+          <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={onSaved}>Done</button>
         </>
       )}
     </div>
   );
 }
 
-/* ── Camera edit modal ── */
 function CameraEditor({ cam, providers, stands, onSaved, onCancel }) {
   const [name, setName] = useState(cam.name || "");
   const [standId, setStandId] = useState(cam.stand_id != null ? String(cam.stand_id) : "");
