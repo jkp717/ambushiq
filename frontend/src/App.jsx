@@ -475,7 +475,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
   const [drawMode, setDrawMode] = useState(null);
   const [relocating, setRelocating] = useState(null); // { kind, id }
   const [draftPoints, setDraftPoints] = useState([]);
-  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, zones: true, corridors: true });
+  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false });
   const [pendingName, setPendingName] = useState(null);
   const [home, setHome] = useState(null);
   const [err, setErr] = useState(null);
@@ -714,6 +714,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
         <div className="layer-overlay">
           <LayerChip on={layers.wind}      onClick={() => toggle("wind")}      color="var(--navy)" label="Wind" />
           <LayerChip on={layers.thermal}   onClick={() => toggle("thermal")}   color="#185FA5" dashed label="Thermal" />
+          <LayerChip on={layers.scent}     onClick={() => toggle("scent")}     color="#2D8A2D" label="Scent" />
           <LayerChip on={layers.deer}      onClick={() => toggle("deer")}      color="#A35A1B" label="Deer" />
           <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
           <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
