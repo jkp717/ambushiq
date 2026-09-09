@@ -387,9 +387,10 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   border-bottom: 1px solid rgba(133,79,11,.2);
 }
 
-/* map body — fills remaining height */
+/* map body — fills remaining height; z-index: 1 creates a stacking context that
+   contains all Leaflet z-indices so the top-bar (z:1000) always overlaps them */
 .map-body {
-  flex: 1; position: relative; min-height: 0; overflow: hidden;
+  flex: 1; position: relative; min-height: 0; overflow: hidden; z-index: 1;
 }
 .map-fill {
   position: absolute; inset: 0;
