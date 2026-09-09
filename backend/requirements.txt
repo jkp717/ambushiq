@@ -9,6 +9,7 @@ cryptography==44.0.0
 pillow>=10.0.0
 # MegaDetector via PytorchWildlife — explicit transitive deps listed here because
 # PytorchWildlife's pip metadata does not always pull them in automatically.
+packaging>=23.0
 PytorchWildlife>=1.2.0
 torch>=2.0.0
 torchvision>=0.15.0
