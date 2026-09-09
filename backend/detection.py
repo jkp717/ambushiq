@@ -78,8 +78,9 @@ def _load_model():
         log.info("detection: loading MegaDetector model=%s device=%s", model_name, device)
 
         if model_name.upper().startswith("MDV6"):
-            _MODEL = pw_detection.MegaDetectorV6(device=device, pretrained=True)
+            _MODEL = pw_detection.MegaDetectorV6(device=device, pretrained=True, version=model_name)
         else:
+            # V5 variants: MDV5A (default), MDV5B
             _MODEL = pw_detection.MegaDetectorV5(device=device, pretrained=True)
 
         log.info("detection: model loaded")
