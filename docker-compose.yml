@@ -23,8 +23,8 @@ services:
       # used to derive the encryption key for stored camera credentials
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       CAMERA_IMAGE_DIR: /app/data/camera_images
-      # optional: DETECTOR_MODE=fallback to skip MegaDetector if too heavy on this host
-      DETECTOR_MODE: ${DETECTOR_MODE:-megadetector}
+      # fallback=record every photo (no ML, default); megadetector=filter by animal detection
+      DETECTOR_MODE: ${DETECTOR_MODE:-fallback}
       # logging: INFO for camera sync diagnostics, DEBUG for full trace, WARNING (default) for quiet
       LOG_LEVEL: ${LOG_LEVEL:-WARNING}
       MEGADETECTOR_MODEL: ${DETECTOR_MODEL:-MDV6-yolov10-c}
