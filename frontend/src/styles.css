@@ -264,7 +264,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
    ══════════════════════════════════════ */
 .map-page {
   display: flex; flex-direction: column;
-  height: calc(100vh - var(--top-bar-h) - var(--tab-bar-h));
+  height: calc(100vh - var(--top-bar-h));
   overflow: hidden;
 }
 
@@ -272,28 +272,61 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 .map-ctrl-panel {
   flex-shrink: 0;
   background: var(--bg); border-bottom: 1px solid var(--bord);
-  padding: 10px 14px 8px;
+  padding: 8px 12px 6px;
 }
-.map-ctrl-row {
+
+/* Single compact row: date nav + time + weather + play */
+.map-ctrl-top {
   display: flex; align-items: center;
-  justify-content: space-between; gap: 10px; margin-bottom: 10px;
+  gap: 8px; margin-bottom: 8px; flex-wrap: nowrap;
+}
+
+/* Date nav */
+.map-day-nav-wrap {
+  position: relative; flex-shrink: 0;
 }
 .map-day-nav {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 2px;
 }
 .map-nav-btn {
   color: var(--navy) !important;
 }
 .map-nav-btn:disabled { color: var(--bord2) !important; }
-.map-day-label {
-  font-size: 16px; font-weight: 700;
-  min-width: 130px; text-align: center; color: var(--txt);
+
+/* Date label — now a clickable button */
+.map-day-label-btn {
+  font-size: 14px; font-weight: 700;
+  min-width: 110px; text-align: center; color: var(--txt);
+  background: none; border: none; cursor: pointer;
+  padding: 4px 6px; border-radius: 6px;
+  transition: background 0.12s;
 }
+.map-day-label-btn:hover { background: var(--surf); }
+
+/* Compact time display */
+.map-time-compact {
+  font-size: 17px; font-weight: 800; color: var(--txt);
+  letter-spacing: -0.5px; white-space: nowrap; flex-shrink: 0;
+}
+
+/* Weather pills — scrollable, no wrap */
+.map-weather-pills {
+  display: flex; gap: 6px; flex: 1;
+  overflow-x: auto; flex-wrap: nowrap;
+  scrollbar-width: none;
+}
+.map-weather-pills::-webkit-scrollbar { display: none; }
+.map-wpill {
+  font-size: 12px; color: var(--sub);
+  background: var(--surf); border-radius: 20px;
+  padding: 3px 8px; white-space: nowrap;
+}
+
 .map-play-btn {
   font-weight: 600; font-size: 14px;
   background: var(--surf) !important;
   border-color: var(--bord2) !important;
-  min-width: 90px; justify-content: center;
+  min-width: 80px; justify-content: center; flex-shrink: 0;
 }
 .map-play-btn.playing {
   background: var(--navy) !important;
@@ -304,7 +337,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 .map-hour-slider { width: 100%; margin-bottom: 2px; }
 .map-slider-ticks {
   display: flex; justify-content: space-between;
-  font-size: 10.5px; color: var(--sub); margin-bottom: 8px;
+  font-size: 10.5px; color: var(--sub); margin-bottom: 6px;
 }
 /* thermal-switch markers on the period band */
 .map-thermal-marker {
@@ -314,19 +347,36 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   cursor: default; user-select: none;
 }
 
-/* time + weather row */
-.map-time-row {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+/* ── date picker popup ── */
+.map-date-picker {
+  position: absolute; top: calc(100% + 4px); left: 0;
+  background: var(--bg); border: 1px solid var(--bord);
+  border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
+  padding: 10px; z-index: 700; min-width: 212px;
 }
-.map-time-big {
-  font-size: 24px; font-weight: 800; color: var(--txt); letter-spacing: -0.5px;
+.map-dp-hd {
+  font-size: 12px; font-weight: 700; color: var(--txt);
+  text-align: center; margin-bottom: 6px;
 }
-.map-weather-pills { display: flex; gap: 6px; flex-wrap: wrap; }
-.map-wpill {
-  font-size: 13px; color: var(--sub);
-  background: var(--surf); border-radius: 20px;
-  padding: 4px 10px; white-space: nowrap;
+.map-dp-dow {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  text-align: center; font-size: 9.5px; color: var(--sub); margin-bottom: 3px;
 }
+.map-dp-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px;
+}
+.map-dp-empty { /* spacer cell */ }
+.map-dp-day {
+  aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 500; border-radius: 50%;
+  background: none; border: none; cursor: pointer; color: var(--txt);
+  transition: background 0.1s;
+}
+.map-dp-day:hover:not(:disabled) { background: var(--surf); }
+.map-dp-day.sel   { background: var(--navy); color: #fff; font-weight: 700; }
+.map-dp-day.today:not(.sel) { font-weight: 800; color: var(--navy); }
+.map-dp-day.unavail { color: var(--bord2); }
+.map-dp-day:disabled { cursor: default; }
 
 /* draw banner */
 .map-draw-bar {
@@ -360,6 +410,36 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 @media (max-width: 560px) {
   .layer-overlay { flex-direction: row; flex-wrap: wrap; max-width: calc(100% - 20px); }
 }
+
+/* ── map-page nav dropdown in top bar ── */
+.top-bar-nav-drop {
+  flex: 1; display: flex; justify-content: center;
+  position: relative;
+}
+.top-bar-nav-trigger {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surf); border: 1px solid var(--bord);
+  border-radius: 8px; padding: 5px 11px;
+  font-size: 13.5px; font-weight: 600; color: var(--txt); cursor: pointer;
+  transition: background 0.12s;
+}
+.top-bar-nav-trigger:hover { background: var(--tert); }
+.top-bar-nav-menu {
+  position: absolute; top: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--bord);
+  border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
+  overflow: hidden; z-index: 700; min-width: 160px;
+}
+.top-bar-nav-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 10px 16px;
+  font-size: 14px; font-weight: 500; color: var(--txt);
+  background: none; border: none; cursor: pointer; text-align: left;
+  transition: background 0.1s;
+}
+.top-bar-nav-item:hover { background: var(--surf); }
+.top-bar-nav-item.active { color: var(--navy); font-weight: 700; background: rgba(12,68,124,.06); }
 
 /* ══════════════════════════════════════
    LIST PAGES (Stands, Zones, Corridors)
