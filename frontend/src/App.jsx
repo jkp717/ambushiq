@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu, Layers } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -589,6 +589,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const [relocating, setRelocating] = useState(null); // { kind, id }
   const [draftPoints, setDraftPoints] = useState([]);
   const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false, scrapes: false, rubs: false });
+  const [layersOpen, setLayersOpen] = useState(false);
   const [pendingName, setPendingName] = useState(null);
   const [home, setHome] = useState(null);
   const [err, setErr] = useState(null);
@@ -841,14 +842,21 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
             height="100%" />
         </div>
         <div className="layer-overlay">
-          <LayerChip on={layers.wind}      onClick={() => toggle("wind")}      color="var(--navy)" label="Wind" />
-          <LayerChip on={layers.thermal}   onClick={() => toggle("thermal")}   color="#185FA5" dashed label="Thermal" />
-          <LayerChip on={layers.scent}     onClick={() => toggle("scent")}     color="#2D8A2D" label="Scent" />
-          <LayerChip on={layers.deer}      onClick={() => toggle("deer")}      color="#A35A1B" label="Deer" />
-          <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
-          <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
-          <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
-          <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
+          {layersOpen && (
+            <div className="layer-chips-panel">
+              <LayerChip on={layers.wind}      onClick={() => toggle("wind")}      color="var(--navy)" label="Wind" />
+              <LayerChip on={layers.thermal}   onClick={() => toggle("thermal")}   color="#185FA5" dashed label="Thermal" />
+              <LayerChip on={layers.scent}     onClick={() => toggle("scent")}     color="#2D8A2D" label="Scent" />
+              <LayerChip on={layers.deer}      onClick={() => toggle("deer")}      color="#A35A1B" label="Deer" />
+              <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
+              <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
+              <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
+              <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
+            </div>
+          )}
+          <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
+            <Layers size={16} />
+          </button>
         </div>
         <div className="map-add-btn">
           <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
