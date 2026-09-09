@@ -32,6 +32,29 @@ _MODE = os.environ.get("DETECTOR_MODE", "fallback")  # "fallback" | "megadetecto
 
 log = logging.getLogger(__name__)
 
+# ── Startup dependency pre-flight ────────────────────────────────────────────
+# Runs once at import time so the very first line of `docker compose logs`
+# tells you whether megadetector mode will work.
+_MEGADETECTOR_DEPS = ("torch", "PytorchWildlife", "PIL", "numpy", "soundfile", "librosa")
+
+def _preflight():
+    missing = []
+    for mod in _MEGADETECTOR_DEPS:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+    if _MODE == "fallback":
+        log.info("detection: DETECTOR_MODE=fallback — skipping ML, every photo recorded")
+    elif missing:
+        log.warning("detection: DETECTOR_MODE=megadetector but missing deps: %s "
+                    "— photos will still be saved (conf=0); set DETECTOR_MODE=fallback to silence this",
+                    missing)
+    else:
+        log.info("detection: DETECTOR_MODE=megadetector — all deps present, model loads on first sync")
+
+_preflight()
+
 # MegaDetector class_id 1 == animal (2 = person, 3 = vehicle).
 ANIMAL_CLASS_ID = 1
 CONF_THRESHOLD = float(os.environ.get("DETECTOR_CONF", "0.2"))
