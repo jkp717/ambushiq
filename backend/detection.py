@@ -28,7 +28,7 @@ import threading
 
 _MODEL = None
 _LOCK = threading.Lock()
-_MODE = os.environ.get("DETECTOR_MODE", "fallback")  # "fallback" | "megadetector"
+_MODE = os.environ.get("DETECTOR_MODE", "megadetector")  # "megadetector" | "fallback"
 
 log = logging.getLogger(__name__)
 
