@@ -193,19 +193,6 @@ export default function HuntMap({
         kind: "corridor", id: c.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });
       line.addTo(g);
-      // arrowheads along the line showing travel direction (last segment)
-      if (c.points.length >= 2) {
-        const [a, b] = [c.points[c.points.length - 2], c.points[c.points.length - 1]];
-        const ang = Math.atan2(b[0] - a[0], b[1] - a[1]);
-        L.marker(b, {
-          interactive: false,
-          icon: L.divIcon({
-            className: "corridor-arrow",
-            html: `<div style="transform:rotate(${-ang * 180 / Math.PI}deg);color:${COLORS.deer};font-size:18px;line-height:1">▶</div>`,
-            iconSize: [18, 18], iconAnchor: [9, 9],
-          }),
-        }).addTo(g);
-      }
     });
   }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature]);
 
