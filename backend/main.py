@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -1397,10 +1397,10 @@ async def verify_camera(camera_id: int, _=Depends(require_token)):
 
 
 @app.post("/api/cameras/{camera_id}/sync")
-async def sync_camera_now(camera_id: int, _=Depends(require_token)):
-    """Manually trigger a sync for one camera."""
-    result = await _sync_one_camera(camera_id)
-    return {"ok": True, **result}
+async def sync_camera_now(camera_id: int, bg: BackgroundTasks, _=Depends(require_token)):
+    """Manually trigger a sync for one camera. Returns immediately; sync runs in background."""
+    bg.add_task(_sync_one_camera, camera_id)
+    return {"ok": True, "status": "running"}
 
 
 @app.get("/api/cameras/{camera_id}/sightings")

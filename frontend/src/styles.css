@@ -702,13 +702,18 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .lightbox {
   position: fixed; inset: 0; z-index: 9000;
   background: rgba(0,0,0,.88);
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: flex-start; justify-content: center;
+  overflow-y: auto;
   cursor: zoom-out;
+  padding: 48px 16px 24px;
 }
 .lightbox-img {
-  max-width: 92vw; max-height: 88vh;
+  max-width: min(92vw, 1200px);
+  width: 100%;
+  height: auto;
   object-fit: contain; border-radius: 8px;
   cursor: default;
+  display: block;
 }
 .lightbox-close {
   position: absolute; top: 14px; right: 14px;
