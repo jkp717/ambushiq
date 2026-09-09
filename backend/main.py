@@ -56,6 +56,8 @@ DEFAULT_SETTINGS = {
     "weight_corridor": 0.15, "falloff_corridor": 150,
     "weight_food": 0.15, "falloff_food": 200,
     "weight_bedding": 0.10, "falloff_bedding": 250,
+    "weight_scrape": 0.12, "falloff_scrape": 100,
+    "weight_rub":    0.10, "falloff_rub":    80,
     # deer day-rating weather factor weights (relative; normalized at use)
     "rate_w_pressure": 0.32, "rate_w_wind": 0.20, "rate_w_rain": 0.28, "rate_w_temp": 0.20,
     # v2.15: trail-camera + rut-date settings
@@ -199,6 +201,23 @@ class Corridor(Base):
                 "points": json.loads(self.points_json)}
 
 
+class DeerSign(Base):
+    __tablename__ = "deer_sign"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(20))          # "scrape" | "rub"
+    name: Mapped[str] = mapped_column(String(120))          # auto-generated
+    lat: Mapped[float] = mapped_column(Float)
+    lon: Mapped[float] = mapped_column(Float)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[str] = mapped_column(String(32), default="")
+
+    def to_dict(self):
+        return {"id": self.id, "kind": self.kind, "name": self.name,
+                "lat": self.lat, "lon": self.lon,
+                "is_active": bool(self.is_active if self.is_active is not None else 1),
+                "created_at": self.created_at}
+
+
 class Setting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -276,6 +295,22 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
                     conn.execute(text("ALTER TABLE zones ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
+                    conn.commit()
+                except Exception:
+                    pass
+                # deer_sign table
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS deer_sign (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            kind VARCHAR(20) NOT NULL,
+                            name VARCHAR(120) NOT NULL DEFAULT '',
+                            lat FLOAT NOT NULL DEFAULT 0,
+                            lon FLOAT NOT NULL DEFAULT 0,
+                            is_active INTEGER NOT NULL DEFAULT 1,
+                            created_at VARCHAR(32) NOT NULL DEFAULT ''
+                        )
+                    """))
                     conn.commit()
                 except Exception:
                     pass
@@ -370,6 +405,13 @@ class CorridorIn(BaseModel):
     is_active: bool = True
     usage: int = 5          # 1 = rarely used, 10 = heavily used
     falloff_m: Optional[float] = None  # None → inherit global falloff_corridor
+
+
+class DeerSignIn(BaseModel):
+    kind: str          # "scrape" | "rub"
+    lat: float
+    lon: float
+    is_active: bool = True
 
 
 class HourRankIn(BaseModel):
@@ -502,7 +544,8 @@ def _point_to_segment_m(plat, plon, alat, alon, blat, blon) -> float:
     return (cx * cx + cy * cy) ** 0.5
 
 
-def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict) -> dict:
+def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
+                    sign: list | None = None) -> dict:
     """Stacking, bonus-only proximity boost. Each feature contributes
     max(0, 1 - dist/falloff); summed per type and scaled by that type's weight."""
     slat, slon = stand["lat"], stand["lon"]
@@ -539,10 +582,23 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict) -
                 total += contrib * usage_scale
         return total
 
-    b_cor = corridor_factor() * settings["weight_corridor"]
-    b_food = zone_factor("food", settings["falloff_food"]) * settings["weight_food"]
-    b_bed = zone_factor("bedding", settings["falloff_bedding"]) * settings["weight_bedding"]
-    return {"corridor": b_cor, "food": b_food, "bedding": b_bed, "total": b_cor + b_food + b_bed}
+    def sign_factor(kind, falloff):
+        total = 0.0
+        for sg in (sign or []):
+            if sg.get("kind") != kind or not sg.get("is_active", True):
+                continue
+            d = _haversine_m(slat, slon, sg["lat"], sg["lon"])
+            total += max(0.0, 1 - d / falloff) if falloff > 0 else 0
+        return total
+
+    b_cor    = corridor_factor() * settings["weight_corridor"]
+    b_food   = zone_factor("food",    settings["falloff_food"])    * settings["weight_food"]
+    b_bed    = zone_factor("bedding", settings["falloff_bedding"]) * settings["weight_bedding"]
+    b_scrape = sign_factor("scrape",  settings.get("falloff_scrape", 100)) * settings.get("weight_scrape", 0.12)
+    b_rub    = sign_factor("rub",     settings.get("falloff_rub",    80))  * settings.get("weight_rub",    0.10)
+    return {"corridor": b_cor, "food": b_food, "bedding": b_bed,
+            "scrape": b_scrape, "rub": b_rub,
+            "total": b_cor + b_food + b_bed + b_scrape + b_rub}
 
 
 # ---------- forecast (server-side, short cache) ----------
@@ -761,6 +817,43 @@ def delete_corridor(corridor_id: int, _=Depends(require_token)):
     return {"ok": True}
 
 
+# ---------- deer sign (scrapes + rubs) ----------
+@app.get("/api/sign")
+def list_sign(_=Depends(require_token)):
+    with Session(engine) as s:
+        return [r.to_dict() for r in s.scalars(select(DeerSign)).all()]
+
+@app.post("/api/sign")
+def create_sign(body: DeerSignIn, _=Depends(require_token)):
+    from datetime import datetime
+    now = datetime.now()
+    name = f"{body.kind.title()} {now.month}/{now.day}"
+    row = DeerSign(kind=body.kind, name=name, lat=body.lat, lon=body.lon,
+                   is_active=int(body.is_active),
+                   created_at=now.isoformat(timespec="seconds"))
+    with Session(engine) as s:
+        s.add(row); s.commit(); s.refresh(row)
+        return row.to_dict()
+
+@app.put("/api/sign/{sign_id}")
+def update_sign(sign_id: int, body: DeerSignIn, _=Depends(require_token)):
+    with Session(engine) as s:
+        row = s.get(DeerSign, sign_id)
+        if not row:
+            raise HTTPException(404, "not found")
+        row.is_active = int(body.is_active)
+        s.commit(); s.refresh(row)
+        return row.to_dict()
+
+@app.delete("/api/sign/{sign_id}")
+def delete_sign(sign_id: int, _=Depends(require_token)):
+    with Session(engine) as s:
+        row = s.get(DeerSign, sign_id)
+        if row:
+            s.delete(row); s.commit()
+    return {"ok": True}
+
+
 # ---------- hourly conditions for the map + synced ranking ----------
 @app.get("/api/hours")
 async def list_hours(_=Depends(require_token)):
@@ -941,6 +1034,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     with Session(engine) as s:
         zones = [z.to_dict() for z in s.scalars(select(Zone).where(Zone.is_active == 1)).all()]
         corridors_l = [c.to_dict() for c in s.scalars(select(Corridor).where(Corridor.is_active == 1)).all()]
+        sign_rows = [r.to_dict() for r in s.scalars(select(DeerSign).where(DeerSign.is_active == 1)).all()]
     settings = get_settings()
     # honor the per-type enable toggles from the rank list
     settings = dict(settings)
@@ -990,7 +1084,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     rows = []
     period_best = {p: None for p in periods}  # (stand_id, total)
     for st in stands:
-        bonus = proximity_bonus(st, zones, corridors_l, settings)
+        bonus = proximity_bonus(st, zones, corridors_l, settings, sign=sign_rows)
         sightings = sightings_by_stand.get(st["id"], [])
         per = {}
         for p, (lo, hi) in periods.items():

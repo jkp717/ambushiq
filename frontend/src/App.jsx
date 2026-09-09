@@ -147,6 +147,7 @@ function Shell({ onLogout, version }) {
   const [stands, setStands] = useState([]);
   const [zones, setZones] = useState([]);
   const [corridors, setCorridors] = useState([]);
+  const [sign, setSign] = useState([]);
   const [drawRequest, setDrawRequest] = useState(null);
   const [editingStand, setEditingStand] = useState(null);
   const [editingZone, setEditingZone] = useState(null);
@@ -156,7 +157,8 @@ function Shell({ onLogout, version }) {
   const loadStands    = useCallback(async () => { try { setStands(await api("/stands")); } catch {} }, []);
   const loadZones     = useCallback(async () => { try { setZones(await api("/zones")); } catch {} }, []);
   const loadCorridors = useCallback(async () => { try { setCorridors(await api("/corridors")); } catch {} }, []);
-  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors()]); }, [loadStands, loadZones, loadCorridors]);
+  const loadSign      = useCallback(async () => { try { setSign(await api("/sign")); } catch {} }, []);
+  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign()]); }, [loadStands, loadZones, loadCorridors, loadSign]);
 
   const toggleActiveStand = useCallback(async (stand) => {
     try {
@@ -180,7 +182,8 @@ function Shell({ onLogout, version }) {
     if (kind === "stand") { await api(`/stands/${id}`, { method: "DELETE" }); await loadStands(); }
     else if (kind === "food" || kind === "bedding") { await api(`/zones/${id}`, { method: "DELETE" }); await loadZones(); }
     else if (kind === "corridor") { await api(`/corridors/${id}`, { method: "DELETE" }); await loadCorridors(); }
-  }, [loadStands, loadZones, loadCorridors]);
+    else if (kind === "scrape" || kind === "rub") { await api(`/sign/${id}`, { method: "DELETE" }); await loadSign(); }
+  }, [loadStands, loadZones, loadCorridors, loadSign]);
 
   function goDraw(kind) { setDrawRequest(kind); setView("map"); }
 
@@ -256,8 +259,8 @@ function Shell({ onLogout, version }) {
             onGoDraw={goDraw} openStandEditor={openStandEditor} />
         )}
         {view === "map" && (
-          <MapPage stands={stands} zones={zones} corridors={corridors}
-            reloadStands={loadStands} reloadZones={loadZones} reloadCorridors={loadCorridors}
+          <MapPage stands={stands} zones={zones} corridors={corridors} sign={sign}
+            reloadStands={loadStands} reloadZones={loadZones} reloadCorridors={loadCorridors} reloadSign={loadSign}
             drawRequest={drawRequest} clearDrawRequest={() => setDrawRequest(null)}
             relocateRequest={relocateRequest} clearRelocateRequest={() => setRelocateRequest(null)}
             openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature} />
@@ -268,7 +271,7 @@ function Shell({ onLogout, version }) {
             onDelete={async (id) => { await api(`/stands/${id}`, { method: "DELETE" }); loadStands(); }} />
         )}
         {view === "zones" && (
-          <ZonesTabPage zones={zones} corridors={corridors}
+          <ZonesTabPage zones={zones} corridors={corridors} sign={sign} reloadSign={loadSign}
             onAdd={goDraw} reloadZones={loadZones} reloadCorridors={loadCorridors}
             editingZone={editingZone} setEditingZone={setEditingZone}
             editingCorridor={editingCorridor} setEditingCorridor={setEditingCorridor}
@@ -573,7 +576,7 @@ function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
 /* ════════════════════════════════════════════════════
    MAP PAGE — full-height map with time controls + play
    ════════════════════════════════════════════════════ */
-function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCorridors,
+function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
                    openStandEditor, onEditFeature, onDeleteFeature }) {
   const [days, setDays] = useState([]);
@@ -585,7 +588,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
   const [drawMode, setDrawMode] = useState(null);
   const [relocating, setRelocating] = useState(null); // { kind, id }
   const [draftPoints, setDraftPoints] = useState([]);
-  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false });
+  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false, scrapes: false, rubs: false });
   const [pendingName, setPendingName] = useState(null);
   const [home, setHome] = useState(null);
   const [err, setErr] = useState(null);
@@ -660,6 +663,12 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
                        payload: { kind: drawMode, lat: pt.lat, lon: pt.lon, radius_m: 80 } });
     } else if (drawMode === "corridor") {
       setDraftPoints((p) => [...p, pt]);
+    } else if (drawMode === "scrape" || drawMode === "rub") {
+      try {
+        await api("/sign", { method: "POST", body: JSON.stringify({ kind: drawMode, lat: pt.lat, lon: pt.lon }) });
+        await reloadSign();
+      } catch { setErr(`Couldn't save ${drawMode}.`); }
+      setDrawMode(null);
     } else if (drawMode === "relocate" && relocating) {
       const { kind, id } = relocating;
       if (kind === "corridor") { setDraftPoints((p) => [...p, pt]); return; }
@@ -813,6 +822,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
         <div className="map-draw-bar">
           {drawMode === "stand"    && "Click the map to place the stand."}
           {(drawMode === "food" || drawMode === "bedding") && `Click the map to drop the ${drawMode} zone.`}
+          {(drawMode === "scrape" || drawMode === "rub") && `Click the map to mark this ${drawMode}.`}
           {drawMode === "corridor" && `Click points along the deer path (${draftPoints.length} set).`}
           {drawMode === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
           {drawMode === "relocate" && relocating?.kind !== "corridor" && "Tap the map to move to the new location."}
@@ -825,7 +835,7 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
       {/* map fills all remaining vertical space */}
       <div className="map-body">
         <div className="map-fill">
-          <HuntMap stands={stands} zones={zones} corridors={corridors} conditions={conditions}
+          <HuntMap stands={stands} zones={zones} corridors={corridors} sign={sign} conditions={conditions}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home}
             height="100%" />
@@ -837,6 +847,8 @@ function MapPage({ stands, zones, corridors, reloadStands, reloadZones, reloadCo
           <LayerChip on={layers.deer}      onClick={() => toggle("deer")}      color="#A35A1B" label="Deer" />
           <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
           <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
+          <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
+          <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
         </div>
         <div className="map-add-btn">
           <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
@@ -904,13 +916,14 @@ function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
 /* ════════════════════════════════════════════════════
    ZONES TAB PAGE — food / bedding / corridors sub-tabs
    ════════════════════════════════════════════════════ */
-function ZonesTabPage({ zones, corridors, onAdd, reloadZones, reloadCorridors,
+function ZonesTabPage({ zones, corridors, sign, reloadSign, onAdd, reloadZones, reloadCorridors,
                         editingZone, setEditingZone, editingCorridor, setEditingCorridor, onMoveOnMap }) {
   const [tab, setTab] = useState("food");
   const TABS = [
     { key: "food",      label: "Food",      icon: Wheat },
     { key: "bedding",   label: "Bedding",   icon: Trees },
     { key: "corridors", label: "Corridors", icon: Footprints },
+    { key: "sign",      label: "Sign",      icon: Target },
   ];
   return (
     <div className="list-page">
@@ -929,6 +942,9 @@ function ZonesTabPage({ zones, corridors, onAdd, reloadZones, reloadCorridors,
       {tab === "corridors" && (
         <CorridorsPage corridors={corridors} onAdd={() => onAdd("corridor")}
           reload={reloadCorridors} editing={editingCorridor} setEditing={setEditingCorridor} onMoveOnMap={onMoveOnMap} />
+      )}
+      {tab === "sign" && (
+        <SignPage sign={sign} reload={reloadSign} />
       )}
     </div>
   );
@@ -1150,6 +1166,62 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
             </div>
           </div>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════
+   SIGN PAGE — scrapes and rubs list
+   ════════════════════════════════════════════════════ */
+function SignPage({ sign, reload }) {
+  async function toggleSign(sg) {
+    try {
+      await api(`/sign/${sg.id}`, { method: "PUT", body: JSON.stringify({
+        kind: sg.kind, lat: sg.lat, lon: sg.lon, is_active: !sg.is_active,
+      })});
+      reload();
+    } catch {}
+  }
+  return (
+    <div>
+      <div className="list-header" style={{ marginBottom: 4 }}>
+        <h1 style={{ fontSize: 18 }}>Deer Sign</h1>
+      </div>
+      <p style={{ fontSize: 12.5, color: "var(--sub)", margin: "0 0 12px" }}>
+        Add scrapes and rubs via the <strong>+ Add</strong> button on the Map page. Enable the Scrapes/Rubs layer chips to show them on the map.
+      </p>
+      {!sign.length && <Empty>No deer sign yet — tap "+ Add" on the Map to record a scrape or rub.</Empty>}
+      {sign.length > 0 && (
+        <div className="list-grid">
+          {sign.map((sg) => {
+            const color = sg.kind === "scrape" ? "#E87800" : "#8B3A1A";
+            return (
+              <div key={sg.id} className="list-card" style={!sg.is_active ? { opacity: 0.55 } : undefined}>
+                <div className="list-card-body">
+                  <div className="list-card-name" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                    {sg.name}
+                    {!sg.is_active && <span className="cam-stub-badge" style={{ marginLeft: 4 }}>inactive</span>}
+                  </div>
+                  <div className="list-card-sub">
+                    {sg.kind} · {(+sg.lat).toFixed(4)}, {(+sg.lon).toFixed(4)}
+                    {sg.created_at && <> · added {new Date(sg.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</>}
+                  </div>
+                </div>
+                <div className="list-card-actions">
+                  <button className="icon-btn" title={sg.is_active ? "Disable" : "Enable"} onClick={() => toggleSign(sg)}>
+                    {sg.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
+                  </button>
+                  <button className="icon-btn" title="Delete"
+                    onClick={async () => { await api(`/sign/${sg.id}`, { method: "DELETE" }); reload(); }}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -1603,7 +1675,7 @@ function SettingsPage() {
     try { const r = await api("/settings", { method: "PUT", body: JSON.stringify(s) }); setS(r); setSaved(true); setTimeout(() => setSaved(false), 1800); }
     catch { setErr("Couldn't save settings."); }
   }
-  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250 }); }
+  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80 }); }
   function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
 
   const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) && +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
@@ -1618,6 +1690,8 @@ function SettingsPage() {
     { key: "corridor", label: "Deer corridors", icon: Footprints, color: "#A35A1B" },
     { key: "food",     label: "Food zones",     icon: Wheat,      color: "var(--green)" },
     { key: "bedding",  label: "Bedding zones",  icon: Trees,      color: "#6B4FA0" },
+    { key: "scrape",   label: "Scrapes",        icon: Target,     color: "#E87800" },
+    { key: "rub",      label: "Rubs",           icon: Target,     color: "#8B3A1A" },
   ];
   const RW = [
     { key: "rate_w_pressure", label: "Barometric pressure" },
@@ -1646,8 +1720,8 @@ function SettingsPage() {
       {PROX_TYPES.map(({ key, label, icon: Icon, color }) => (
         <div key={key} className="settings-section">
           <div className="settings-section-hd"><Icon size={15} color={color} /><strong>{label}</strong></div>
-          <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`]} display={s[`weight_${key}`].toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
-          <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`]} display={`${Math.round(s[`falloff_${key}`])} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
+          <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`] ?? 0} display={(s[`weight_${key}`] ?? 0).toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
+          <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`] ?? 100} display={`${Math.round(s[`falloff_${key}`] ?? 100)} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
         </div>
       ))}
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
@@ -1776,6 +1850,8 @@ function AddMenu({ drawMode, setDrawMode }) {
     { m: "food",     label: "Food zone",    icon: Wheat,      color: "var(--green)" },
     { m: "bedding",  label: "Bedding zone", icon: Trees,      color: "#6B4FA0" },
     { m: "corridor", label: "Deer corridor",icon: Footprints, color: "#A35A1B" },
+    { m: "scrape",   label: "Scrape",       icon: Target,     color: "#E87800" },
+    { m: "rub",      label: "Rub",          icon: Target,     color: "#8B3A1A" },
   ];
   return (
     <div style={{ position: "relative" }} ref={ref}>
@@ -2147,10 +2223,13 @@ function Empty({ children }) {
 function Banner({ children }) {
   return <div style={{ background: "rgba(133,79,11,.12)", color: "var(--amber)", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 10, display: "flex", gap: 8, alignItems: "center" }}><AlertTriangle size={15} /> {children}</div>;
 }
-function LayerChip({ on, onClick, color, label, dashed }) {
+function LayerChip({ on, onClick, color, label, dashed, dot }) {
   return (
     <button onClick={onClick} className="chip" style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: on ? 1 : 0.45 }}>
-      <span style={{ display: "inline-block", width: 16, height: 0, borderTop: `2px ${dashed ? "dashed" : "solid"} ${color}` }} />
+      {dot
+        ? <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color }} />
+        : <span style={{ display: "inline-block", width: 16, height: 0, borderTop: `2px ${dashed ? "dashed" : "solid"} ${color}` }} />
+      }
       {label}{on ? <Eye size={12} /> : <EyeOff size={12} />}
     </button>
   );
