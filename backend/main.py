@@ -550,6 +550,21 @@ _fc_cache: dict[str, tuple[float, dict]] = {}
 FC_TTL = 1800  # 30 min
 
 
+def _temp_swing_by_day(hourly: dict) -> dict[str, float]:
+    """Return {YYYY-MM-DD: daily_high - daily_low (°C)} for every day in the
+    forecast hourly block.  Used to scale thermal-drainage weights — a larger
+    day/night temperature gradient produces denser cold air and stronger
+    katabatic flow, which matters for scent prediction during morning and
+    evening sits."""
+    buckets: dict[str, list[float]] = {}
+    temps = hourly.get("temperature_2m", [])
+    times = hourly.get("time", [])
+    for i, tstr in enumerate(times):
+        if i < len(temps) and temps[i] is not None:
+            buckets.setdefault(tstr[:10], []).append(float(temps[i]))
+    return {d: max(v) - min(v) for d, v in buckets.items() if v}
+
+
 async def get_forecast(lat: float, lon: float, days: int = 3) -> dict:
     key = f"{lat:.3f},{lon:.3f}:{days}"
     now = time.time()
@@ -617,6 +632,7 @@ async def rank_sit(body: SitRankIn, _=Depends(require_token)):
         lat, lon = first.lat, first.lon
     fc = await get_forecast(lat, lon)
     h = fc["hourly"]
+    temp_swing_by_day = _temp_swing_by_day(h)
     mid = (body.sunrise_h + body.sunset_h) / 2
     results = []
     for st in stands:
@@ -627,6 +643,7 @@ async def rank_sit(body: SitRankIn, _=Depends(require_token)):
                 "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
                 "time_h": datetime.fromisoformat(h["time"][i]).hour,
                 "sunrise_h": body.sunrise_h, "sunset_h": body.sunset_h,
+                "temp_swing": temp_swing_by_day.get(h["time"][i][:10], 0.0),
             }
             sc = scoring.score_stand_hour(st, hour)
             agg += sc["total"]
@@ -807,6 +824,7 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
         lat, lon = first.lat, first.lon
     fc = await get_forecast(lat, lon, days=14)
     h = fc["hourly"]
+    temp_swing_by_day = _temp_swing_by_day(h)
     i = body.time_index
     if i < 0 or i >= len(h["time"]):
         raise HTTPException(400, "time_index out of range")
@@ -824,6 +842,7 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
         "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
         "time_h": datetime.fromisoformat(h["time"][i]).hour,
         "sunrise_h": sr_h, "sunset_h": ss_h,
+        "temp_swing": temp_swing_by_day.get(day, 0.0),
     }
 
     settings = get_settings()
@@ -891,6 +910,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
         lat, lon = first.lat, first.lon
     fc = await get_forecast(lat, lon, days=14)
     h = fc["hourly"]
+    temp_swing_by_day = _temp_swing_by_day(h)
     sun = fc["daily"]
     day = body.day
     sr_h, ss_h = 6.5, 19.0
@@ -945,6 +965,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
                 "wind_dir": h["wind_direction_10m"][i], "wind_speed": h["wind_speed_10m"][i],
                 "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
                 "time_h": hh, "sunrise_h": sr_h, "sunset_h": ss_h,
+                "temp_swing": temp_swing_by_day.get(day, 0.0),
             }
             det = scoring.score_with_breakdown(
                 stand, hour, period=period_name, sightings=sightings,

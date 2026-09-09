@@ -29,18 +29,37 @@ def blend_scent_dir(wind_from, ww, thermal_to, tw) -> float:
     return (math.degrees(math.atan2(wx + tx, wy + ty)) + 360) % 360
 
 
-def thermal_state(time_h, solar, sr_h, ss_h) -> dict:
+def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None) -> dict:
+    """Return the thermal phase and weight for one forecast hour.
+
+    temp_swing: daily high − daily low in °C from the forecast.  When provided,
+    sinking-phase weights are scaled by a swing_factor: a larger day/night
+    temperature gradient means denser cold air and stronger katabatic drainage.
+    Baseline (swing_factor = 1.0) is calibrated to a 12 °C / 22 °F swing —
+    typical clear-sky fall conditions.  Without temp data the original weights
+    are used unchanged (swing_factor = 1.0).
+    """
+    # swing_factor: 0.5 (near-zero swing) → 1.0 (12 °C / 22 °F) → 1.4 (≥ 24 °C / 43 °F)
+    if temp_swing is None:
+        swing_factor = 1.0
+    else:
+        swing_factor = min(1.4, max(0.5, float(temp_swing) / 12.0))
+
     a, b = time_h - sr_h, ss_h - time_h
     if -1 <= a <= 2:
-        return {"phase": "sinking", "uphill": False, "weight": 0.85}
+        return {"phase": "sinking", "uphill": False,
+                "weight": min(1.0, 0.85 * swing_factor), "swing_factor": swing_factor}
     if -1 <= b <= 3:
-        return {"phase": "sinking", "uphill": False, "weight": 0.9}
+        return {"phase": "sinking", "uphill": False,
+                "weight": min(1.0, 0.90 * swing_factor), "swing_factor": swing_factor}
     if time_h < sr_h - 1 or time_h > ss_h + 1:
-        return {"phase": "sinking", "uphill": False, "weight": 0.7}
+        return {"phase": "sinking", "uphill": False,
+                "weight": min(1.0, 0.70 * swing_factor), "swing_factor": swing_factor}
     sf = min(1.0, solar / 400)
     if sf > 0.25:
-        return {"phase": "rising", "uphill": True, "weight": 0.4 + 0.4 * sf}
-    return {"phase": "neutral", "uphill": False, "weight": 0.15}
+        return {"phase": "rising", "uphill": True,
+                "weight": 0.4 + 0.4 * sf, "swing_factor": swing_factor}
+    return {"phase": "neutral", "uphill": False, "weight": 0.15, "swing_factor": swing_factor}
 
 
 def stand_hour_vectors(stand: dict, hour: dict) -> dict:
@@ -50,7 +69,8 @@ def stand_hour_vectors(stand: dict, hour: dict) -> dict:
     t = stand.get("terrain")
     downhill = t["downhill_deg"] if t else (stand.get("downhill_deg") or 0)
     drainage = t["drainage_deg"] if t else downhill
-    therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"])
+    therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"],
+                          hour.get("temp_swing"))
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
     wind_to = (hour["wind_dir"] + 180) % 360
 
@@ -73,7 +93,8 @@ def score_stand_hour(stand: dict, hour: dict) -> dict:
     t = stand.get("terrain")
     downhill = t["downhill_deg"] if t else (stand.get("downhill_deg") or 0)
     drainage = t["drainage_deg"] if t else downhill
-    therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"])
+    therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"],
+                          hour.get("temp_swing"))
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
 
     ww = max(0.2, min(1.0, hour["wind_speed"] / 12))
@@ -112,6 +133,7 @@ def score_stand_hour(stand: dict, hour: dict) -> dict:
         "scent_to_deg": round(scent_to),
         "thermal_phase": therm["phase"],
         "drainage_deg": round(drainage),
+        "swing_factor": round(therm["swing_factor"], 2),
     }
 
 
@@ -212,6 +234,22 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                       "text": f"speed {hour['wind_speed']} mph, gust steadiness {base['steadiness']:.2f}"})
     breakdown.append({"factor": "Terrain / thermals", "value": 1.0 if base["thermal_phase"] != "neutral" else 0.3,
                       "text": f"thermals {base['thermal_phase']}, drainage {base['drainage_deg']}°"})
+
+    # Temperature swing callout — only when the gradient is meaningfully above average
+    temp_swing = hour.get("temp_swing")
+    if temp_swing is not None and temp_swing > 12:
+        swing_f = round(temp_swing * 9 / 5, 1)
+        swing_c = round(temp_swing, 1)
+        strength = "very strong" if temp_swing > 20 else "strong"
+        breakdown.append({
+            "factor": "Temperature swing",
+            "value": min(1.0, (temp_swing - 12) / 12),   # 0 at baseline, 1.0 at +12 °C above baseline
+            "text": (
+                f"{strength} day/night swing ({swing_f} °F / {swing_c} °C) — "
+                f"denser cold air amplifies thermal drainage: scent carries farther "
+                f"and more predictably downhill"
+            ),
+        })
 
     # Start total from the pre-scent conditions score so that proximity and
     # camera boosts are accumulated before the scent gate is applied.
