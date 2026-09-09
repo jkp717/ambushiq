@@ -121,25 +121,20 @@ class SpyPointProvider(CameraProvider):
                 log.info("SpyPoint: first raw photo keys=%s full=%s",
                          list(raw_photos[0].keys()), raw_photos[0])
             for p in raw_photos:
-                urls = p.get("urls") or {}
-                hd = p.get("hd") or {}
-                host = hd.get("host") or urls.get("host")
-                path = hd.get("path") or urls.get("path")
+                # Spypoint returns large/medium/small as top-level keys, each a dict
+                # with {host, path} pointing to a pre-signed S3 URL.
+                # Prefer large, fall back to medium, then small.
                 url = None
-                if host and path:
-                    url = f"https://{host}/{path}"
-                elif isinstance(urls.get("large"), str):
-                    url = urls["large"]
-                # Last-resort: try any string value in urls that looks like a URL
-                if url is None:
-                    for v in urls.values():
-                        if isinstance(v, str) and v.startswith("http"):
-                            url = v
-                            log.info("SpyPoint: used fallback url field: %s", url[:100])
-                            break
+                for size in ("large", "medium", "small"):
+                    img = p.get(size)
+                    if isinstance(img, dict) and img.get("host") and img.get("path"):
+                        url = f"https://{img['host']}/{img['path']}"
+                        break
                 taken = p.get("date") or p.get("originDate")
-                log.info("SpyPoint: photo cam=%s taken=%s hd=%s urls_keys=%s url=%s",
-                         p.get("camera"), taken, hd, list(urls.keys()), url[:80] if url else None)
+                log.info("SpyPoint: photo cam=%s taken=%s size_used=%s url=%s",
+                         p.get("camera"), taken,
+                         next((s for s in ("large","medium","small") if isinstance(p.get(s), dict) and p.get(s,{}).get("host")), None),
+                         url[:80] if url else None)
                 out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("camera"))})
         log.info("SpyPoint: returning %d photo(s) to sync engine", len(out))
         return out
