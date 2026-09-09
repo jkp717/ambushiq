@@ -116,18 +116,30 @@ class SpyPointProvider(CameraProvider):
             resp.raise_for_status()
             raw_photos = resp.json().get("photos", [])
             log.info("SpyPoint: API returned %d photo(s)", len(raw_photos))
+            # Log the first raw photo in full so we can see the actual field structure
+            if raw_photos:
+                log.info("SpyPoint: first raw photo keys=%s full=%s",
+                         list(raw_photos[0].keys()), raw_photos[0])
             for p in raw_photos:
                 urls = p.get("urls") or {}
-                host = p.get("hd", {}).get("host") or urls.get("host")
-                path = p.get("hd", {}).get("path") or urls.get("path")
+                hd = p.get("hd") or {}
+                host = hd.get("host") or urls.get("host")
+                path = hd.get("path") or urls.get("path")
                 url = None
                 if host and path:
                     url = f"https://{host}/{path}"
                 elif isinstance(urls.get("large"), str):
                     url = urls["large"]
+                # Last-resort: try any string value in urls that looks like a URL
+                if url is None:
+                    for v in urls.values():
+                        if isinstance(v, str) and v.startswith("http"):
+                            url = v
+                            log.info("SpyPoint: used fallback url field: %s", url[:100])
+                            break
                 taken = p.get("date") or p.get("originDate")
-                log.debug("SpyPoint: photo cam=%s taken=%s url=%s",
-                          p.get("camera"), taken, url[:80] if url else None)
+                log.info("SpyPoint: photo cam=%s taken=%s hd=%s urls_keys=%s url=%s",
+                         p.get("camera"), taken, hd, list(urls.keys()), url[:80] if url else None)
                 out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("camera"))})
         log.info("SpyPoint: returning %d photo(s) to sync engine", len(out))
         return out
