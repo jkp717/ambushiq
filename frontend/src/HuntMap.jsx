@@ -89,7 +89,7 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete }
 }
 
 export default function HuntMap({
-  stands, zones, corridors, conditions,
+  stands, zones, corridors, sign, conditions,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
   layers, onEditFeature, onDeleteFeature, center,
   height = 420,
@@ -116,7 +116,7 @@ export default function HuntMap({
       baseLayers.current = { Topo: topo, "Imagery+Topo": imagery };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "scent" is added before "stands" so cones render below stand markers
-      ["zones", "corridors", "scent", "stands", "draft"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -195,6 +195,32 @@ export default function HuntMap({
       line.addTo(g);
     });
   }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature]);
+
+  // render deer sign (scrapes + rubs)
+  useEffect(() => {
+    if (!ready) return;
+    const gS = layerGroups.current.scrapes; gS.clearLayers();
+    const gR = layerGroups.current.rubs;    gR.clearLayers();
+    (sign || []).forEach((sg) => {
+      const isScrape = sg.kind === "scrape";
+      if (isScrape  && !layers.scrapes) return;
+      if (!isScrape && !layers.rubs)    return;
+      const color = isScrape ? "#E87800" : "#8B3A1A";
+      const g     = isScrape ? gS : gR;
+      const m = L.circleMarker([sg.lat, sg.lon], {
+        radius: 7, color, fillColor: color, fillOpacity: 0.8, weight: 2,
+        interactive: !drawMode,
+      });
+      if (!drawMode) {
+        bindFeaturePopup(m, {
+          title: sg.name,
+          subtitle: `${sg.kind} · ${(+sg.lat).toFixed(4)}, ${(+sg.lon).toFixed(4)}`,
+          kind: sg.kind, id: sg.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
+        });
+      }
+      m.addTo(g);
+    });
+  }, [sign, ready, layers.scrapes, layers.rubs, drawMode, onEditFeature, onDeleteFeature]);
 
   // render scent cones — geographic sector from each stand in the blended scent direction
   useEffect(() => {
