@@ -884,7 +884,8 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     return {
         "time": {"index": i, "iso": h["time"][i],
                  "label": datetime.fromisoformat(h["time"][i]).strftime("%a %b %-d, %-I %p"),
-                 "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i]},
+                 "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i],
+                 "wind_speed": h["wind_speed_10m"][i], "wind_dir": h["wind_direction_10m"][i]},
         "stands": items,
         "ranked": ranked,
     }
