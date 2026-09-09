@@ -400,17 +400,25 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 500;
 }
 
-/* ── layer overlay (shared with map page) ── */
+/* ── layer overlay — collapsible ── */
 .layer-overlay {
   position: absolute; bottom: 10px; left: 10px; z-index: 500;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+}
+.layer-toggle-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
+  border: none; border-radius: 8px; cursor: pointer; color: #fff;
+  transition: background 0.12s;
+}
+.layer-toggle-btn:hover { background: rgba(0,0,0,.70); }
+.layer-chips-panel {
   display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
-  background: rgba(0,0,0,.35); padding: 6px; border-radius: 10px;
-  backdrop-filter: blur(3px);
+  background: rgba(0,0,0,.40); backdrop-filter: blur(4px);
+  padding: 8px 6px; border-radius: 10px;
 }
-.layer-overlay .chip { background: var(--bg); font-size: 11.5px; }
-@media (max-width: 560px) {
-  .layer-overlay { flex-direction: row; flex-wrap: wrap; max-width: calc(100% - 20px); }
-}
+.layer-chips-panel .chip { background: var(--bg); font-size: 11.5px; }
 
 /* ── map-page nav dropdown in top bar ── */
 .top-bar-nav-drop {
