@@ -1369,11 +1369,23 @@ def update_camera(camera_id: int, body: CameraUpdateIn, _=Depends(require_token)
 
 
 @app.delete("/api/cameras/{camera_id}")
-def delete_camera(camera_id: int, _=Depends(require_token)):
+def delete_camera(camera_id: int, delete_images: bool = False, _=Depends(require_token)):
+    deleted_dir = None
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if cam:
-            s.delete(cam); s.commit()
+            if delete_images:
+                deleted_dir = get_camera_dir(cam.brand, cam.name)
+            s.delete(cam)
+            s.commit()
+    if delete_images and deleted_dir:
+        import shutil
+        if os.path.isdir(deleted_dir):
+            try:
+                shutil.rmtree(deleted_dir)
+                log.info("delete_camera: removed image dir %s", deleted_dir)
+            except Exception as exc:
+                log.warning("delete_camera: failed to remove %s: %s", deleted_dir, exc)
     return {"ok": True}
 
 
