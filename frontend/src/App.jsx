@@ -18,6 +18,20 @@ const DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W"
 const degToCompass = (d) => DIRS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
 const compassToDeg = (c) => DIRS.indexOf(c) * 22.5;
 
+/* ── corridor length helper ── */
+function corridorLengthFt(points) {
+  if (!points || points.length < 2) return 0;
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [lat1, lon1] = points[i], [lat2, lon2] = points[i + 1];
+    const R = 6371000, toR = Math.PI / 180;
+    const dLat = (lat2 - lat1) * toR, dLon = (lon2 - lon1) * toR;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toR) * Math.cos(lat2 * toR) * Math.sin(dLon / 2) ** 2;
+    total += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  return Math.round(total * 3.28084); // metres → feet
+}
+
 /* ───────── API client ───────── */
 const tokenStore = {
   get: () => localStorage.getItem("sa_token") || "",
@@ -1077,7 +1091,7 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
                 {!c.is_active && <span className="cam-stub-badge" style={{ marginLeft: 6 }}>inactive</span>}
               </div>
               <div className="list-card-sub">
-                {c.points.length} points · Usage {c.usage ?? 5}/10
+                {corridorLengthFt(c.points).toLocaleString()} ft · Usage {c.usage ?? 5}/10
                 {c.falloff_m != null ? ` · ${Math.round(c.falloff_m)}m falloff` : " · global falloff"}
               </div>
             </div>
