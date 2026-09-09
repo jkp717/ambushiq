@@ -115,7 +115,8 @@ export default function HuntMap({
       topo.addTo(map);
       baseLayers.current = { Topo: topo, "Imagery+Topo": imagery };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
-      ["zones", "corridors", "stands", "draft"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      // "scent" is added before "stands" so cones render below stand markers
+      ["zones", "corridors", "scent", "stands", "draft"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -207,6 +208,57 @@ export default function HuntMap({
       }
     });
   }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature]);
+
+  // render scent cones — geographic sector from each stand in the blended scent direction
+  useEffect(() => {
+    if (!ready) return;
+    const g = layerGroups.current.scent; g.clearLayers();
+    if (!layers.scent || !conditions) return;
+    const byId = {};
+    (conditions.stands || []).forEach((it) => { byId[it.stand.id] = it.vectors; });
+
+    // Move distM metres along bearingDeg from [lat, lon]; returns [lat, lon]
+    function bearingPoint(lat, lon, bearingDeg, distM) {
+      const R = 6371000;
+      const lat1 = lat * Math.PI / 180, lon1 = lon * Math.PI / 180;
+      const brng = bearingDeg * Math.PI / 180, d = distM / R;
+      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng));
+      const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+      return [lat2 * 180 / Math.PI, lon2 * 180 / Math.PI];
+    }
+
+    stands.forEach((s) => {
+      const v = byId[s.id];
+      if (!v || v.scent_to_deg == null) return;
+
+      const windSpeed  = v.wind_speed  ?? 0;
+      const gust       = v.gust        ?? windSpeed;
+      const scentDeg   = v.scent_to_deg;
+      const scentScore = v.scent_score ?? 1;
+
+      // Length: proportional to wind speed (60–300 m)
+      const lengthM  = Math.max(60,  Math.min(300, 40 + windSpeed * 12));
+      // Half-angle: grows with gust spread — gusty = wide fan, steady = tight beam (8–50°)
+      const gustSpread = Math.max(0, gust - windSpeed);
+      const halfAngle  = Math.max(8,  Math.min(50,  10 + gustSpread * 5));
+
+      // Colour: green (away from deer) → amber → red (toward deer)
+      const color = scentScore > 0.6 ? "#2D8A2D" : scentScore > 0.35 ? "#C28800" : "#C0392B";
+
+      // Build sector: apex → arc of points along the far edge → close
+      const ARC_STEPS = 10;
+      const pts = [[s.lat, s.lon]];
+      for (let i = 0; i <= ARC_STEPS; i++) {
+        const ang = (scentDeg - halfAngle) + (2 * halfAngle * i / ARC_STEPS);
+        pts.push(bearingPoint(s.lat, s.lon, (ang + 360) % 360, lengthM));
+      }
+
+      L.polygon(pts, {
+        color, fillColor: color, fillOpacity: 0.22, weight: 1, opacity: 0.55,
+        interactive: false, // never intercepts clicks
+      }).addTo(g);
+    });
+  }, [stands, conditions, ready, layers.scent]);
 
   // render stands with indicators
   useEffect(() => {
