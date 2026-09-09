@@ -302,7 +302,7 @@ def init_db(retries: int = 30):
                 try:
                     conn.execute(text("""
                         CREATE TABLE IF NOT EXISTS deer_sign (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            id SERIAL PRIMARY KEY,
                             kind VARCHAR(20) NOT NULL,
                             name VARCHAR(120) NOT NULL DEFAULT '',
                             lat FLOAT NOT NULL DEFAULT 0,
