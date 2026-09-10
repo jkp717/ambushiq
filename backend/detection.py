@@ -55,8 +55,8 @@ def _preflight():
 
 _preflight()
 
-# MegaDetector class_id 1 == animal (2 = person, 3 = vehicle).
-ANIMAL_CLASS_ID = 1
+# MegaDetector class_id 0 == animal (1 = person, 2 = vehicle).
+ANIMAL_CLASS_ID = 0
 CONF_THRESHOLD = float(os.environ.get("DETECTOR_CONF", "0.2"))
 
 
