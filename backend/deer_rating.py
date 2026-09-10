@@ -25,7 +25,7 @@ Wilson & Sealander Arkansas reproduction data:
 Pressure is provided by Open-Meteo in hPa; we convert to inHg for thresholds.
 """
 from __future__ import annotations
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 HPA_TO_INHG = 0.02953
@@ -57,13 +57,16 @@ def rut_intensity(d: date, peak_month: int = RUT_PEAK_MONTH, peak_day: int = RUT
     """Return (0..1 intensity, phase label) for daytime-huntable rut activity.
     Peaks slightly BEFORE breeding peak (seeking/chasing = best daylight movement).
     peak_month/peak_day are configurable (regional rut timing)."""
+    # Season spans across the new year; if date is Jan/Feb, the peak belongs to the previous calendar year.
+    peak_year = d.year if d.month >= 6 else d.year - 1
     try:
-        peak = date(d.year, int(peak_month), int(peak_day))
+        peak = date(peak_year, int(peak_month), int(peak_day))
     except ValueError:
-        peak = date(d.year, RUT_PEAK_MONTH, RUT_PEAK_DAY)
+        peak = date(peak_year, RUT_PEAK_MONTH, RUT_PEAK_DAY)
+        
     # huntable daylight movement peaks ~10 days before breeding peak (chasing phase)
-    hunt_peak_doy = _doy(peak) - 10
-    delta = _doy(d) - hunt_peak_doy  # days from the daylight-movement peak
+    hunt_peak = peak - timedelta(days=10)
+    delta = (d - hunt_peak).days  # days from the daylight-movement peak using timedelta for cross-year safety
 
     # piecewise: ramp up through October, plateau pre-rut, taper post-breeding
     if delta < -45:        # before ~early Oct: low background
@@ -143,7 +146,7 @@ def temp_shift_factor(day_high_f: float | None, baseline_f: float | None) -> flo
 def rate_day(d: date, wx: dict, weights: dict | None = None,
              rut_peak_month: int = RUT_PEAK_MONTH, rut_peak_day: int = RUT_PEAK_DAY) -> dict:
     """wx keys (daytime aggregates):
-        pressure_inhg, pressure_trend_inhg, wind_mph, rain_mm, day_high_f, baseline_f
+        pressure_inhg, pressure_hpa, pressure_trend_inhg, pressure_trend_hpa, wind_mph, rain_mm, day_high_f, baseline_f
     weights: optional {pressure,wind,rain,temp} relative weights (any scale; they
         are normalized to sum to 1 so the score stays calibrated 0-1).
     rut_peak_month/day: configurable regional breeding peak.
@@ -159,7 +162,20 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
         w = dict(WEATHER_WEIGHTS); tot = 1.0
     w = {k: v / tot for k, v in w.items()}
 
-    pf = pressure_factor(wx.get("pressure_inhg"), wx.get("pressure_trend_inhg"))
+    # Handle pressure input conversion (supporting both explicit inHg or hPa from Open-Meteo)
+    raw_p = wx.get("pressure_inhg")
+    if raw_p is None and wx.get("pressure_hpa") is not None:
+        raw_p = wx["pressure_hpa"] * HPA_TO_INHG
+    elif raw_p is None and wx.get("pressure") is not None:
+        # Fallback generic 'pressure' key check (if > 100 assume hPa, else inHg)
+        val = wx["pressure"]
+        raw_p = val * HPA_TO_INHG if val > 100 else val
+
+    raw_trend = wx.get("pressure_trend_inhg")
+    if raw_trend is None and wx.get("pressure_trend_hpa") is not None:
+        raw_trend = wx["pressure_trend_hpa"] * HPA_TO_INHG
+
+    pf = pressure_factor(raw_p, raw_trend)
     wf = wind_factor(wx.get("wind_mph"))
     rf = rain_factor(wx.get("rain_mm"), wx.get("wind_mph"))
     tf = temp_shift_factor(wx.get("day_high_f"), wx.get("baseline_f"))
@@ -192,7 +208,7 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
         {"factor": "Rut / season", "value": round(rut, 2),
          "impact": f"{phase} — {_lbl(rut)} seasonal drive", "weight": "multiplier"},
         {"factor": "Barometric pressure", "value": round(pf, 2),
-         "impact": f"{_lbl(pf)} ({wx.get('pressure_inhg')}\" )", "weight": round(w['pressure'], 2)},
+         "impact": f"{_lbl(pf)} ({round(raw_p, 2) if raw_p else 'N/A'}\" )", "weight": round(w['pressure'], 2)},
         {"factor": "Wind", "value": round(wf, 2),
          "impact": f"{_lbl(wf)} ({wx.get('wind_mph')} mph)", "weight": round(w['wind'], 2)},
         {"factor": "Rain", "value": round(rf, 2),
