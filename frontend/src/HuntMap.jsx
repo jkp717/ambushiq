@@ -116,7 +116,7 @@ export default function HuntMap({
       baseLayers.current = { Topo: topo, "Imagery+Topo": imagery };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "scent" is added before "stands" so cones render below stand markers
-      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -312,6 +312,70 @@ export default function HuntMap({
       L.polyline(draftPoints.map((p) => [p.lat, p.lon]), { color: COLORS.deer, weight: 2, dashArray: "4 4" }).addTo(g);
     }
   }, [draftPoints, ready]);
+
+// render terrain flow accumulation
+  useEffect(() => {
+    if (!ready) return;
+    const g = layerGroups.current.flow; 
+    g.clearLayers();
+    if (!layers.flow) return;
+
+    stands.forEach((s) => {
+      if (!s.terrain || !s.terrain.acc) return;
+      const t = s.terrain;
+      const N = t.grid_size;
+      const boxM = t.box_m;
+
+      // Find max accumulation to establish a logarithmic scale
+      let maxAcc = 0;
+      for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+          if (t.acc[r][c] > maxAcc) maxAcc = t.acc[r][c];
+        }
+      }
+      if (maxAcc <= 0) return;
+      const logMax = Math.log1p(maxAcc);
+
+      // Paint the matrix to an in-memory canvas
+      const canvas = document.createElement("canvas");
+      canvas.width = N;
+      canvas.height = N;
+      const ctx = canvas.getContext("2d");
+
+      for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+          const val = t.acc[r][c];
+          const norm = Math.log1p(val) / logMax;
+
+          // Only render cells with meaningful accumulation to keep the map clean
+          if (norm > 0.15) {
+            // using var(--blue): rgb(24, 95, 165)
+            ctx.fillStyle = `rgba(24, 95, 165, ${norm})`;
+            ctx.fillRect(c, r, 1, 1);
+          }
+        }
+      }
+
+      // Calculate exact geographic bounds for the 800m box
+      const latRad = s.lat * Math.PI / 180;
+      const mPerDegLat = 111320.0;
+      const mPerDegLon = mPerDegLat * Math.cos(latRad);
+      const halfLat = (boxM / 2) / mPerDegLat;
+      const halfLon = (boxM / 2) / mPerDegLon;
+
+      const bounds = [
+        [s.lat - halfLat, s.lon - halfLon], // SouthWest
+        [s.lat + halfLat, s.lon + halfLon]  // NorthEast
+      ];
+
+      // Project the canvas onto the Leaflet map
+      L.imageOverlay(canvas.toDataURL(), bounds, {
+        opacity: 0.85,
+        interactive: false,
+        className: "pixelated-overlay"
+      }).addTo(g);
+    });
+  }, [stands, ready, layers.flow]);
 
   return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
 }
