@@ -204,8 +204,8 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
     # Extract center-cell metrics, handling flat terrain (-9999 aspect)
     aspect_val = float(aspect_rda[ctr, ctr])
     downhill_deg = aspect_val if aspect_val >= 0 else 0.0
-    slope_pct = round(float(slope_rda[ctr, ctr]) * 100)
-
+    slope_pct = round((float(slope_rda[ctr, ctr]) / cell_m) * 100)
+    
     # Calculate channel strength from max accumulation in the center 7x7 neighborhood
     max_near = 0.0
     for r in range(max(0, ctr - 3), min(n, ctr + 4)):
