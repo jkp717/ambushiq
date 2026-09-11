@@ -27,8 +27,9 @@ import logging
 import threading
 
 _MODEL = None
+_CLASSIFIER = None
 _LOCK = threading.Lock()
-_MODE = os.environ.get("DETECTOR_MODE", "megadetector")  # "megadetector" | "fallback"
+_MODE = os.environ.get("DETECTOR_MODE", "fallback")  # "megadetector" | "fallback"
 
 log = logging.getLogger(__name__)
 
@@ -55,8 +56,8 @@ def _preflight():
 
 _preflight()
 
-# MegaDetector class_id 1 == animal (2 = person, 3 = vehicle).
-ANIMAL_CLASS_ID = 1
+# MegaDetector native class IDs: 0 = animal, 1 = person, 2 = vehicle.
+ANIMAL_CLASS_ID = 0
 CONF_THRESHOLD = float(os.environ.get("DETECTOR_CONF", "0.2"))
 
 
@@ -87,16 +88,34 @@ def _load_model():
         return _MODEL
 
 
+def _load_classifier(device="cpu"):
+    """Lazy-load the species classification model."""
+    global _CLASSIFIER
+    if _CLASSIFIER is not None:
+        return _CLASSIFIER
+    with _LOCK:
+        if _CLASSIFIER is not None:
+            return _CLASSIFIER
+            
+        from PytorchWildlife.models import classification as pw_classification
+        
+        log.info("detection: loading DFNE Classifier device=%s", device)
+        _CLASSIFIER = pw_classification.DFNE(device=device) 
+        
+        log.info("detection: classifier loaded")
+        return _CLASSIFIER
+
+
 def detect_animal(image_path: str) -> dict:
     """
-    Return {"is_animal": bool, "confidence": float, "detector": str}.
+    Return {"is_animal": bool, "confidence": float, "detector": str, "species": str | None}.
 
     Never raises. On model failure returns is_animal=False with detector="error(...)"
     so the caller can decide what to do (currently: save at conf=0 so photos are
     never silently discarded).
     """
     if _MODE == "fallback":
-        return {"is_animal": True, "confidence": 0.0, "detector": "fallback"}
+        return {"is_animal": True, "confidence": 0.0, "detector": "fallback", "species": None}
 
     try:
         import numpy as np          # type: ignore
@@ -107,19 +126,46 @@ def detect_animal(image_path: str) -> dict:
         img = np.array(Image.open(image_path).convert("RGB"))
         results = model.single_image_detection(img, img_path=image_path)
 
-        # PytorchWildlife returns a supervision Detections object.
-        # .class_id is an int array (1=animal, 2=person, 3=vehicle).
-        # .confidence is a float array of matching scores.
         dets = results.get("detections")
-        best = 0.0
+        best_conf = 0.0
+        best_box = None
+        
+        # 1. Find the highest-confidence animal bounding box
         if dets is not None and dets.confidence is not None and dets.class_id is not None:
-            for cls_id, conf in zip(dets.class_id, dets.confidence):
-                if int(cls_id) == ANIMAL_CLASS_ID:
-                    best = max(best, float(conf))
+            for i, (cls_id, conf) in enumerate(zip(dets.class_id, dets.confidence)):
+                if int(cls_id) == ANIMAL_CLASS_ID and conf > best_conf:
+                    best_conf = float(conf)
+                    best_box = dets.xyxy[i]
 
-        return {"is_animal": best >= CONF_THRESHOLD, "confidence": round(best, 3),
-                "detector": "megadetector"}
+        is_animal = best_conf >= CONF_THRESHOLD
+        response = {
+            "is_animal": is_animal, 
+            "confidence": round(best_conf, 3),
+            "detector": "megadetector",
+            "species": None
+        }
+
+        # 2. If an animal is detected, run the classifier on that specific crop
+        if is_animal and best_box is not None:
+            # Determine the device MegaDetector is currently utilizing
+            device = "cuda" if "cuda" in str(getattr(model, "device", "cpu")) else "cpu"
+            classifier = _load_classifier(device=device)
+            
+            # Extract coordinates and crop the numpy array
+            x1, y1, x2, y2 = map(int, best_box)
+            animal_crop = img[max(0, y1):y2, max(0, x1):x2]
+
+            # Pass the cropped image into the classification model
+            clf_results = classifier.single_image_classification(animal_crop) 
+            
+            # Extract the top predicted class name 
+            if isinstance(clf_results, dict) and "class_name" in clf_results:
+                response["species"] = clf_results.get("class_name")
+            else:
+                response["species"] = str(clf_results)
+
+        return response
 
     except Exception as e:
-        log.warning("MegaDetector failed on %s: %s: %s", image_path, type(e).__name__, e)
-        return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})"}
+        log.warning("Detection/Classification failed on %s: %s: %s", image_path, type(e).__name__, e)
+        return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})", "species": None}

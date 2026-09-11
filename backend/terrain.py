@@ -6,7 +6,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 import httpx
 
-GRID = 40           # denser than the artifact (24) — caching makes it affordable
+GRID = 41           # denser than the artifact (24) — odd number ensures exact center alignment
 BOX_M = 800.0
 M_PER_DEG_LAT = 111320.0
 
@@ -104,7 +104,8 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
     direction = [[-1] * n for _ in range(n)]
     for r in range(n):
         for c in range(n):
-            best, best_slope = -1, 0.0
+            # best_slope set slightly below 0 so perfectly flat cells still pick a flow path
+            best, best_slope = -1, -1e-6 
             for k in range(8):
                 nr, nc = r + DR[k], c + DC[k]
                 if nr < 0 or nc < 0 or nr >= n or nc >= n:
@@ -151,7 +152,13 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
             by += math.cos(b) * w
             acc_sum += w
             max_near = max(max_near, acc[r][c])
-    drainage_deg = round((math.degrees(math.atan2(bx, by)) + 360) % 360) if acc_sum > 0 else round(downhill_deg)
+            
+    # Protect against symmetric vector cancellation resulting in 0,0 inputs to atan2
+    if acc_sum > 0 and (abs(bx) > 1e-6 or abs(by) > 1e-6):
+        drainage_deg = round((math.degrees(math.atan2(bx, by)) + 360) % 360)
+    else:
+        drainage_deg = round(downhill_deg)
+        
     channel_strength = round(min(1.0, max_near / (n * n * 0.06)) * 100) / 100
 
     flat_all = [v for row in dem for v in row]
