@@ -1,10 +1,13 @@
-"""Terrain analysis: elevation grid -> slope/aspect + cold-air drainage (D8 flow accumulation)."""
+"""Terrain analysis: elevation grid -> slope/aspect + cold-air drainage (D-Infinity flow accumulation)."""
 from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, asdict
 from typing import Optional
 import httpx
+import numpy as np
+import richdem as rd
+
 
 GRID = 41           # denser than the artifact (24) — odd number ensures exact center alignment
 BOX_M = 800.0
@@ -90,7 +93,8 @@ async def fetch_terrain(lat: float, lon: float) -> dict:
     return analyze_terrain(dem, cell_m, source)
 
 
-def analyze_terrain(dem, cell_m: float, source: str) -> dict:
+def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
+    """Analyze terrian using the D8 flow accumulation spatial analysis algorithm"""
     n = len(dem)
     ctr = n // 2
 
@@ -172,6 +176,57 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
         "downhill_deg": round(downhill_deg),
         "slope_pct": slope_pct,
         "drainage_deg": drainage_deg,
+        "channel_strength": channel_strength,
+        "elevation": round(dem[ctr][ctr]),
+        "relief": round(max_e - min_e),
+        "grid_size": n,
+        "box_m": BOX_M,
+    }
+
+
+def analyze_terrain(dem, cell_m: float, source: str) -> dict:
+    """Analyze terrian using the D-Infinity spatial analysis algorithm"""
+    n = len(dem)
+    ctr = n // 2
+
+    # Load 2D list into a numpy array and wrap it for RichDEM
+    dem_np = np.array(dem, dtype=np.float32)
+    rda = rd.rdarray(dem_np, no_data=-9999)
+
+    # Fill artificial sinks to prevent the D-infinity flow from getting trapped
+    rd.FillDepressions(rda, epsilon=True, in_place=True)
+
+    # Calculate D-Infinity Flow Accumulation and terrain attributes
+    accum_rda = rd.FlowAccumulation(rda, method='Dinf')
+    aspect_rda = rd.TerrainAttribute(rda, attrib='aspect')
+    slope_rda = rd.TerrainAttribute(rda, attrib='slope_riserun')
+
+    # Extract center-cell metrics, handling flat terrain (-9999 aspect)
+    aspect_val = float(aspect_rda[ctr, ctr])
+    downhill_deg = aspect_val if aspect_val >= 0 else 0.0
+    slope_pct = round(float(slope_rda[ctr, ctr]) * 100)
+
+    # Calculate channel strength from max accumulation in the center 7x7 neighborhood
+    max_near = 0.0
+    for r in range(max(0, ctr - 3), min(n, ctr + 4)):
+        for c in range(max(0, ctr - 3), min(n, ctr + 4)):
+            val = float(accum_rda[r, c])
+            if val > max_near:
+                max_near = val
+                
+    channel_strength = round(min(1.0, max_near / (n * n * 0.06)) * 100) / 100
+
+    min_e = float(np.min(dem_np))
+    max_e = float(np.max(dem_np))
+
+    return {
+        "source": source,
+        "dem": dem,
+        "acc": accum_rda.tolist(),
+        "cell_m": cell_m,
+        "downhill_deg": round(downhill_deg),
+        "slope_pct": slope_pct,
+        "drainage_deg": round(downhill_deg),
         "channel_strength": channel_strength,
         "elevation": round(dem[ctr][ctr]),
         "relief": round(max_e - min_e),
