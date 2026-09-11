@@ -217,25 +217,15 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          sightings: list[dict] | None = None, max_boost_pct: float = 0.0,
                          proximity: dict | None = None,
                          utc_offset_seconds: int = 0) -> dict:
-    """
-    Wrap score_stand_hour with a structured, human-readable breakdown and an optional
-    positive-only camera boost. Returns final_score plus a breakdown list.
-
-    utc_offset_seconds: seconds east of UTC for the property's location, from the
-    Open-Meteo forecast response. Passed through to camera_boost so period matching
-    uses local time rather than UTC.
-    """
+    
     base = score_stand_hour(stand, hour)
-
     breakdown = []
 
-    # ── Additive factors: steadiness + thermal predictability ──────────────
     breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],
                       "text": f"speed {hour['wind_speed']} mph, gust steadiness {base['steadiness']:.2f}"})
     breakdown.append({"factor": "Terrain / thermals", "value": 1.0 if base["thermal_phase"] != "neutral" else 0.3,
                       "text": f"thermals {base['thermal_phase']}, drainage {base['drainage_deg']}°"})
 
-    # Temperature swing callout — only when the gradient is meaningfully above average
     temp_swing = hour.get("temp_swing")
     if temp_swing is not None and temp_swing > 12:
         swing_f = round(temp_swing * 9 / 5, 1)
@@ -243,24 +233,16 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         strength = "very strong" if temp_swing > 20 else "strong"
         breakdown.append({
             "factor": "Temperature swing",
-            "value": min(1.0, (temp_swing - 12) / 12),   # 0 at baseline, 1.0 at +12 °C above baseline
-            "text": (
-                f"{strength} day/night swing ({swing_f} °F / {swing_c} °C) — "
-                f"denser cold air amplifies thermal drainage: scent carries farther "
-                f"and more predictably downhill"
-            ),
+            "value": min(1.0, (temp_swing - 12) / 12),
+            "text": f"{strength} day/night swing ({swing_f} °F / {swing_c} °C) — denser cold air amplifies thermal drainage"
         })
 
-    # Start total from the pre-scent conditions score so that proximity and
-    # camera boosts are accumulated before the scent gate is applied.
     total = base["conditions"]
-    prox_total = 0.0
-    if proximity:
-        prox_total = float(proximity.get("total") or 0.0)
-        if prox_total > 0:
-            total += prox_total
-            breakdown.append({"factor": "Infrastructure proximity", "value": round(prox_total, 3),
-                              "text": f"+{round(prox_total*100)} from nearby corridor/food/bedding"})
+    prox_total = float(proximity.get("total") or 0.0) if proximity else 0.0
+    if prox_total > 0:
+        total += prox_total
+        breakdown.append({"factor": "Infrastructure proximity", "value": round(prox_total, 3),
+                          "text": f"+{round(prox_total*100)} from nearby corridor/food/bedding"})
 
     cam = {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "camera boost off"}
     if period and max_boost_pct and sightings is not None:
@@ -269,22 +251,24 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         breakdown.append({"factor": "Trail-camera boost", "value": cam["boost_pct"] / 100.0,
                           "text": cam["text"]})
 
-    # ── Scent gate: applied last so it overrides all other factors ─────────
-    # A stand where scent blows into the deer approach can never outscore one
-    # with favourable scent direction, regardless of proximity or camera data.
+    # Softened scent gate: retains up to 40% of the score even if blowing directly at expected approach
+    # TODO: Make this % user configurable
+    scent_multiplier = 0.4 + 0.6 * base["scent_score"]
+    
     if stand.get("deer_approach_deg") is not None:
         if base["scent_score"] > 0.6:
             stxt = "scent carries away from expected deer approach"
         elif base["scent_score"] > 0.35:
             stxt = "scent crosses the deer approach"
         else:
-            stxt = "scent blows toward deer — gates all other factors"
+            stxt = "scent blows toward deer — heavily reduces other factors"
     else:
         stxt = "no deer-approach set; scent direction only"
-    breakdown.append({"factor": "Scent direction (gate)", "value": base["scent_score"],
+        
+    breakdown.append({"factor": "Scent direction (soft gate)", "value": scent_multiplier,
                       "text": f"{stxt} (blending to {base['scent_to_deg']}°)"})
 
-    total = round(total * base["scent_score"], 3)
+    total = round(total * scent_multiplier, 3)
 
     return {
         "final_score": total,
