@@ -588,7 +588,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const [drawMode, setDrawMode] = useState(null);
   const [relocating, setRelocating] = useState(null); // { kind, id }
   const [draftPoints, setDraftPoints] = useState([]);
-  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false, scrapes: false, rubs: false });
+  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false, scrapes: false, rubs: false, flow: false });
   const [layersOpen, setLayersOpen] = useState(false);
   const [pendingName, setPendingName] = useState(null);
   const [home, setHome] = useState(null);
@@ -852,6 +852,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
               <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
+              <LayerChip on={layers.flow}      onClick={() => toggle("flow")}      color="var(--blue)" label="Drainage Flow" />
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">

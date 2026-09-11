@@ -730,6 +730,11 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 }
 .lightbox-close:hover { background: rgba(255,255,255,.3); }
 
+.pixelated-overlay {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 /* mobile tweaks */
 @media (max-width: 540px) {
   .today-page { padding: 12px 12px 40px; }

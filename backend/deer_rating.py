@@ -26,6 +26,7 @@ Pressure is provided by Open-Meteo in hPa; we convert to inHg for thresholds.
 """
 from __future__ import annotations
 from datetime import date, datetime, timedelta
+import math
 
 
 HPA_TO_INHG = 0.02953
@@ -54,32 +55,31 @@ def _doy(d: date) -> int:
 
 
 def rut_intensity(d: date, peak_month: int = RUT_PEAK_MONTH, peak_day: int = RUT_PEAK_DAY) -> tuple[float, str]:
-    """Return (0..1 intensity, phase label) for daytime-huntable rut activity.
-    Peaks slightly BEFORE breeding peak (seeking/chasing = best daylight movement).
-    peak_month/peak_day are configurable (regional rut timing)."""
-    # Season spans across the new year; if date is Jan/Feb, the peak belongs to the previous calendar year.
+    """Continuous Gaussian curve for daytime-huntable rut activity."""
     peak_year = d.year if d.month >= 6 else d.year - 1
     try:
         peak = date(peak_year, int(peak_month), int(peak_day))
     except ValueError:
         peak = date(peak_year, RUT_PEAK_MONTH, RUT_PEAK_DAY)
         
-    # huntable daylight movement peaks ~10 days before breeding peak (chasing phase)
     hunt_peak = peak - timedelta(days=10)
-    delta = (d - hunt_peak).days  # days from the daylight-movement peak using timedelta for cross-year safety
+    delta = (d - hunt_peak).days 
 
-    # piecewise: ramp up through October, plateau pre-rut, taper post-breeding
-    if delta < -45:        # before ~early Oct: low background
-        return 0.15, "pre-season"
-    if -45 <= delta < -18:  # ramp (early Oct → late Oct)
-        return 0.15 + 0.45 * (delta + 45) / 27, "early season"
-    if -18 <= delta <= 10:  # seeking / chasing plateau — best daylight window
-        return 0.9 + 0.1 * (1 - abs(delta) / 18), "rut (seeking/chasing)"
-    if 10 < delta <= 28:    # breeding peak / lockdown — great movement, less daylight
-        return 0.85 - 0.25 * (delta - 10) / 18, "peak breeding / lockdown"
-    if 28 < delta <= 55:    # post-rut tail / second rut bump
-        return 0.6 - 0.3 * (delta - 28) / 27, "post-rut"
-    return 0.2, "off-season"
+    # Asymmetric Gaussian: ramps up over ~22 days, tapers off slower over ~32 days
+    baseline = 0.15
+    if delta < 0:
+        intensity = baseline + 0.85 * math.exp(-0.5 * (delta / 22.0)**2)
+    else:
+        intensity = baseline + 0.85 * math.exp(-0.5 * (delta / 32.0)**2)
+
+    if delta < -35: phase = "pre-season"
+    elif delta < -10: phase = "early season / seeking"
+    elif delta <= 5: phase = "rut (chasing / peak daylight)"
+    elif delta <= 20: phase = "breeding peak / lockdown"
+    elif delta <= 45: phase = "post-rut"
+    else: phase = "off-season"
+
+    return min(1.0, max(0.15, intensity)), phase
 
 
 # ── individual weather factors, each returns 0..1 (higher = more daytime movement)
@@ -128,19 +128,23 @@ def rain_factor(mm: float | None, wind_mph: float | None) -> float:
     return supp
 
 
-def temp_shift_factor(day_high_f: float | None, baseline_f: float | None) -> float:
-    """Daytime-movement shift from temperature DEPARTURE vs recent baseline.
-    Cooler than recent (a front) → more daytime movement; warmer → less."""
+def temp_shift_factor(day_high_f: float | None, baseline_f: float | None, dew_point_f: float | None = None) -> float:
+    """Daytime-movement shift from temp departure, penalized by high dew points."""
     if day_high_f is None or baseline_f is None:
         return 0.6
-    dep = day_high_f - baseline_f   # negative = colder than recent = good for daylight
-    if dep <= -15:
-        return 1.0
-    if dep <= 0:
-        return 0.65 + 0.35 * (-dep / 15)
-    if dep <= 15:
-        return 0.65 - 0.4 * (dep / 15)   # warm spell → night movement
-    return 0.25
+    
+    dep = day_high_f - baseline_f 
+    if dep <= -15: base_f = 1.0
+    elif dep <= 0: base_f = 0.65 + 0.35 * (-dep / 15)
+    elif dep <= 15: base_f = 0.65 - 0.4 * (dep / 15) 
+    else: base_f = 0.25
+
+    # High humidity creates stifling conditions that suppress movement
+    if dew_point_f and dew_point_f >= 60.0:
+        suppression = min(0.3, (dew_point_f - 60) * 0.02)
+        base_f = max(0.15, base_f - suppression)
+
+    return base_f
 
 
 def rate_day(d: date, wx: dict, weights: dict | None = None,
@@ -178,7 +182,7 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
     pf = pressure_factor(raw_p, raw_trend)
     wf = wind_factor(wx.get("wind_mph"))
     rf = rain_factor(wx.get("rain_mm"), wx.get("wind_mph"))
-    tf = temp_shift_factor(wx.get("day_high_f"), wx.get("baseline_f"))
+    tf = temp_shift_factor(wx.get("day_high_f"), wx.get("baseline_f"), wx.get("dew_point_f"))
 
     weather = (pf * w["pressure"] + wf * w["wind"] + rf * w["rain"] + tf * w["temp"])
 
