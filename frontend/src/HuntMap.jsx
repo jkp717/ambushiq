@@ -370,7 +370,7 @@ export default function HuntMap({
 
       // Project the canvas onto the Leaflet map
       L.imageOverlay(canvas.toDataURL(), bounds, {
-        opacity: 0.85,
+        opacity: 0.65,
         interactive: false,
         className: "pixelated-overlay"
       }).addTo(g);
