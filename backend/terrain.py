@@ -29,8 +29,8 @@ def build_sample_grid(lat: float, lon: float):
     return lats, lons, cell_m
 
 
-USGS_BATCH = 250    # getSamples caps points per request well under 1600
-OM_BATCH = 250      # Open-Meteo rejects very large batches (400)
+USGS_BATCH = 150    # getSamples caps points per request well under 1600
+OM_BATCH = 50       # Open-Meteo rejects very large batches (400)
 
 
 async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
@@ -79,22 +79,18 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
     flat_lons = [round(lons[c], 6) for _ in range(len(lats)) for c in range(len(lons))]
     
     out: list[float] = []
-    # Open-Meteo accepts comma-separated lists of coordinates via query parameters
     for start in range(0, len(flat_lats), OM_BATCH):
-        chunk_lats = flat_lats[start:start + OM_BATCH]
-        chunk_lons = flat_lons[start:start + OM_BATCH]
-        
-        lat_str = ",".join(map(str, chunk_lats))
-        lon_str = ",".join(map(str, chunk_lons))
-        
-        url = f"https://api.open-meteo.com/v1/elevation?latitude={lat_str}&longitude={lon_str}"
-        
-        r = await client.get(url, timeout=10.0)
-        print(f"open meteo status: {r.status_code}")
+        r = await client.post(
+            "https://api.open-meteo.com/v1/elevation",
+            json={
+                "latitude": flat_lats[start:start + OM_BATCH],
+                "longitude": flat_lons[start:start + OM_BATCH]
+            },
+            timeout=20.0,
+        )
         r.raise_for_status()
         j = r.json()
         if "elevation" not in j:
-            print("open-meteo empty")
             raise ValueError("open-meteo empty")
         out.extend(j["elevation"])
     return out
