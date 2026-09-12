@@ -29,7 +29,7 @@ def build_sample_grid(lat: float, lon: float):
     return lats, lons, cell_m
 
 
-USGS_BATCH = 50     # getSamples caps points per request well under 1600
+USGS_BATCH = 100    # getSamples caps points per request well under 1600
 OM_BATCH = 10       # Open-Meteo rejects very large batches (400)
 
 
@@ -194,7 +194,7 @@ def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
             by += math.cos(b) * w
             acc_sum += w
             max_near = max(max_near, acc[r][c])
-            
+
     # Protect against symmetric vector cancellation resulting in 0,0 inputs to atan2
     if acc_sum > 0 and (abs(bx) > 1e-6 or abs(by) > 1e-6):
         drainage_deg = round((math.degrees(math.atan2(bx, by)) + 360) % 360)
