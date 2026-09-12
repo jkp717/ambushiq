@@ -67,8 +67,7 @@ function standIcon(vectors, rank) {
   return L.divIcon({ html, className: "stand-div-icon", iconSize: [dotPx, dotPx], iconAnchor: [dotHalf, dotHalf] });
 }
 
-
-// Build a popup with edit/delete buttons and visibility toggles (on stands) and wire them up after it opens.
+// Build a popup with edit/delete buttons and wire them up after it opens.
 function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer }) {
   let html = `<div class="feat-popup">
     <div class="feat-popup-title">${title || "(unnamed)"}</div>
@@ -94,24 +93,36 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
     </div>
   </div>`;
 
+  // Check if the popup is currently open before we overwrite it
+  const isOpen = layer.isPopupOpen && layer.isPopupOpen();
+  
   layer.bindPopup(html, { closeButton: true, minWidth: 150 });
-  layer.off("popupopen"); 
-  layer.on("popupopen", (e) => {
-    const root = e.popup.getElement();
-    if (!root) return;
-    const editBtn = root.querySelector('[data-act="edit"]');
-    const delBtn = root.querySelector('[data-act="del"]');
+
+  // Helper function to attach listeners so we can call it dynamically
+  const attachListeners = (popupElement) => {
+    if (!popupElement) return;
+    const editBtn = popupElement.querySelector('[data-act="edit"]');
+    const delBtn = popupElement.querySelector('[data-act="del"]');
     if (editBtn) editBtn.onclick = () => { layer.closePopup(); onEdit && onEdit(kind, id); };
     if (delBtn) delBtn.onclick = () => { layer.closePopup(); onDelete && onDelete(kind, id); };
 
     if (kind === "stand" && onToggleStandLayer) {
-      root.querySelectorAll('input[type="checkbox"][data-layer]').forEach(cb => {
+      popupElement.querySelectorAll('input[type="checkbox"][data-layer]').forEach(cb => {
         cb.onchange = (ev) => {
           onToggleStandLayer(id, ev.target.dataset.layer);
         };
       });
     }
-  });
+  };
+
+  layer.off("popupopen"); 
+  layer.on("popupopen", (e) => attachListeners(e.popup.getElement()));
+
+  // If it was already open, bindPopup replaced the HTML instantly but the "popupopen" event 
+  // won't fire again. We must manually reattach the listeners to the new live DOM elements.
+  if (isOpen) {
+    attachListeners(layer.getPopup().getElement());
+  }
 }
 
 export default function HuntMap({
@@ -339,8 +350,8 @@ export default function HuntMap({
       if (standsMarkers.current[s.id]) {
         const m = standsMarkers.current[s.id];
         m.setIcon(icon);
-        // Only rebuild HTML if popup is closed to prevent resetting active UI state
-        if (!m.isPopupOpen() && !drawMode) {
+        // removed the !m.isPopupOpen() check here so it always updates the stored HTML
+        if (!drawMode) {
           bindFeaturePopup(m, {
             title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
