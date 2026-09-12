@@ -90,6 +90,7 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
         url = f"https://api.open-meteo.com/v1/elevation?latitude={lat_str}&longitude={lon_str}"
         
         r = await client.get(url, timeout=10.0)
+        print(f"open meteo status: {r.status_code}")
         r.raise_for_status()
         j = r.json()
         if "elevation" not in j:
