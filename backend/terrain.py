@@ -38,27 +38,32 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
     url = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples"
     out: list[Optional[float]] = [None] * len(points)
     
-    async def fetch_chunk(start):
-        chunk = points[start:start + USGS_BATCH]
-        geometry = {"points": chunk, "spatialReference": {"wkid": 4326}}
-        # POST the geometry as a form body — too large for a query string.
-        data = {
-            "geometryType": "esriGeometryMultipoint",
-            "geometry": json.dumps(geometry),
-            "returnFirstValueOnly": "true",
-            "f": "json",
-        }
-        # Reduced timeout to 30s to fail fast to Open-Meteo fallback if USGS stalls
-        r = await client.post(url, data=data, timeout=30.0)
-        r.raise_for_status()
-        samples = r.json().get("samples")
-        if not samples:
-            raise ValueError("usgs empty")
-        return start, samples
+    # Limit concurrency to 2 simultaneous requests to avoid overwhelming the gateway
+    semaphore = asyncio.Semaphore(2)
 
-    # Fire all USGS batch chunks concurrently using asyncio.gather()
+    async def fetch_chunk(start):
+        async with semaphore:
+            chunk = points[start:start + USGS_BATCH]
+            geometry = {"points": chunk, "spatialReference": {"wkid": 4326}}
+            data = {
+                "geometryType": "esriGeometryMultipoint",
+                "geometry": json.dumps(geometry),
+                "returnFirstValueOnly": "true",
+                "f": "json",
+            }
+            r = await client.post(url, data=data, timeout=10.0)
+            r.raise_for_status()
+            samples = r.json().get("samples")
+            if not samples:
+                raise ValueError("usgs empty")
+            return start, samples
+
+    # Create tasks for all chunks
     tasks = [fetch_chunk(start) for start in range(0, len(points), USGS_BATCH)]
+    
+    # Gather them, but the semaphore will automatically pace them in groups of 2
     results = await asyncio.gather(*tasks)
+    
     for start, samples in results:
         for s in samples:
             idx = start + int(s["locationId"])
@@ -101,6 +106,7 @@ async def fetch_terrain(lat: float, lon: float) -> dict:
             flat = await _fetch_open_meteo(client, lats, lons)
             source = "Open-Meteo"
     dem = [flat[r * GRID:(r + 1) * GRID] for r in range(GRID)]
+    print(f"Analyzing terrain from {source}...")
     return analyze_terrain(dem, cell_m, source)
 
 
