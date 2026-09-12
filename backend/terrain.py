@@ -90,6 +90,7 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
         r.raise_for_status()
         j = r.json()
         if "elevation" not in j:
+            print("open-meteo empty")
             raise ValueError("open-meteo empty")
         out.extend(j["elevation"])
     return out
