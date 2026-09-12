@@ -86,6 +86,7 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
                   "longitude": flat_lons[start:start + OM_BATCH]},
             timeout=15.0,
         )
+        print(f"open meteo fetch status: {r.status_code}")
         r.raise_for_status()
         j = r.json()
         if "elevation" not in j:
