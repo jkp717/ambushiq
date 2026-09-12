@@ -1,5 +1,6 @@
 """Terrain analysis: elevation grid -> slope/aspect + cold-air drainage (D-Infinity flow accumulation)."""
 from __future__ import annotations
+from functools import deprecated
 import json
 import math
 import asyncio
@@ -155,6 +156,7 @@ async def fetch_terrain(lat: float, lon: float, progress_callback=None) -> dict:
     return result
 
 
+@deprecated("Use analyze_terrain() instead.")
 def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
     """Analyze terrian using the D8 flow accumulation spatial analysis algorithm"""
     n = len(dem)
