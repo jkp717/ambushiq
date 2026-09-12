@@ -95,7 +95,9 @@ async def fetch_terrain(lat: float, lon: float) -> dict:
         try:
             flat = await _fetch_usgs(client, lats, lons)
             source = "USGS 3DEP"
-        except Exception:
+        except Exception as err:
+            print("\n\n_fetch_usgs failed!!!")
+            print(err)
             flat = await _fetch_open_meteo(client, lats, lons)
             source = "Open-Meteo"
     dem = [flat[r * GRID:(r + 1) * GRID] for r in range(GRID)]
