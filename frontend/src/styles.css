@@ -271,7 +271,8 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
    ══════════════════════════════════════ */
 .map-page {
   display: flex; flex-direction: column;
-  height: calc(100vh - var(--top-bar-h));
+  /* Swapped 100vh for 100dvh and accounted for the top safe area */
+  height: calc(100dvh - var(--top-bar-h) - env(safe-area-inset-top));
   overflow: hidden;
 }
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import math
+import asyncio
 from dataclasses import dataclass, asdict
 from typing import Optional
 import httpx
@@ -36,7 +37,8 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
     points = [[lons[c], lats[r]] for r in range(len(lats)) for c in range(len(lons))]
     url = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples"
     out: list[Optional[float]] = [None] * len(points)
-    for start in range(0, len(points), USGS_BATCH):
+    
+    async def fetch_chunk(start):
         chunk = points[start:start + USGS_BATCH]
         geometry = {"points": chunk, "spatialReference": {"wkid": 4326}}
         # POST the geometry as a form body — too large for a query string.
@@ -46,15 +48,22 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
             "returnFirstValueOnly": "true",
             "f": "json",
         }
-        r = await client.post(url, data=data, timeout=60)
+        # Reduced timeout to 30s to fail fast to Open-Meteo fallback if USGS stalls
+        r = await client.post(url, data=data, timeout=30.0)
         r.raise_for_status()
         samples = r.json().get("samples")
         if not samples:
             raise ValueError("usgs empty")
-        # reassemble by locationId (index within this chunk); order isn't guaranteed
+        return start, samples
+
+    # Fire all USGS batch chunks concurrently using asyncio.gather()
+    tasks = [fetch_chunk(start) for start in range(0, len(points), USGS_BATCH)]
+    results = await asyncio.gather(*tasks)
+    for start, samples in results:
         for s in samples:
             idx = start + int(s["locationId"])
             out[idx] = float(s["value"])
+
     if any(v is None or math.isnan(v) for v in out):
         raise ValueError("usgs incomplete")
     return out  # type: ignore
@@ -70,7 +79,7 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
             "https://api.open-meteo.com/v1/elevation",
             json={"latitude": flat_lats[start:start + OM_BATCH],
                   "longitude": flat_lons[start:start + OM_BATCH]},
-            timeout=60,
+            timeout=15.0,
         )
         r.raise_for_status()
         j = r.json()
@@ -206,13 +215,26 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
     downhill_deg = aspect_val if aspect_val >= 0 else 0.0
     slope_pct = round((float(slope_rda[ctr, ctr]) / cell_m) * 100)
     
-    # Calculate channel strength from max accumulation in the center 7x7 neighborhood
+    # Calculate true D-Infinity accumulation drainage vector across the 7x7 center neighborhood
+    bx = by = acc_sum = 0.0
     max_near = 0.0
     for r in range(max(0, ctr - 3), min(n, ctr + 4)):
         for c in range(max(0, ctr - 3), min(n, ctr + 4)):
-            val = float(accum_rda[r, c])
-            if val > max_near:
-                max_near = val
+            asp = float(aspect_rda[r, c])
+            if asp < 0:
+                continue
+            w = float(accum_rda[r, c])
+            b = math.radians(asp)
+            bx += math.sin(b) * w
+            by += math.cos(b) * w
+            acc_sum += w
+            if w > max_near:
+                max_near = w
+                
+    if acc_sum > 0 and (abs(bx) > 1e-6 or abs(by) > 1e-6):
+        drainage_deg = round((math.degrees(math.atan2(bx, by)) + 360) % 360)
+    else:
+        drainage_deg = round(downhill_deg)
                 
     channel_strength = round(min(1.0, max_near / (n * n * 0.06)) * 100) / 100
 
@@ -226,7 +248,7 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
         "cell_m": cell_m,
         "downhill_deg": round(downhill_deg),
         "slope_pct": slope_pct,
-        "drainage_deg": round(downhill_deg),
+        "drainage_deg": drainage_deg,
         "channel_strength": channel_strength,
         "elevation": round(dem[ctr][ctr]),
         "relief": round(max_e - min_e),
