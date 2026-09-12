@@ -588,13 +588,28 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const [drawMode, setDrawMode] = useState(null);
   const [relocating, setRelocating] = useState(null); // { kind, id }
   const [draftPoints, setDraftPoints] = useState([]);
-  const [layers, setLayers] = useState({ wind: true, thermal: true, deer: true, scent: true, corridors: true, zones: false, scrapes: false, rubs: false, flow: false });
+  
+  // Updated global map layers (stand-specific elements removed)
+  const [layers, setLayers] = useState({ corridors: true, zones: false, scrapes: false, rubs: false });
   const [layersOpen, setLayersOpen] = useState(false);
+  
+  // New stand-specific layer state
+  const [standLayers, setStandLayers] = useState({});
+
   const [pendingName, setPendingName] = useState(null);
   const [home, setHome] = useState(null);
   const [err, setErr] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef(null);
+
+  // function to toggle individual stand layers
+  const toggleStandLayer = useCallback((standId, layerKey) => {
+    setStandLayers((prev) => {
+      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      return { ...prev, [standId]: { ...current, [layerKey]: !current[layerKey] } };
+    });
+  }, []);
+
   useEffect(() => {
     if (!showDatePicker) return;
     function h(e) { if (datePickerRef.current && !datePickerRef.current.contains(e.target)) setShowDatePicker(false); }
@@ -617,7 +632,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       setUtcOffset(ofs);
       const localNow = new Date(Date.now() + ofs * 1000);
       const todayStr  = localNow.toISOString().slice(0, 10);
-      const localHour = localNow.getUTCHours(); // after offset shift, UTC hours = local hours
+      const localHour = localNow.getUTCHours();
       for (let d = 0; d < j.days.length; d++) {
         const hi = j.days[d].hours.findIndex((h) => h.hour === localHour);
         if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi * 4); break; }
@@ -838,21 +853,17 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
         <div className="map-fill">
           <HuntMap stands={stands} zones={zones} corridors={corridors} sign={sign} conditions={conditions}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
+            standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home}
             height="100%" />
         </div>
         <div className="layer-overlay">
           {layersOpen && (
             <div className="layer-chips-panel">
-              <LayerChip on={layers.wind}      onClick={() => toggle("wind")}      color="var(--navy)" label="Wind" />
-              <LayerChip on={layers.thermal}   onClick={() => toggle("thermal")}   color="#185FA5" dashed label="Thermal" />
-              <LayerChip on={layers.scent}     onClick={() => toggle("scent")}     color="#2D8A2D" label="Scent" />
-              <LayerChip on={layers.deer}      onClick={() => toggle("deer")}      color="#A35A1B" label="Deer" />
               <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
               <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
-              <LayerChip on={layers.flow}      onClick={() => toggle("flow")}      color="var(--blue)" label="Drainage Flow" />
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
