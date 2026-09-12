@@ -21,6 +21,7 @@ import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, String, Float, Integer, Text, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
@@ -495,17 +496,43 @@ async def analyze_stand_terrain(stand_id: int, _=Depends(require_token)):
         if not st:
             raise HTTPException(404, "not found")
         lat, lon = st.lat, st.lon
-    try:
-        terrain = await terrain_mod.fetch_terrain(lat, lon)
-    except Exception as e:
-        raise HTTPException(502, f"elevation source unreachable: {e}")
-    with Session(engine) as s:
-        st = s.get(Stand, stand_id)
-        st.terrain_json = json.dumps(terrain)
-        st.downhill_deg = terrain["downhill_deg"]
-        s.commit()
-        s.refresh(st)
-        return st.to_dict()
+
+    async def event_generator():
+        try:
+            # Collect progress events via an async queue
+            queue = asyncio.Queue()
+
+            async def cb(pct, msg):
+                await queue.put(json.dumps({"progress": pct, "message": msg}) + "\n")
+
+            # Run fetch_terrain in background while draining the queue
+            async def run_analysis():
+                try:
+                    terrain = await terrain_mod.fetch_terrain(lat, lon, progress_callback=cb)
+                    with Session(engine) as s:
+                        st = s.get(Stand, stand_id)
+                        st.terrain_json = json.dumps(terrain)
+                        st.downhill_deg = terrain["downhill_deg"]
+                        s.commit()
+                        s.refresh(st)
+                        await queue.put(json.dumps({"progress": 100, "complete": True, "terrain": st.to_dict()}) + "\n")
+                except Exception as e:
+                    await queue.put(json.dumps({"error": str(e)}) + "\n")
+                finally:
+                    await queue.put(None) # Sentinel to stop
+
+            task = asyncio.create_task(run_analysis())
+            
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+            await task
+        except Exception as e:
+            yield json.dumps({"error": str(e)}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 def get_settings() -> dict:
