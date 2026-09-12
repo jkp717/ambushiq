@@ -67,17 +67,35 @@ function standIcon(vectors, rank) {
   return L.divIcon({ html, className: "stand-div-icon", iconSize: [dotPx, dotPx], iconAnchor: [dotHalf, dotHalf] });
 }
 
-// Build a popup with edit/delete buttons and wire them up after it opens.
-function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete }) {
-  const html = `<div class="feat-popup">
+
+// Build a popup with edit/delete buttons and visibility toggles (on stands) and wire them up after it opens.
+function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer }) {
+  let html = `<div class="feat-popup">
     <div class="feat-popup-title">${title || "(unnamed)"}</div>
     ${subtitle ? `<div class="feat-popup-sub">${subtitle}</div>` : ""}
-    <div class="feat-popup-actions">
+  `;
+
+  if (kind === "stand") {
+    const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+    html += `
+      <div class="feat-popup-toggles" style="display:flex; flex-direction:column; gap:6px; margin: 10px 0; border-top: 1px solid var(--bord); border-bottom: 1px solid var(--bord); padding: 8px 0;">
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" ${s.wind ? 'checked' : ''}> Wind</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="thermal" ${s.thermal ? 'checked' : ''}> Thermal</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" ${s.scent ? 'checked' : ''}> Scent</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" ${s.deer ? 'checked' : ''}> Deer</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="flow" ${s.flow ? 'checked' : ''}> Drainage Flow</label>
+      </div>
+    `;
+  }
+
+  html += `<div class="feat-popup-actions">
       <button data-act="edit" class="feat-popup-btn">✎ Edit</button>
       <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
     </div>
   </div>`;
+
   layer.bindPopup(html, { closeButton: true, minWidth: 150 });
+  layer.off("popupopen"); 
   layer.on("popupopen", (e) => {
     const root = e.popup.getElement();
     if (!root) return;
@@ -85,19 +103,28 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete }
     const delBtn = root.querySelector('[data-act="del"]');
     if (editBtn) editBtn.onclick = () => { layer.closePopup(); onEdit && onEdit(kind, id); };
     if (delBtn) delBtn.onclick = () => { layer.closePopup(); onDelete && onDelete(kind, id); };
+
+    if (kind === "stand" && onToggleStandLayer) {
+      root.querySelectorAll('input[type="checkbox"][data-layer]').forEach(cb => {
+        cb.onchange = (ev) => {
+          onToggleStandLayer(id, ev.target.dataset.layer);
+        };
+      });
+    }
   });
 }
 
 export default function HuntMap({
   stands, zones, corridors, sign, conditions,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
-  layers, onEditFeature, onDeleteFeature, center,
+  layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, center,
   height = 420,
 }) {
   const mapRef = useRef(null);
   const mapEl = useRef(null);
   const layerGroups = useRef({});
   const baseLayers = useRef({});
+  const standsMarkers = useRef({}); // Prevents unmounting marker to keep popup open
   const [ready, setReady] = useState(false);
 
   // init map once (waits for the Leaflet global if the CDN script is slow)
@@ -226,7 +253,7 @@ export default function HuntMap({
   useEffect(() => {
     if (!ready) return;
     const g = layerGroups.current.scent; g.clearLayers();
-    if (!layers.scent || !conditions) return;
+    if (!conditions) return;
     const byId = {};
     (conditions.stands || []).forEach((it) => { byId[it.stand.id] = it.vectors; });
 
@@ -241,6 +268,9 @@ export default function HuntMap({
     }
 
     stands.forEach((s) => {
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      if (!sl.scent) return; // Individual stand scent check
+
       const v = byId[s.id];
       if (!v || v.scent_to_deg == null) return;
 
@@ -271,36 +301,62 @@ export default function HuntMap({
         interactive: false, // never intercepts clicks
       }).addTo(g);
     });
-  }, [stands, conditions, ready, layers.scent]);
+  }, [stands, conditions, ready, standLayers]);
 
   // render stands with indicators
   useEffect(() => {
     if (!ready) return;
-    const g = layerGroups.current.stands; g.clearLayers();
+    const g = layerGroups.current.stands; 
     const byId = {};
     (conditions?.stands || []).forEach((it) => { byId[it.stand.id] = it.vectors; });
     const rankIndex = {};
     (conditions?.ranked || []).forEach((r, i) => { rankIndex[r.stand.id] = i; });
+
+    // Clean up deleted stands
+    const currentIds = new Set(stands.map(s => s.id));
+    Object.keys(standsMarkers.current).forEach(id => {
+      if (!currentIds.has(Number(id)) && !currentIds.has(id)) {
+        g.removeLayer(standsMarkers.current[id]);
+        delete standsMarkers.current[id];
+      }
+    });
+
     stands.forEach((s) => {
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
       const v = byId[s.id] || {};
       const vectors = {
-        wind_to_deg: layers.wind ? v.wind_to_deg : null,
-        thermal_to_deg: layers.thermal ? v.thermal_to_deg : null,
-        deer_approach_deg: layers.deer ? s.deer_approach_deg : null,
+        wind_to_deg: sl.wind ? v.wind_to_deg : null,
+        thermal_to_deg: sl.thermal ? v.thermal_to_deg : null,
+        deer_approach_deg: sl.deer ? s.deer_approach_deg : null,
       };
       const rank = rankIndex[s.id] ?? 99;
-      const m = L.marker([s.lat, s.lon], { icon: standIcon(vectors, rank), interactive: !drawMode });
-      if (!drawMode) {
-        const windTxt = v.wind_to_deg != null ? `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph` : "";
-        const thermTxt = v.thermal_to_deg != null ? `Thermal ${v.thermal_phase} → ${degToCompass(v.thermal_to_deg)}` : "";
-        bindFeaturePopup(m, {
-          title: s.name, subtitle: [windTxt, thermTxt].filter(Boolean).join(" · "),
-          kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
-        });
+      const icon = standIcon(vectors, rank);
+      
+      const windTxt = v.wind_to_deg != null ? `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph` : "";
+      const thermTxt = v.thermal_to_deg != null ? `Thermal ${v.thermal_phase} → ${degToCompass(v.thermal_to_deg)}` : "";
+      const subtitle = [windTxt, thermTxt].filter(Boolean).join(" · ");
+
+      if (standsMarkers.current[s.id]) {
+        const m = standsMarkers.current[s.id];
+        m.setIcon(icon);
+        // Only rebuild HTML if popup is closed to prevent resetting active UI state
+        if (!m.isPopupOpen() && !drawMode) {
+          bindFeaturePopup(m, {
+            title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+          });
+        }
+      } else {
+        const m = L.marker([s.lat, s.lon], { icon, interactive: !drawMode });
+        if (!drawMode) {
+          bindFeaturePopup(m, {
+            title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+          });
+        }
+        m.addTo(g);
+        standsMarkers.current[s.id] = m;
       }
-      m.addTo(g);
     });
-  }, [stands, conditions, ready, layers.wind, layers.thermal, layers.deer, drawMode, onEditFeature, onDeleteFeature]);
+  }, [stands, conditions, ready, standLayers, drawMode, onEditFeature, onDeleteFeature, onToggleStandLayer]);
 
   // render draft (in-progress drawing)
   useEffect(() => {
@@ -313,14 +369,15 @@ export default function HuntMap({
     }
   }, [draftPoints, ready]);
 
-// render terrain flow accumulation
+  // render terrain flow accumulation
   useEffect(() => {
     if (!ready) return;
     const g = layerGroups.current.flow; 
     g.clearLayers();
-    if (!layers.flow) return;
 
     stands.forEach((s) => {
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      if (!sl.flow) return; // Individual stand flow check
       if (!s.terrain || !s.terrain.acc) return;
       const t = s.terrain;
       const N = t.grid_size;
@@ -375,7 +432,7 @@ export default function HuntMap({
         className: "pixelated-overlay"
       }).addTo(g);
     });
-  }, [stands, ready, layers.flow]);
+  }, [stands, ready, standLayers]);
 
   return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
 }
