@@ -29,8 +29,8 @@ def build_sample_grid(lat: float, lon: float):
     return lats, lons, cell_m
 
 
-USGS_BATCH = 150    # getSamples caps points per request well under 1600
-OM_BATCH = 50       # Open-Meteo rejects very large batches (400)
+USGS_BATCH = 50     # getSamples caps points per request well under 1600
+OM_BATCH = 10       # Open-Meteo rejects very large batches (400)
 
 
 async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
@@ -103,12 +103,9 @@ async def fetch_terrain(lat: float, lon: float) -> dict:
             flat = await _fetch_usgs(client, lats, lons)
             source = "USGS 3DEP"
         except Exception as err:
-            print("\n\n_fetch_usgs failed!!!")
-            print(err)
             flat = await _fetch_open_meteo(client, lats, lons)
             source = "Open-Meteo"
     dem = [flat[r * GRID:(r + 1) * GRID] for r in range(GRID)]
-    print(f"Analyzing terrain from {source}...")
     return analyze_terrain(dem, cell_m, source)
 
 
