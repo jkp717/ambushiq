@@ -51,7 +51,7 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
                 "returnFirstValueOnly": "true",
                 "f": "json",
             }
-            r = await client.post(url, data=data, timeout=10.0)
+            r = await client.post(url, data=data, timeout=30.0)
             r.raise_for_status()
             samples = r.json().get("samples")
             if not samples:
@@ -86,7 +86,7 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
                 "latitude": flat_lats[start:start + OM_BATCH],
                 "longitude": flat_lons[start:start + OM_BATCH]
             },
-            timeout=20.0,
+            timeout=30.0,
         )
         r.raise_for_status()
         j = r.json()
