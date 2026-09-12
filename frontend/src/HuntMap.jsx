@@ -79,11 +79,11 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
     const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false };
     html += `
       <div class="feat-popup-toggles" style="display:flex; flex-direction:column; gap:6px; margin: 10px 0; border-top: 1px solid var(--bord); border-bottom: 1px solid var(--bord); padding: 8px 0;">
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" ${s.wind ? 'checked' : ''}> Wind</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="thermal" ${s.thermal ? 'checked' : ''}> Thermal</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" ${s.scent ? 'checked' : ''}> Scent</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" ${s.deer ? 'checked' : ''}> Deer</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="flow" ${s.flow ? 'checked' : ''}> Drainage Flow</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" style="width: 20px;" ${s.wind ? 'checked' : ''}> Wind</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="thermal" style="width: 20px;" ${s.thermal ? 'checked' : ''}> Thermal</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" style="width: 20px;" ${s.scent ? 'checked' : ''}> Scent</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" style="width: 20px;" ${s.deer ? 'checked' : ''}> Deer</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="flow" style="width: 20px;" ${s.flow ? 'checked' : ''}> Drainage Flow</label>
       </div>
     `;
   }
