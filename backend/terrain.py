@@ -37,47 +37,65 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
     points = [[lons[c], lats[r]] for r in range(len(lats)) for c in range(len(lons))]
     url = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples"
     out: list[Optional[float]] = [None] * len(points)
-    
-    # Limit concurrency to 2 simultaneous requests to avoid overwhelming the gateway
+
     semaphore = asyncio.Semaphore(2)
+    max_retries = 2        # Number of retries for a transient 502/504 chunk error
+    error_threshold = 2    # X: Max allowed total chunk failures before abandoning USGS
 
     async def fetch_chunk(start):
-        async with semaphore:
-            chunk = points[start:start + USGS_BATCH]
-            geometry = {"points": chunk, "spatialReference": {"wkid": 4326}}
-            data = {
-                "geometryType": "esriGeometryMultipoint",
-                "geometry": json.dumps(geometry),
-                "returnFirstValueOnly": "true",
-                "f": "json",
-            }
-            r = await client.post(url, data=data, timeout=30.0)
-            r.raise_for_status()
-            samples = r.json().get("samples")
-            if not samples:
-                raise ValueError("usgs empty")
-            return start, samples
+        chunk = points[start:start + USGS_BATCH]
+        geometry = {"points": chunk, "spatialReference": {"wkid": 4326}}
+        data = {
+            "geometryType": "esriGeometryMultipoint",
+            "geometry": json.dumps(geometry),
+            "returnFirstValueOnly": "true",
+            "f": "json",
+        }
 
-    # Create tasks for all chunks
+        for attempt in range(max_retries + 1):
+            async with semaphore:
+                try:
+                    r = await client.post(url, data=data, timeout=10.0)
+                    # If it's a gateway gateway error, wait a moment and retry
+                    if r.status_code in (502, 504, 429) and attempt < max_retries:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    r.raise_for_status()
+                    samples = r.json().get("samples")
+                    if not samples:
+                        raise ValueError("usgs empty")
+                    return start, samples
+                except Exception as e:
+                    if attempt >= max_retries:
+                        raise e
+                    await asyncio.sleep(0.5 * (attempt + 1))
+
     tasks = [fetch_chunk(start) for start in range(0, len(points), USGS_BATCH)]
-    
-    # Gather them, but the semaphore will automatically pace them in groups of 2
-    results = await asyncio.gather(*tasks)
-    
-    for start, samples in results:
-        for s in samples:
-            idx = start + int(s["locationId"])
-            out[idx] = float(s["value"])
 
-    if any(v is None or math.isnan(v) for v in out):
-        raise ValueError("usgs incomplete")
-    return out  # type: ignore
+    # return_exceptions=True captures errors instead of crashing gather instantly
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    error_count = 0
+    for res in results:
+        if isinstance(res, Exception):
+            error_count += 1
+        else:
+            start, samples = res
+            for s in samples:
+                idx = start + int(s["locationId"])
+                out[idx] = float(s["value"])
+
+    # If errors hit or exceed your threshold (X), fail over to Open-Meteo
+    if error_count >= error_threshold or any(v is None or math.isnan(v) for v in out):
+        raise ValueError(f"usgs failed {error_count} chunks (threshold: {error_threshold})")
+
+    return out
 
 
 async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float]:
     flat_lats = [round(lats[r], 6) for r in range(len(lats)) for _ in range(len(lons))]
     flat_lons = [round(lons[c], 6) for _ in range(len(lats)) for c in range(len(lons))]
-    
+
     out: list[float] = []
     for start in range(0, len(flat_lats), OM_BATCH):
         r = await client.post(
@@ -93,6 +111,10 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
         if "elevation" not in j:
             raise ValueError("open-meteo empty")
         out.extend(j["elevation"])
+
+        # Brief pause between chunks to stay well under Open-Meteo's rate limit
+        await asyncio.sleep(0.2)
+
     return out
 
 
