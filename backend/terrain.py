@@ -33,16 +33,19 @@ USGS_BATCH = 100    # getSamples caps points per request well under 1600
 OM_BATCH = 10       # Open-Meteo rejects very large batches (400)
 
 
-async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
+async def _fetch_usgs(client: httpx.AsyncClient, lats, lons, progress_callback=None) -> list[float]:
     points = [[lons[c], lats[r]] for r in range(len(lats)) for c in range(len(lons))]
     url = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples"
     out: list[Optional[float]] = [None] * len(points)
 
+    total_batches = math.ceil(len(points) / USGS_BATCH)
+    completed_batches = 0
     semaphore = asyncio.Semaphore(2)
-    max_retries = 2        # Number of retries for a transient 502/504 chunk error
-    error_threshold = 2    # X: Max allowed total chunk failures before abandoning USGS
+    max_retries = 2         # Number of retries for a transient 502/504 chunk error
+    error_threshold = 2     # X: Max allowed total chunk failures before abandoning USGS
 
     async def fetch_chunk(start):
+        nonlocal completed_batches
         chunk = points[start:start + USGS_BATCH]
         geometry = {"points": chunk, "spatialReference": {"wkid": 4326}}
         data = {
@@ -56,7 +59,7 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
             async with semaphore:
                 try:
                     r = await client.post(url, data=data, timeout=10.0)
-                    # If it's a gateway gateway error, wait a moment and retry
+                    # If it's a gateway error, wait a moment and retry
                     if r.status_code in (502, 504, 429) and attempt < max_retries:
                         await asyncio.sleep(0.5 * (attempt + 1))
                         continue
@@ -64,6 +67,13 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons) -> list[float]:
                     samples = r.json().get("samples")
                     if not samples:
                         raise ValueError("usgs empty")
+
+                    completed_batches += 1
+                    if progress_callback:
+                        # USGS accounts for roughly 75% of total progress
+                        pct = int((completed_batches / total_batches) * 75)
+                        await progress_callback(pct, f"USGS Batch {completed_batches}/{total_batches}")
+
                     return start, samples
                 except Exception as e:
                     if attempt >= max_retries:
@@ -118,17 +128,31 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
     return out
 
 
-async def fetch_terrain(lat: float, lon: float) -> dict:
+async def fetch_terrain(lat: float, lon: float, progress_callback=None) -> dict:
     lats, lons, cell_m = build_sample_grid(lat, lon)
+    if progress_callback:
+        await progress_callback(5, "Initializing elevation grid...")
+
     async with httpx.AsyncClient() as client:
         try:
-            flat = await _fetch_usgs(client, lats, lons)
+            flat = await _fetch_usgs(client, lats, lons, progress_callback)
             source = "USGS 3DEP"
-        except Exception as err:
+        except Exception:
+            if progress_callback:
+                await progress_callback(40, "USGS limit reached: switching to Open-Meteo...")
             flat = await _fetch_open_meteo(client, lats, lons)
             source = "Open-Meteo"
+
+    if progress_callback:
+        await progress_callback(85, "Running D-Infinity terrain analysis...")
+
     dem = [flat[r * GRID:(r + 1) * GRID] for r in range(GRID)]
-    return analyze_terrain(dem, cell_m, source)
+    result = analyze_terrain(dem, cell_m, source)
+
+    if progress_callback:
+        await progress_callback(100, "Complete!")
+
+    return result
 
 
 def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
