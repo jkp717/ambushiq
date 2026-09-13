@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu, Layers } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu, Layers, Info, Thermometer } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -1716,6 +1716,7 @@ function SettingsPage() {
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80 }); }
   function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
+  function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3 }); }
 
   const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) && +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
   async function saveHome() {
@@ -1780,6 +1781,37 @@ function SettingsPage() {
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={resetRating}>Reset rating weights</button>
+      </div>
+
+      {/* ── Thermal model ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 24 }}>
+        <Thermometer size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Thermal model
+      </div>
+      <p className="settings-desc">
+        Controls how much a stand's thermal drainage/updraft actually drives the
+        blended scent direction, versus wind taking over. Thermals are strongest and
+        cleanest on calm mornings/evenings; wind and midday mixing crowd them out.
+      </p>
+      <div className="settings-section">
+        <SliderRow label="Wind fade point" min={2} max={20} step={0.5}
+          value={s.thermal_wind_half_scale ?? 7.0}
+          display={`${(s.thermal_wind_half_scale ?? 7.0).toFixed(1)} mph`}
+          onChange={(v) => setS({ ...s, thermal_wind_half_scale: v })}
+          info="Wind speed at which the thermal's pull on scent direction is cut about in half. Lower = wind takes over at lighter breezes." />
+        <SliderRow label="Wind fade sharpness" min={1.0} max={3.0} step={0.1}
+          value={s.thermal_wind_exponent ?? 1.8}
+          display={(s.thermal_wind_exponent ?? 1.8).toFixed(1)}
+          onChange={(v) => setS({ ...s, thermal_wind_exponent: v })}
+          info="How abruptly wind overtakes thermals past the fade point. Higher = a sharper cutover; lower = a more gradual handoff." />
+        <SliderRow label="Midday mixing discount" min={0} max={0.6} step={0.05}
+          value={s.thermal_midday_discount ?? 0.3}
+          display={`${Math.round((s.thermal_midday_discount ?? 0.3) * 100)}%`}
+          onChange={(v) => setS({ ...s, thermal_midday_discount: v })}
+          info="Extra reduction applied to midday (rising) thermals even in dead calm — solar heating churns the air enough to scramble a clean directional flow." />
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+        <button className="btn" onClick={resetThermal}>Reset thermal model</button>
       </div>
 
       {/* ── Trail cameras ── */}
@@ -2324,14 +2356,44 @@ function TerrainMap({ t }) {
 }
 
 
-function SliderRow({ label, min, max, step, value, display, onChange }) {
+function SliderRow({ label, min, max, step, value, display, onChange, info }) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-        <span style={{ color: "var(--sub)" }}>{label}</span><strong>{display}</strong>
+        <span style={{ color: "var(--sub)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          {label}{info && <InfoTip text={info} />}
+        </span>
+        <strong>{display}</strong>
       </div>
       <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(+e.target.value)} style={{ width: "100%" }} />
     </div>
+  );
+}
+
+function InfoTip({ text }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  return (
+    <span ref={ref} style={{ position: "relative", display: "inline-flex" }}>
+      <button type="button" className="icon-btn" title="What does this do?" onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        style={{ width: 16, height: 16, padding: 0, minHeight: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+        <Info size={12} color="var(--sub)" />
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, width: 210,
+          background: "var(--bg)", border: "1px solid var(--bord2)", borderRadius: 8, padding: "8px 10px",
+          fontSize: 11.5, fontWeight: 400, lineHeight: 1.4, color: "var(--sub)",
+          boxShadow: "0 6px 20px rgba(0,0,0,.18)" }}>
+          {text}
+        </div>
+      )}
+    </span>
   );
 }
 

@@ -45,24 +45,55 @@ def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None) -> dict:
     else:
         swing_factor = min(1.4, max(0.5, float(temp_swing) / 12.0))
 
+    # solar_frac (0..1) is the raw anabatic "potential" from ground heating — it
+    # keeps building through midday. Returned unconditionally so callers can feed
+    # it into thermal_coherence() even for sinking/neutral hours.
+    sf = min(1.0, max(0.0, solar / 400))
+
     a, b = time_h - sr_h, ss_h - time_h
     if -1 <= a <= 2:
         return {"phase": "sinking", "uphill": False,
-                "weight": min(1.0, 0.85 * swing_factor), "swing_factor": swing_factor}
+                "weight": min(1.0, 0.85 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
     if -1 <= b <= 3:
         return {"phase": "sinking", "uphill": False,
-                "weight": min(1.0, 0.90 * swing_factor), "swing_factor": swing_factor}
+                "weight": min(1.0, 0.90 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
     if time_h < sr_h - 1 or time_h > ss_h + 1:
         return {"phase": "sinking", "uphill": False,
-                "weight": min(1.0, 0.70 * swing_factor), "swing_factor": swing_factor}
-    sf = min(1.0, solar / 400)
+                "weight": min(1.0, 0.70 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
     if sf > 0.25:
         return {"phase": "rising", "uphill": True,
-                "weight": 0.4 + 0.4 * sf, "swing_factor": swing_factor}
-    return {"phase": "neutral", "uphill": False, "weight": 0.15, "swing_factor": swing_factor}
+                "weight": 0.4 + 0.4 * sf, "swing_factor": swing_factor, "solar_frac": sf}
+    return {"phase": "neutral", "uphill": False, "weight": 0.15, "swing_factor": swing_factor, "solar_frac": sf}
 
 
-def stand_hour_vectors(stand: dict, hour: dict) -> dict:
+# ─────────────────────── thermal coherence (wind/mixing gate) ───────────────────────
+# thermal_state()'s "weight" is thermal *potential* — it legitimately builds through
+# the day as the sun heats the ground. thermal_coherence() is separate: it answers
+# "how much of that potential actually shows up as a clean directional signal in the
+# blended scent vector, vs. getting overwhelmed by ambient wind or scrambled by midday
+# convective mixing." A strong thermal can still lose the vector blend to a stronger,
+# more turbulent wind — this is what makes calm dawns thermal-dominated and breezy
+# middays wind-dominated even though the raw upslope flow is strongest near midday.
+DEFAULT_THERMAL_PARAMS = {
+    "wind_half_scale": 7.0,   # mph at which wind has cut thermal coherence roughly in half
+    "wind_exponent": 1.8,     # how sharply coherence falls off past the half-scale point
+    "midday_discount": 0.3,   # extra coherence knocked off "rising" phase even at calm wind
+}
+
+
+def thermal_coherence(wind_speed: float, phase: str, solar_frac: float,
+                      params: dict | None = None) -> float:
+    p = {**DEFAULT_THERMAL_PARAMS, **(params or {})}
+    half_scale = max(0.1, float(p["wind_half_scale"]))
+    exponent = max(0.1, float(p["wind_exponent"]))
+    wind_gate = 1.0 / (1.0 + (max(0.0, wind_speed) / half_scale) ** exponent)
+    if phase == "rising":
+        discount = max(0.0, min(1.0, float(p["midday_discount"])))
+        wind_gate *= (1.0 - discount * solar_frac)
+    return max(0.05, wind_gate * 1.3)
+
+
+def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = None) -> dict:
     """Return separate wind and thermal directions (blowing-TO, degrees) plus the
     blended scent direction and score — for map indicators that show wind and
     thermals as distinct arrows."""
@@ -74,7 +105,7 @@ def stand_hour_vectors(stand: dict, hour: dict) -> dict:
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
     wind_to = (hour["wind_dir"] + 180) % 360
 
-    sc = score_stand_hour(stand, hour)
+    sc = score_stand_hour(stand, hour, thermal_params)
     return {
         "wind_to_deg": round(wind_to),
         "wind_from_deg": round(hour["wind_dir"]),
@@ -89,7 +120,7 @@ def stand_hour_vectors(stand: dict, hour: dict) -> dict:
     }
 
 
-def score_stand_hour(stand: dict, hour: dict) -> dict:
+def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None) -> dict:
     t = stand.get("terrain")
     downhill = t["downhill_deg"] if t else (stand.get("downhill_deg") or 0)
     drainage = t["drainage_deg"] if t else downhill
@@ -98,7 +129,7 @@ def score_stand_hour(stand: dict, hour: dict) -> dict:
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
 
     ww = max(0.2, min(1.0, hour["wind_speed"] / 12))
-    tw = therm["weight"] * (1.3 if hour["wind_speed"] < 6 else 0.8)
+    tw = therm["weight"] * thermal_coherence(hour["wind_speed"], therm["phase"], therm["solar_frac"], thermal_params)
     if t and not therm["uphill"]:
         tw *= 0.8 + 0.5 * t["channel_strength"]
 
@@ -216,9 +247,10 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
 def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          sightings: list[dict] | None = None, max_boost_pct: float = 0.0,
                          proximity: dict | None = None,
-                         utc_offset_seconds: int = 0) -> dict:
-    
-    base = score_stand_hour(stand, hour)
+                         utc_offset_seconds: int = 0,
+                         thermal_params: dict | None = None) -> dict:
+
+    base = score_stand_hour(stand, hour, thermal_params)
     breakdown = []
 
     breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],
