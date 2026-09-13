@@ -1403,6 +1403,10 @@ class CameraUpdateIn(BaseModel):
 class CameraDiscoverIn(BaseModel):
     brand: str
     credentials: dict
+    # None => preview/dry-run (classify only, no writes). Provided => apply,
+    # keyed by provider_ref, true meaning "include this camera" (also un-skips
+    # a previously-removed one); omitted refs default to included.
+    selections: dict[str, bool] | None = None
 
 
 @app.get("/api/camera-providers")
@@ -1435,8 +1439,11 @@ def create_camera(body: CameraIn, _=Depends(require_token)):
 
 @app.post("/api/cameras/discover")
 async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
-    """Connect a brand account and auto-create/update camera records from the provider.
-    Cameras previously soft-deleted by the user are skipped and never recreated."""
+    """Connect a brand account and list/create/update camera records from the provider.
+    With no `selections`, this is a preview/dry-run: cameras are classified
+    ("new" / "existing" / "previously_removed") but nothing is written. Pass
+    `selections` (provider_ref -> include) to apply — a previously-removed
+    camera is only restored (un-skipped) if its ref is selected."""
     try:
         prov = cameras_mod.get_provider(body.brand, body.credentials)
     except cameras_mod.CameraError as e:
@@ -1450,21 +1457,40 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
 
     creds_enc = encrypt_credentials(body.credentials)
     now = datetime.now(timezone.utc).isoformat()
-    created, updated, skipped_deleted = [], [], []
 
     with Session(engine) as s:
-        for sp in sp_cameras:
-            ref = sp["id"]
-            name = sp["name"]
-            # Find any existing row (including soft-deleted) for this provider_ref
+        def classify(ref):
             existing = s.scalars(
                 select(Camera).where(Camera.brand == body.brand, Camera.provider_ref == ref)
             ).first()
+            if existing and existing.is_deleted:
+                return existing, "previously_removed"
             if existing:
-                if existing.is_deleted:
-                    skipped_deleted.append({"name": name, "provider_ref": ref})
+                return existing, "existing"
+            return None, "new"
+
+        if body.selections is None:
+            cameras = [{"provider_ref": sp["id"], "name": sp["name"], "status": classify(sp["id"])[1]}
+                       for sp in sp_cameras]
+            return {"preview": True, "cameras": cameras}
+
+        created, updated, restored, skipped = [], [], [], []
+        for sp in sp_cameras:
+            ref, name = sp["id"], sp["name"]
+            include = body.selections.get(ref, True)
+            existing, status = classify(ref)
+            if status == "previously_removed":
+                if not include:
+                    skipped.append({"name": name, "provider_ref": ref})
                     continue
-                # Update name and credentials if changed
+                existing.is_deleted = 0
+                existing.name = name
+                existing.credentials_json = creds_enc
+                s.commit(); s.refresh(existing)
+                restored.append(existing.to_dict())
+            elif status == "existing":
+                if not include:
+                    continue
                 changed = existing.name != name or existing.credentials_json != creds_enc
                 if changed:
                     existing.name = name
@@ -1473,6 +1499,8 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
                     s.refresh(existing)
                 updated.append(existing.to_dict())
             else:
+                if not include:
+                    continue
                 cam = Camera(
                     name=name, brand=body.brand, provider_ref=ref,
                     credentials_json=creds_enc,
@@ -1483,9 +1511,9 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
                 s.refresh(cam)
                 created.append(cam.to_dict())
 
-    log.info("discover_cameras: brand=%s created=%d updated=%d skipped_deleted=%d",
-             body.brand, len(created), len(updated), len(skipped_deleted))
-    return {"created": created, "updated": updated, "skipped_deleted": skipped_deleted}
+    log.info("discover_cameras: brand=%s created=%d updated=%d restored=%d skipped=%d",
+             body.brand, len(created), len(updated), len(restored), len(skipped))
+    return {"preview": False, "created": created, "updated": updated, "restored": restored, "skipped": skipped}
 
 
 @app.put("/api/cameras/{camera_id}")
