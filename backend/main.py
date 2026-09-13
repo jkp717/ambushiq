@@ -65,6 +65,12 @@ DEFAULT_SETTINGS = {
     "weight_rub":    0.10, "falloff_rub":    80,
     # deer day-rating weather factor weights (relative; normalized at use)
     "rate_w_pressure": 0.32, "rate_w_wind": 0.20, "rate_w_rain": 0.28, "rate_w_temp": 0.20,
+    # thermal coherence model (scoring.thermal_coherence) — how much of a thermal's
+    # directional potential survives into the scent blend vs. being overwhelmed by
+    # ambient wind / midday convective mixing
+    "thermal_wind_half_scale": 7.0,
+    "thermal_wind_exponent": 1.8,
+    "thermal_midday_discount": 0.3,
     # v2.15: trail-camera + rut-date settings
     "camera_sync_interval_minutes": 30,
     "image_retention_days": 60,
@@ -559,6 +565,14 @@ def get_settings() -> dict:
     return {**DEFAULT_SETTINGS, **rows}
 
 
+def _thermal_params(settings: dict) -> dict:
+    return {
+        "wind_half_scale": settings.get("thermal_wind_half_scale", 7.0),
+        "wind_exponent": settings.get("thermal_wind_exponent", 1.8),
+        "midday_discount": settings.get("thermal_midday_discount", 0.3),
+    }
+
+
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
     from math import radians, sin, cos, asin, sqrt
     R = 6371000.0
@@ -732,6 +746,7 @@ async def rank_sit(body: SitRankIn, _=Depends(require_token)):
     h = fc["hourly"]
     temp_swing_by_day = _temp_swing_by_day(h)
     mid = (body.sunrise_h + body.sunset_h) / 2
+    tp = _thermal_params(get_settings())
     results = []
     for st in stands:
         agg, n, sample = 0.0, 0, None
@@ -743,7 +758,7 @@ async def rank_sit(body: SitRankIn, _=Depends(require_token)):
                 "sunrise_h": body.sunrise_h, "sunset_h": body.sunset_h,
                 "temp_swing": temp_swing_by_day.get(h["time"][i][:10], 0.0),
             }
-            sc = scoring.score_stand_hour(st, hour)
+            sc = scoring.score_stand_hour(st, hour, tp)
             agg += sc["total"]
             n += 1
             dist = abs(hour["time_h"] - mid)
@@ -761,11 +776,12 @@ def rank_manual(body: ManualRankIn, _=Depends(require_token)):
     wind_from = scoring.compass_to_deg(body.wind_dir)
     time_h = {"morning": 7, "midday": 13, "evening": 18}.get(body.period, 13)
     solar = 500 if body.period == "midday" else 50
+    tp = _thermal_params(get_settings())
     results = []
     for st in stands:
         hour = {"wind_dir": wind_from, "wind_speed": body.wind_speed, "gust": body.gust,
                 "solar": solar, "time_h": time_h, "sunrise_h": 6.5, "sunset_h": 19}
-        sc = scoring.score_stand_hour(st, hour)
+        sc = scoring.score_stand_hour(st, hour, tp)
         results.append({"stand": st, "avg": sc["total"], "sample": {"hour": hour, "score": sc}})
     results.sort(key=lambda x: x["avg"], reverse=True)
     return {"ranked": results}
@@ -984,6 +1000,7 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     max_cam_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
     utc_offset = int(fc.get("utc_offset_seconds", 0))
     period = scoring.period_for_hour(hour["time_h"])
+    tp = _thermal_params(settings)
 
     # Load recent sightings per stand when boost is configured — keeps map rank in sync
     # with /api/day/ranked which already applies camera boost.
@@ -996,7 +1013,7 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
 
     items = []
     for st in stands:
-        vec = scoring.stand_hour_vectors(st, hour)
+        vec = scoring.stand_hour_vectors(st, hour, tp)
         if period and max_cam_boost:
             sightings = sightings_by_stand.get(st["id"], [])
             if sightings:
@@ -1084,6 +1101,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     if not body.use_food: settings["weight_food"] = 0.0
     if not body.use_bedding: settings["weight_bedding"] = 0.0
     max_cam_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
+    tp = _thermal_params(settings)
 
     # recent sightings per stand (last 72h handled inside camera_boost)
     sightings_by_stand: dict[int, list] = {}
@@ -1107,7 +1125,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
             det = scoring.score_with_breakdown(
                 stand, hour, period=period_name, sightings=sightings,
                 max_boost_pct=max_cam_boost, proximity=bonus,
-                utc_offset_seconds=utc_offset)
+                utc_offset_seconds=utc_offset, thermal_params=tp)
             sc = {
                 "total": det["final_score"],
                 "base_total": det["base_score"],
@@ -1174,6 +1192,9 @@ class SettingsIn(BaseModel):
     rut_peak_day: float | None = None
     camera_image_dir: str | None = None
     property_timezone: str | None = None
+    thermal_wind_half_scale: float | None = None
+    thermal_wind_exponent: float | None = None
+    thermal_midday_discount: float | None = None
 
 
 @app.get("/api/settings")
