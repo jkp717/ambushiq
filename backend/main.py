@@ -164,12 +164,15 @@ class Stand(Base):
     downhill_deg: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     deer_approach_deg: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     terrain_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # effective sight/cover radius (m); None -> falls back to corridor/global falloff
+    visibility_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "lat": self.lat, "lon": self.lon,
             "is_active": bool(self.is_active if self.is_active is not None else 1),
             "downhill_deg": self.downhill_deg, "deer_approach_deg": self.deer_approach_deg,
+            "visibility_m": self.visibility_m,
             "terrain": json.loads(self.terrain_json) if self.terrain_json else None,
         }
 
@@ -202,6 +205,8 @@ class Corridor(Base):
     usage: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
     # per-corridor falloff distance in metres; NULL → use global falloff_corridor setting
     falloff_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # total corridor width in metres; NULL/0 -> treated as a thin travel line
+    width_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # polyline as JSON list of [lat, lon] points
     points_json: Mapped[str] = mapped_column(Text)
 
@@ -210,6 +215,7 @@ class Corridor(Base):
                 "is_active": bool(self.is_active if self.is_active is not None else 1),
                 "usage": self.usage if self.usage is not None else 5,
                 "falloff_m": self.falloff_m,
+                "width_m": self.width_m,
                 "points": json.loads(self.points_json)}
 
 
@@ -320,6 +326,13 @@ def init_db(retries: int = 30):
                     conn.commit()
                 except Exception:
                     pass
+                # v2.20: corridor width + stand visibility for buffered edge-distance scoring
+                try:
+                    conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS width_m FLOAT"))
+                    conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS visibility_m FLOAT"))
+                    conn.commit()
+                except Exception:
+                    pass
                 # deer_sign table
                 try:
                     conn.execute(text("""
@@ -396,6 +409,7 @@ class StandIn(BaseModel):
     is_active: bool = True
     downhill_deg: Optional[int] = None
     deer_approach_deg: Optional[int] = None
+    visibility_m: Optional[float] = None  # None -> use corridor/global falloff
 
 
 class SitRankIn(BaseModel):
@@ -427,6 +441,7 @@ class CorridorIn(BaseModel):
     is_active: bool = True
     usage: int = 5          # 1 = rarely used, 10 = heavily used
     falloff_m: Optional[float] = None  # None → inherit global falloff_corridor
+    width_m: Optional[float] = None    # None/0 -> treated as a thin travel line
 
 
 class DeerSignIn(BaseModel):
@@ -624,8 +639,13 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
     def corridor_factor():
         total = 0.0
         for c in corridors:
-            # per-corridor falloff; fall back to global setting when not set
-            falloff = c.get("falloff_m") or settings["falloff_corridor"]
+            # half the corridor's physical width -> a buffer of full-credit distance
+            # around the centerline, mirroring zone_factor()'s radius_m buffer above
+            half_width = max(0.0, float(c.get("width_m") or 0.0)) / 2.0
+            # falloff: this stand's own visibility, else this corridor's override,
+            # else the global setting — same fallback chain as before, with a new,
+            # higher-priority first link so wide-sight stands "see" corridors farther
+            falloff = stand.get("visibility_m") or c.get("falloff_m") or settings["falloff_corridor"]
             # usage 1-10 scales the contribution linearly (usage/10)
             usage_scale = max(1, min(10, c.get("usage") or 5)) / 10.0
             pts = c["points"]
@@ -634,7 +654,8 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
                 d = _point_to_segment_m(slat, slon, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
                 dmin = d if dmin is None else min(dmin, d)
             if dmin is not None:
-                contrib = max(0.0, 1 - dmin / falloff) if falloff > 0 else 0
+                edge_dist = max(0.0, dmin - half_width)  # 0 while inside the corridor's width
+                contrib = max(0.0, 1 - edge_dist / falloff) if falloff > 0 else 0
                 total += contrib * usage_scale
         return total
 
@@ -841,7 +862,8 @@ def create_corridor(body: CorridorIn, _=Depends(require_token)):
     with Session(engine) as s:
         c = Corridor(name=body.name, points_json=json.dumps(body.points),
                      is_active=1 if body.is_active else 0,
-                     usage=max(1, min(10, body.usage)), falloff_m=body.falloff_m)
+                     usage=max(1, min(10, body.usage)), falloff_m=body.falloff_m,
+                     width_m=body.width_m)
         s.add(c)
         s.commit()
         s.refresh(c)
@@ -858,6 +880,7 @@ def update_corridor(corridor_id: int, body: CorridorIn, _=Depends(require_token)
         c.is_active = 1 if body.is_active else 0
         c.usage = max(1, min(10, body.usage))
         c.falloff_m = body.falloff_m
+        c.width_m = body.width_m
         if body.points and len(body.points) >= 2:
             c.points_json = json.dumps(body.points)
         s.commit()

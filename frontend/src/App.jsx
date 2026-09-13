@@ -166,6 +166,7 @@ function Shell({ onLogout, version }) {
         name: stand.name, lat: stand.lat, lon: stand.lon,
         is_active: !stand.is_active,
         downhill_deg: stand.downhill_deg, deer_approach_deg: stand.deer_approach_deg,
+        visibility_m: stand.visibility_m,
       })});
       await loadStands();
     } catch {}
@@ -189,7 +190,7 @@ function Shell({ onLogout, version }) {
 
   function openStandEditor(coord) {
     setEditingStand({ id: null, name: "", lat: coord ? coord.lat.toFixed(6) : "", lon: coord ? coord.lon.toFixed(6) : "",
-                      downhill_deg: null, deer_approach_deg: null, terrain: null });
+                      downhill_deg: null, deer_approach_deg: null, visibility_m: null, terrain: null });
   }
 
   function requestRelocate(kind, id) {
@@ -691,7 +692,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       try {
         if (kind === "stand") {
           const s = stands.find((x) => x.id === id);
-          if (s) await api(`/stands/${id}`, { method: "PUT", body: JSON.stringify({ name: s.name, lat: pt.lat, lon: pt.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg }) });
+          if (s) await api(`/stands/${id}`, { method: "PUT", body: JSON.stringify({ name: s.name, lat: pt.lat, lon: pt.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m }) });
           await reloadStands();
         } else if (kind === "food" || kind === "bedding") {
           const z = zones.find((x) => x.id === id);
@@ -717,7 +718,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
     } catch { setErr("Couldn't move corridor."); }
     setRelocating(null); setDraftPoints([]); setDrawMode(null);
   }
-  async function confirmName(name, extra1, extra2) {
+  async function confirmName(name, extra1, extra2, extra3) {
     const pn = pendingName; setPendingName(null); if (!pn) return;
     try {
       if (pn.type === "zone") {
@@ -726,7 +727,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
         await api("/zones", { method: "POST", body: JSON.stringify(body) });
         await reloadZones();
       } else {
-        await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null, usage: extra1 ?? 5, falloff_m: extra2 ?? null }) });
+        await api("/corridors", { method: "POST", body: JSON.stringify({ ...pn.payload, name: name || null, usage: extra1 ?? 5, falloff_m: extra2 ?? null, width_m: extra3 ?? null }) });
         await reloadCorridors();
       }
     } catch { setErr(`Couldn't save ${pn.type}.`); }
@@ -915,6 +916,7 @@ function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
                 {s.terrain && <> · {s.terrain.elevation}m · drains {degToCompass(s.terrain.drainage_deg)}</>}
                 {!s.terrain && s.downhill_deg != null && <> · downhill {degToCompass(s.downhill_deg)}</>}
                 {s.deer_approach_deg != null && <> · deer from {degToCompass(s.deer_approach_deg)}</>}
+                {s.visibility_m ? <> · visibility {Math.round(s.visibility_m)}m</> : null}
               </div>
             </div>
             <div className="list-card-actions">
@@ -1080,11 +1082,13 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
   const [geom, setGeom] = useState(null);
   const [editUsage, setEditUsage] = useState(5);
   const [editFalloff, setEditFalloff] = useState("");
+  const [editWidth, setEditWidth] = useState("");
   useEffect(() => {
     if (editing) {
       setGeom({ points: editing.points });
       setEditUsage(editing.usage ?? 5);
       setEditFalloff(editing.falloff_m != null ? editing.falloff_m : "");
+      setEditWidth(editing.width_m != null ? editing.width_m : "");
     }
   }, [editing && editing.id]);
   async function save() {
@@ -1095,6 +1099,7 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
         is_active: editing.is_active !== false,
         usage: editUsage,
         falloff_m: editFalloff !== "" && editFalloff != null ? +editFalloff : null,
+        width_m: editWidth !== "" && editWidth != null ? +editWidth : null,
       }) });
       setEditing(null); reload();
     } catch {}
@@ -1106,6 +1111,7 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
         is_active: !c.is_active,
         usage: c.usage ?? 5,
         falloff_m: c.falloff_m ?? null,
+        width_m: c.width_m ?? null,
       })});
       reload();
     } catch {}
@@ -1129,6 +1135,7 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
               <div className="list-card-sub">
                 {corridorLengthFt(c.points).toLocaleString()} ft · Usage {c.usage ?? 5}/10
                 {c.falloff_m != null ? ` · ${Math.round(c.falloff_m)}m falloff` : " · global falloff"}
+                {c.width_m ? ` · ${Math.round(c.width_m)}m wide` : ""}
               </div>
             </div>
             <div className="list-card-actions">
@@ -1167,6 +1174,14 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
                 <input type="number" value={editFalloff} min={50} max={2000} step={25}
                   placeholder="global default"
                   onChange={(e) => setEditFalloff(e.target.value)} />
+              </Field>
+            </div>
+            {/* Corridor width */}
+            <div style={{ marginTop: 14 }}>
+              <Field label="Corridor width (m) — leave blank for a thin travel line">
+                <input type="number" value={editWidth} min={0} max={400} step={10}
+                  placeholder="e.g. 30 (creek bottom)"
+                  onChange={(e) => setEditWidth(e.target.value)} />
               </Field>
             </div>
             <div style={{ marginTop: 12 }}>
@@ -2003,6 +2018,7 @@ function CorridorPrompt({ onConfirm, onCancel }) {
   const [name, setName] = useState("");
   const [usage, setUsage] = useState(5);
   const [falloff, setFalloff] = useState(150);
+  const [width, setWidth] = useState("");
   const usageLabel = usage <= 2 ? "Rarely used" : usage <= 4 ? "Occasionally used" : usage <= 6 ? "Moderately used" : usage <= 8 ? "Frequently used" : "Heavily used";
   return (
     <Modal onClose={onCancel}>
@@ -2013,7 +2029,7 @@ function CorridorPrompt({ onConfirm, onCancel }) {
         </div>
         <Field label="Name (optional)">
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") onConfirm(name.trim(), usage, falloff); }}
+            onKeyDown={(e) => { if (e.key === "Enter") onConfirm(name.trim(), usage, falloff, width === "" ? null : +width); }}
             placeholder="e.g. Ridge pinch point" />
         </Field>
         <div style={{ marginTop: 14 }}>
@@ -2032,8 +2048,15 @@ function CorridorPrompt({ onConfirm, onCancel }) {
               onChange={(e) => setFalloff(+e.target.value)} />
           </Field>
         </div>
+        <div style={{ marginTop: 14 }}>
+          <Field label="Corridor width (m) — leave blank for a thin travel line">
+            <input type="number" value={width} min={0} max={400} step={10}
+              placeholder="e.g. 30 (creek bottom)"
+              onChange={(e) => setWidth(e.target.value)} />
+          </Field>
+        </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button className="btn btn-primary" onClick={() => onConfirm(name.trim(), usage, falloff)}><Save size={15} /> Save</button>
+          <button className="btn btn-primary" onClick={() => onConfirm(name.trim(), usage, falloff, width === "" ? null : +width)}><Save size={15} /> Save</button>
           <button className="btn" onClick={onCancel}>Cancel</button>
         </div>
       </div>
@@ -2197,13 +2220,14 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
 
     try {
       let id = savedId;
-      const body = { 
-        name: s.name, 
-        lat: +s.lat, 
-        lon: +s.lon, 
-        is_active: s.is_active !== false, 
-        downhill_deg: s.downhill_deg, 
-        deer_approach_deg: s.deer_approach_deg 
+      const body = {
+        name: s.name,
+        lat: +s.lat,
+        lon: +s.lon,
+        is_active: s.is_active !== false,
+        downhill_deg: s.downhill_deg,
+        deer_approach_deg: s.deer_approach_deg,
+        visibility_m: s.visibility_m,
       };
 
       if (!id) { 
@@ -2304,6 +2328,13 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
         <DirPicker label="Deer approach from (optional)" value={s.deer_approach_deg} onChange={(d) => setS({ ...s, deer_approach_deg: d })} allowNull />
       </div>
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
+        <Field label="Visibility / cover radius (m) — leave blank to use the corridor's or global falloff">
+          <input type="number" value={s.visibility_m ?? ""} min={0} max={500} step={10}
+            placeholder="e.g. 250 open hardwoods, 60 thick cover"
+            onChange={(e) => setS({ ...s, visibility_m: e.target.value === "" ? null : +e.target.value })} />
+        </Field>
+      </div>
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
         <input type="checkbox" checked={s.is_active !== false}
           onChange={(e) => setS({ ...s, is_active: e.target.checked })} />
@@ -2311,7 +2342,7 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
       </label>
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
         <button className="btn btn-primary" disabled={!valid}
-          onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg }, savedId)}>
+          onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m }, savedId)}>
           <Save size={15} /> Save stand
         </button>
         {onMoveOnMap && <button className="btn" onClick={() => { onMoveOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Move on Map</button>}
