@@ -671,7 +671,7 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 @media (max-width: 420px) { .sightings-grid { grid-template-columns: repeat(2, 1fr); } }
 
 .sighting-card {
-  max-height: 120px;
+  min-height: 120px;
   border-radius: 8px; overflow: hidden;
   border: 1px solid var(--bord); background: var(--surf);
   cursor: pointer; transition: transform .1s, box-shadow .1s;
