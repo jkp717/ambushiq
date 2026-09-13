@@ -678,7 +678,7 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .sighting-card:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,.18); }
 .sighting-thumb {
   width: 100%; aspect-ratio: 4/3;
-  object-fit: cover; display: block;
+  object-fit: contain; background: var(--surf); display: block;
 }
 .sighting-nophoto {
   width: 100%; aspect-ratio: 4/3;
