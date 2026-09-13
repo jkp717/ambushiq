@@ -1516,7 +1516,7 @@ function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
           </p>
           {preview.cameras.map((c) => (
             <label key={c.provider_ref} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", cursor: "pointer" }}>
-              <input type="checkbox" checked={!!selections[c.provider_ref]}
+              <input type="checkbox" checked={!!selections[c.provider_ref]} style={{ maxWidth: 20 }}
                 onChange={(e) => setSelections({ ...selections, [c.provider_ref]: e.target.checked })} />
               <span style={{ fontSize: 13 }}>{c.name}</span>
               {c.status === "previously_removed" && (
