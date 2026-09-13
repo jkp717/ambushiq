@@ -2148,9 +2148,11 @@ function DeerRating({ rating }) {
   const tone = r >= 4 ? "var(--green)" : r === 3 ? "var(--amber)" : "var(--red)";
   const fac = rating.factors;
   const f = (v) => Math.round(v * 100);
-  const bar = (label, v) => (
+  const bar = (label, v, info) => (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-      <span style={{ fontSize: 11.5, color: "var(--sub)", width: 110 }}>{label}</span>
+      <span style={{ fontSize: 11.5, color: "var(--sub)", width: 110, display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {label}{info && <InfoTip text={info} />}
+      </span>
       <span style={{ flex: 1, height: 6, background: "var(--surf)", borderRadius: 3, overflow: "hidden" }}>
         <span style={{ display: "block", height: "100%", width: `${f(v)}%`, background: tone }} />
       </span>
@@ -2167,11 +2169,16 @@ function DeerRating({ rating }) {
       </div>
       {open && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bord)" }}>
-          {bar("Rut intensity", rating.rut?.intensity)}
-          {bar("Barometric", fac?.pressure)}
-          {bar("Wind", fac?.wind)}
-          {bar("Rain (1=dry)", fac?.rain)}
-          {bar("Temp shift", fac?.temp_shift)}
+          {bar("Rut intensity", rating.rut?.intensity,
+            "How strong seasonal breeding drive is right now — higher means bucks cruise more, including in daylight. 85+ = peak pre-rut seeking, the best daylight movement of the year. 15 = off-season lull.")}
+          {bar("Barometric", fac?.pressure,
+            "Steady high pressure (~30.0–30.4in) or a fast-moving front pushes deer to move in daylight. 80+ = ideal pressure or a sharp swing. 30 = flat, low pressure that favors night movement.")}
+          {bar("Wind", fac?.wind,
+            "Moderate wind (5–15mph) helps deer scent danger and move confidently; dead calm or gusty wind suppresses it. 90+ = a ~9mph breeze, the sweet spot. 35 = wind above 25mph.")}
+          {bar("Rain (1=dry)", fac?.rain,
+            "Heavy rain is one of the strongest movement suppressors. 100 = dry. 55 = moderate rain (2.5–7.5mm). 25 = heavy rain (7.5mm+) — high wind blunts the effect slightly.")}
+          {bar("Temp shift", fac?.temp_shift,
+            "Deer don't move less in the cold, they move earlier — a colder day than recent baseline shifts activity into daylight; a warm spell shifts it to night. 100 = a sharp cool front (15°F+ below baseline). 25 = a big warm-up. High dew points lower it further.")}
           <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8, lineHeight: 1.5 }}>
             {rating.inputs?.pressure_inhg != null && <>{rating.inputs.pressure_inhg}″ · </>}
             {rating.inputs?.wind_mph      != null && <>{rating.inputs.wind_mph} mph · </>}
