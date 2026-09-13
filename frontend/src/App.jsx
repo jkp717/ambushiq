@@ -941,6 +941,12 @@ function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
 function ZonesTabPage({ zones, corridors, sign, reloadSign, onAdd, reloadZones, reloadCorridors,
                         editingZone, setEditingZone, editingCorridor, setEditingCorridor, onMoveOnMap }) {
   const [tab, setTab] = useState("food");
+  useEffect(() => {
+    if (editingCorridor) setTab("corridors");
+  }, [editingCorridor]);
+  useEffect(() => {
+    if (editingZone) setTab(editingZone.kind === "bedding" ? "bedding" : "food");
+  }, [editingZone]);
   const TABS = [
     { key: "food",      label: "Food",      icon: Wheat },
     { key: "bedding",   label: "Bedding",   icon: Trees },
