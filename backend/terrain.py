@@ -1,6 +1,12 @@
 """Terrain analysis: elevation grid -> slope/aspect + cold-air drainage (D-Infinity flow accumulation)."""
 from __future__ import annotations
-from functools import deprecated
+try:
+    from warnings import deprecated  # PEP 702 — stdlib only since Python 3.13
+except ImportError:
+    def deprecated(reason):
+        def _wrap(fn):
+            return fn
+        return _wrap
 import json
 import math
 import asyncio
