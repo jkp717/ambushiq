@@ -1401,6 +1401,9 @@ function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
   const [brand, setBrand] = useState(null);
   const [creds, setCreds] = useState({});
   const [discovering, setDiscovering] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [selections, setSelections] = useState({});
+  const [applying, setApplying] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState(null);
   const prov = providers.find((p) => p.brand === brand);
@@ -1410,10 +1413,23 @@ function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
     try {
       const r = await api("/cameras/discover", { method: "POST",
         body: JSON.stringify({ brand, credentials: creds }) });
-      setResult(r);
+      setPreview(r);
+      const sel = {};
+      r.cameras.forEach((c) => { sel[c.provider_ref] = c.status !== "previously_removed"; });
+      setSelections(sel);
       setStep(3);
     } catch (e) { setErr(e.message); }
     finally { setDiscovering(false); }
+  }
+
+  async function confirmSelections() {
+    setApplying(true); setErr(null);
+    try {
+      const r = await api("/cameras/discover", { method: "POST",
+        body: JSON.stringify({ brand, credentials: creds, selections }) });
+      setResult(r);
+    } catch (e) { setErr(e.message); }
+    finally { setApplying(false); }
   }
 
   const STEP_LABELS = ["Brand", "Connect", "Done"];
@@ -1491,6 +1507,40 @@ function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
         </>
       )}
 
+      {step === 3 && preview && !result && (
+        <>
+          <p style={{ fontSize: 13, color: "var(--sub)", marginBottom: 10 }}>
+            {preview.cameras.length === 0
+              ? "No cameras found on this account."
+              : "Choose which cameras to import. Previously removed cameras are unchecked by default — check one to bring it back."}
+          </p>
+          {preview.cameras.map((c) => (
+            <label key={c.provider_ref} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", cursor: "pointer" }}>
+              <input type="checkbox" checked={!!selections[c.provider_ref]}
+                onChange={(e) => setSelections({ ...selections, [c.provider_ref]: e.target.checked })} />
+              <span style={{ fontSize: 13 }}>{c.name}</span>
+              {c.status === "previously_removed" && (
+                <span style={{ fontSize: 11, color: "var(--amber)" }}>previously removed</span>
+              )}
+              {c.status === "existing" && (
+                <span style={{ fontSize: 11, color: "var(--sub)" }}>already connected</span>
+              )}
+            </label>
+          ))}
+          {err && <div style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button className="btn" onClick={() => setStep(2)}>← Back</button>
+            {preview.cameras.length > 0 ? (
+              <button className="btn btn-primary" disabled={applying} onClick={confirmSelections}>
+                {applying ? <><RefreshCw size={14} className="spin" /> Importing...</> : "Import selected"}
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={onSaved}>Done</button>
+            )}
+          </div>
+        </>
+      )}
+
       {step === 3 && result && (
         <>
           <div style={{ fontSize: 14, marginBottom: 12 }}><strong>Discovery complete!</strong></div>
@@ -1506,6 +1556,16 @@ function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
               ))}
             </div>
           )}
+          {result.restored.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--green)", marginBottom: 4 }}>
+                {result.restored.length} restored (previously removed):
+              </div>
+              {result.restored.map((c) => (
+                <div key={c.id} style={{ fontSize: 13, paddingLeft: 12, color: "var(--txt)" }}>- {c.name}</div>
+              ))}
+            </div>
+          )}
           {result.updated.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: "var(--sub)", marginBottom: 4 }}>
@@ -1516,18 +1576,18 @@ function CameraDiscoverWizard({ providers, onSaved, onCancel }) {
               ))}
             </div>
           )}
-          {result.skipped_deleted.length > 0 && (
+          {result.skipped.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: "var(--amber)", marginBottom: 4 }}>
-                {result.skipped_deleted.length} previously removed (skipped):
+                {result.skipped.length} left removed (unchecked):
               </div>
-              {result.skipped_deleted.map((c) => (
+              {result.skipped.map((c) => (
                 <div key={c.provider_ref} style={{ fontSize: 13, paddingLeft: 12, color: "var(--sub)" }}>- {c.name}</div>
               ))}
             </div>
           )}
-          {result.created.length === 0 && result.updated.length === 0 && (
-            <p style={{ fontSize: 13, color: "var(--sub)" }}>No cameras found on this account.</p>
+          {result.created.length === 0 && result.updated.length === 0 && result.restored.length === 0 && (
+            <p style={{ fontSize: 13, color: "var(--sub)" }}>No cameras were imported.</p>
           )}
           <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={onSaved}>Done</button>
         </>
