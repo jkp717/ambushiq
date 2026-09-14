@@ -273,6 +273,8 @@ class CameraSighting(Base):
     camera_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     timestamp: Mapped[str] = mapped_column(String(32))  # ISO of the sighting
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
+    species: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    species_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # NULL after cleanup
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
@@ -283,6 +285,7 @@ class CameraSighting(Base):
         return {
             "id": self.id, "stand_id": self.stand_id, "camera_id": self.camera_id,
             "timestamp": self.timestamp, "confidence_score": self.confidence_score,
+            "species": self.species, "species_confidence": self.species_confidence,
             "image_url": img, "created_at": self.created_at,
         }
 
@@ -330,6 +333,14 @@ def init_db(retries: int = 30):
                 try:
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS width_m FLOAT"))
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS visibility_m FLOAT"))
+                    conn.commit()
+                except Exception:
+                    pass
+                # v2.21: species classification on camera sightings, so the camera
+                # boost can be limited to actual deer instead of any animal
+                try:
+                    conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS species VARCHAR(64)"))
+                    conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS species_confidence FLOAT"))
                     conn.commit()
                 except Exception:
                     pass
@@ -1047,7 +1058,8 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
         with Session(engine) as s:
             for row in s.scalars(select(CameraSighting)).all():
                 sightings_by_stand.setdefault(row.stand_id, []).append(
-                    {"timestamp": row.timestamp, "confidence_score": row.confidence_score})
+                    {"timestamp": row.timestamp, "confidence_score": row.confidence_score,
+                     "species": row.species})
 
     items = []
     for st in stands:
@@ -1146,7 +1158,8 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     with Session(engine) as s:
         for row in s.scalars(select(CameraSighting)).all():
             sightings_by_stand.setdefault(row.stand_id, []).append(
-                {"timestamp": row.timestamp, "confidence_score": row.confidence_score})
+                {"timestamp": row.timestamp, "confidence_score": row.confidence_score,
+                 "species": row.species})
 
     def score_period(stand, lo, hi, bonus, period_name, sightings):
         best = None
@@ -1597,10 +1610,68 @@ async def verify_camera(camera_id: int, _=Depends(require_token)):
         raise HTTPException(400, str(e))
 
 
+async def _sync_one_camera_task(camera_id: int) -> None:
+    """Background-task wrapper: sync one camera, then release the detection
+    models from memory — this box has limited RAM, so we don't keep
+    MegaDetector + the species classifier resident between manual syncs."""
+    try:
+        await _sync_one_camera(camera_id)
+    finally:
+        detection_mod.unload_models()
+
+
 @app.post("/api/cameras/{camera_id}/sync")
 async def sync_camera_now(camera_id: int, bg: BackgroundTasks, _=Depends(require_token)):
     """Manually trigger a sync for one camera. Returns immediately; sync runs in background."""
-    bg.add_task(_sync_one_camera, camera_id)
+    bg.add_task(_sync_one_camera_task, camera_id)
+    return {"ok": True, "status": "running"}
+
+
+async def _backfill_species_task() -> None:
+    """One-time reclassification of sightings recorded before species tracking
+    existed. Only sightings whose original JPEG is still on disk (i.e. not yet
+    past image_retention_days) can be reclassified — older ones already had
+    their file deleted by the daily cleanup job and can't be recovered."""
+    with Session(engine) as s:
+        ids = [r.id for r in s.scalars(
+            select(CameraSighting.id).where(
+                CameraSighting.species.is_(None),
+                CameraSighting.image_path.isnot(None),
+            )
+        ).all()]
+    log.info("backfill_species: %d sighting(s) to check", len(ids))
+    reclassified = missing_file = errors = 0
+    try:
+        for sid in ids:
+            with Session(engine) as s:
+                row = s.get(CameraSighting, sid)
+                if not row or not row.image_path:
+                    continue
+                if not os.path.exists(row.image_path):
+                    missing_file += 1
+                    continue
+                det = await asyncio.to_thread(detection_mod.detect_animal, row.image_path)
+                if str(det.get("detector", "")).startswith("error"):
+                    errors += 1
+                    continue
+                if det.get("species"):
+                    row.species = det.get("species")
+                    row.species_confidence = det.get("species_confidence")
+                    s.commit()
+                    reclassified += 1
+    finally:
+        detection_mod.unload_models()
+    log.info("backfill_species: done — checked=%d reclassified=%d missing_file=%d errors=%d",
+              len(ids), reclassified, missing_file, errors)
+
+
+@app.post("/api/cameras/backfill-species")
+def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
+    """Reclassify existing sightings that predate species tracking. Runs in the
+    background and returns immediately; check server logs for a completion
+    summary (only sightings with their original photo still on disk can be
+    reclassified)."""
+    bg.add_task(_backfill_species_task)
     return {"ok": True, "status": "running"}
 
 
@@ -1781,13 +1852,14 @@ async def _sync_one_camera(camera_id: int) -> dict:
                 skipped_non_animal += 1
                 continue
 
-            log.info("cam %s (%s): photo[%d] animal confirmed (conf=%.3f) — recording sighting",
-                     cid, brand, idx, det.get("confidence", 0.0))
+            log.info("cam %s (%s): photo[%d] animal confirmed (conf=%.3f species=%s) — recording sighting",
+                     cid, brand, idx, det.get("confidence", 0.0), det.get("species"))
             with Session(engine) as s:
                 s.add(CameraSighting(
                     stand_id=stand_id, camera_id=cid,
                     timestamp=taken_at,
                     confidence_score=det.get("confidence", 0.0),
+                    species=det.get("species"), species_confidence=det.get("species_confidence"),
                     image_path=fpath, created_at=datetime.now(timezone.utc).isoformat(),
                 ))
                 s.commit()
@@ -1809,16 +1881,22 @@ async def _sync_one_camera(camera_id: int) -> dict:
 
 
 async def sync_cameras_job():
-    """Scheduler job: sync every active camera."""
+    """Scheduler job: sync every active camera, then release the detection
+    models — this box has limited RAM, so MegaDetector + the species
+    classifier are only kept resident for the duration of one sync round
+    (and only load at all if a camera actually has a new photo to process)."""
     with Session(engine) as s:
         ids = [c.id for c in s.scalars(select(Camera).where(Camera.is_active == 1)).all()]
-    for cid in ids:
-        try:
-            res = await _sync_one_camera(cid)
-            if res.get("new"):
-                log.info("scheduler: cam %s — %d new sighting(s)", cid, res["new"])
-        except Exception:
-            continue
+    try:
+        for cid in ids:
+            try:
+                res = await _sync_one_camera(cid)
+                if res.get("new"):
+                    log.info("scheduler: cam %s — %d new sighting(s)", cid, res["new"])
+            except Exception:
+                continue
+    finally:
+        detection_mod.unload_models()
 
 
 def auto_cleanup_job():

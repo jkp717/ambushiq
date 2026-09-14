@@ -703,12 +703,21 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 @media (max-width: 420px) { .sightings-grid { grid-template-columns: repeat(2, 1fr); } }
 
 .sighting-card {
+  position: relative;
   min-height: 120px;
   border-radius: 8px; overflow: hidden;
   border: 1px solid var(--bord); background: var(--surf);
   cursor: pointer; transition: transform .1s, box-shadow .1s;
 }
 .sighting-card:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,.18); }
+.sighting-species {
+  position: absolute; top: 4px; left: 4px; z-index: 2;
+  max-width: calc(100% - 8px);
+  background: rgba(0,0,0,.65); color: #fff;
+  font-size: 9.5px; font-weight: 600;
+  padding: 1px 5px; border-radius: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .sighting-thumb {
   width: 100%; height: 96px;
   object-fit: contain; background: var(--surf); display: block;
