@@ -1674,12 +1674,12 @@ def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
     completion summary. Only sightings with their original photo still on
     disk can be reclassified."""
     with Session(engine) as s:
-        ids = [r.id for r in s.scalars(
+        ids = list(s.scalars(
             select(CameraSighting.id).where(
                 CameraSighting.species.is_(None),
                 CameraSighting.image_path.isnot(None),
             )
-        ).all()]
+        ).all())
     log.info("backfill_species: queued — %d candidate sighting(s)", len(ids))
     bg.add_task(_backfill_species_task, ids)
     return {"ok": True, "status": "running", "candidates": len(ids)}
