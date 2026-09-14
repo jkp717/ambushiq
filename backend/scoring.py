@@ -199,22 +199,40 @@ def _is_deer_sighting(s: dict) -> bool:
 
 
 def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
-                 utc_offset_seconds: int = 0) -> dict:
+                 utc_offset_seconds: int = 0, has_camera: bool = False,
+                 max_penalty_pct: float = 0.0, lookback_hours: float = 72.0,
+                 camera_ready: bool = True) -> dict:
     """
-    Positive-only boost. Given a stand's recent camera sightings (each a dict with
-    'timestamp' ISO, 'confidence_score', and optionally 'species'), return a
-    multiplier >= 1.0 and a breakdown. Only DAYLIGHT sightings within the last 72h
-    whose LOCAL hour-of-day falls in the current hunt period AND whose species is
-    confirmed white-tailed deer count. No penalty is ever applied.
+    Given a stand's recent camera sightings (each a dict with 'timestamp' ISO,
+    'confidence_score', and optionally 'species'), return a multiplier and a
+    breakdown of trail-camera evidence for this hunt period.
+
+    - No camera on this stand (has_camera=False): always neutral (1.0x) —
+      camera evidence never boosts OR penalizes a stand with no camera.
+    - Camera present, qualifying deer photos found in this period within the
+      last `lookback_hours`: positive boost, scaling with count/confidence
+      (diminishing returns) and capped at max_boost_pct.
+    - Camera present, ZERO qualifying deer photos in this period, and the
+      camera has been in place at least `lookback_hours` (camera_ready=True):
+      negative penalty, capped at max_penalty_pct — this camera has had a
+      fair chance to see deer at this time of day and hasn't.
+    - Camera present but camera_ready=False (still within its grace period
+      since being assigned): neutral — not enough time has passed yet for an
+      absence of photos to mean anything.
+
+    A "qualifying" sighting is a DAYLIGHT sighting within the last
+    `lookback_hours` whose LOCAL hour-of-day falls in the current hunt period
+    AND whose species is confirmed white-tailed deer.
 
     utc_offset_seconds is taken from the Open-Meteo forecast for the property's
     location and is used to convert the stored UTC timestamps to local time before
     period matching — without this, a UTC-5 property's 6 AM sighting (stored as
     11:00 UTC) would be misclassified as "midday" instead of "morning".
-
-    Boost scales with how many qualifying sightings and their confidence, capped at
-    max_boost_pct (e.g. 15.0 -> up to +15% -> multiplier up to 1.15).
     """
+    if not has_camera:
+        return {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "status": "none",
+                "text": "no camera on this stand"}
+
     now = _dt.datetime.now(_dt.timezone.utc)
     qualifying = []
     for s in sightings or []:
@@ -230,7 +248,7 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
         except Exception:
             continue
         age_h = (now - t).total_seconds() / 3600
-        if age_h < 0 or age_h > 72:
+        if age_h < 0 or age_h > lookback_hours:
             continue
         # Convert UTC → local time using the property's UTC offset before period
         # matching. timedelta handles sub-hour offsets (e.g. India UTC+5:30) correctly.
@@ -239,26 +257,40 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
             continue
         qualifying.append(s)
 
-    if not qualifying:
-        return {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "no recent daylight deer photos"}
+    if qualifying:
+        # Accumulate confidence with diminishing returns; ~3 solid sightings approaches cap.
+        accum = 0.0
+        for s in qualifying:
+            raw_conf = s.get("confidence_score")
+            conf = max(0.1, min(1.0, float(raw_conf) if raw_conf is not None else 0.5))
+            accum += conf
+        frac = min(1.0, accum / 3.0)
+        boost_pct = round(max_boost_pct * frac, 1)
+        mult = 1.0 + boost_pct / 100.0
+        return {
+            "multiplier": mult, "boost_pct": boost_pct, "count": len(qualifying), "status": "boost",
+            "text": f"+{boost_pct}% from {len(qualifying)} daylight deer photo(s) in the last {int(lookback_hours)}h",
+        }
 
-    # Accumulate confidence with diminishing returns; ~3 solid sightings approaches cap.
-    accum = 0.0
-    for s in qualifying:
-        raw_conf = s.get("confidence_score")
-        conf = max(0.1, min(1.0, float(raw_conf) if raw_conf is not None else 0.5))
-        accum += conf
-    frac = min(1.0, accum / 3.0)
-    boost_pct = round(max_boost_pct * frac, 1)
-    mult = 1.0 + boost_pct / 100.0
+    if camera_ready and max_penalty_pct > 0:
+        penalty_pct = round(max_penalty_pct, 1)
+        mult = max(0.05, 1.0 - penalty_pct / 100.0)
+        return {
+            "multiplier": mult, "boost_pct": -penalty_pct, "count": 0, "status": "penalty",
+            "text": f"-{penalty_pct}% — no daylight deer photos from this camera in the last {int(lookback_hours)}h",
+        }
+
     return {
-        "multiplier": mult, "boost_pct": boost_pct, "count": len(qualifying),
-        "text": f"+{boost_pct}% from {len(qualifying)} daylight deer photo(s) in the last 72h",
+        "multiplier": 1.0, "boost_pct": 0.0, "count": 0, "status": "none",
+        "text": "camera in grace period — not enough history yet" if not camera_ready
+                else "no recent daylight deer photos",
     }
 
 
 def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          sightings: list[dict] | None = None, max_boost_pct: float = 0.0,
+                         max_penalty_pct: float = 0.0, lookback_hours: float = 72.0,
+                         has_camera: bool = False, camera_ready: bool = True,
                          proximity: dict | None = None,
                          utc_offset_seconds: int = 0,
                          thermal_params: dict | None = None) -> dict:
@@ -289,12 +321,15 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         breakdown.append({"factor": "Infrastructure proximity", "value": round(prox_total, 3),
                           "text": f"+{round(prox_total*100)} from nearby corridor/food/bedding"})
 
-    cam = {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "camera boost off"}
-    if period and max_boost_pct and sightings is not None:
-        cam = camera_boost(period, sightings, max_boost_pct, utc_offset_seconds)
+    cam = {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "status": "none", "text": "camera scoring off"}
+    if period and (max_boost_pct or max_penalty_pct):
+        cam = camera_boost(period, sightings or [], max_boost_pct, utc_offset_seconds,
+                            has_camera=has_camera, max_penalty_pct=max_penalty_pct,
+                            lookback_hours=lookback_hours, camera_ready=camera_ready)
         total *= cam["multiplier"]
-        breakdown.append({"factor": "Trail-camera boost", "value": cam["boost_pct"] / 100.0,
-                          "text": cam["text"]})
+        if cam["status"] != "none":
+            breakdown.append({"factor": "Trail-camera", "value": cam["boost_pct"] / 100.0,
+                              "text": cam["text"]})
 
     # Softened scent gate: retains up to 40% of the score even if blowing directly at expected approach
     # TODO: Make this % user configurable

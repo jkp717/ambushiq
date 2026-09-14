@@ -1380,7 +1380,7 @@ function CamerasPage({ stands }) {
         <h1>Trail Cameras</h1>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn" disabled={backfilling} onClick={backfillSpecies}
-            title="Reclassify older sightings recorded before species detection existed">
+            title="Reclassify species detection on existing images">
             {backfilling ? <><RefreshCw size={14} className="spin" /> Starting...</> : "Reclassify existing photos"}
           </button>
           <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus size={15} /> Connect cameras</button>
@@ -1975,7 +1975,18 @@ function SettingsPage() {
         <SliderRow label="Max camera boost (per stand)" min={0} max={50} step={1}
           value={s.max_camera_boost_pct ?? 15}
           display={`+${Math.round(s.max_camera_boost_pct ?? 15)}%`}
-          onChange={(v) => setS({ ...s, max_camera_boost_pct: v })} />
+          onChange={(v) => setS({ ...s, max_camera_boost_pct: v })}
+          info="How much a stand's period score can increase when its camera has recently caught deer during that time of day." />
+        <SliderRow label="Max camera penalty (per stand)" min={0} max={50} step={1}
+          value={s.max_camera_penalty_pct ?? 15}
+          display={`-${Math.round(s.max_camera_penalty_pct ?? 15)}%`}
+          onChange={(v) => setS({ ...s, max_camera_penalty_pct: v })}
+          info="How much a stand's period score can decrease when it has a camera but that camera has caught zero deer photos during that time of day, over the lookback window. Stands with no camera are never affected. A newly paired camera gets a grace period (one full lookback window) before this can apply." />
+        <SliderRow label="Camera lookback window" min={12} max={168} step={6}
+          value={s.camera_lookback_hours ?? 72}
+          display={`${Math.round(s.camera_lookback_hours ?? 72)}h`}
+          onChange={(v) => setS({ ...s, camera_lookback_hours: v })}
+          info="How far back to look for daylight deer photos when computing the camera boost/penalty for each hunt period. Longer windows smooth out day-to-day gaps; shorter windows react faster to recent activity." />
         <SliderRow label="Image retention" min={7} max={365} step={7}
           value={s.image_retention_days ?? 60}
           display={`${Math.round(s.image_retention_days ?? 60)} days`}
@@ -2226,6 +2237,77 @@ function ProxToggle({ on, color, label, icon: Icon, onClick }) {
   );
 }
 
+function ProximityPill({ proximity, total }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const rows = [
+    ["Corridor", proximity.corridor],
+    ["Food", proximity.food],
+    ["Bedding", proximity.bedding],
+    ["Scrape", proximity.scrape],
+    ["Rub", proximity.rub],
+  ].filter(([, v]) => v > 0.001);
+  return (
+    <span ref={ref} style={{ position: "relative", display: "inline-flex" }}
+      onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <span onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        style={{ fontSize: 11.5, fontWeight: 500, color: "var(--green)", background: "rgba(59,109,17,.12)",
+                 padding: "2px 8px", borderRadius: 6, cursor: "pointer" }}>
+        proximity +{total}
+      </span>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, minWidth: 150,
+          background: "var(--bg)", border: "1px solid var(--bord2)", borderRadius: 8, padding: "8px 10px",
+          fontSize: 11.5, lineHeight: 1.6, color: "var(--txt)",
+          boxShadow: "0 6px 20px rgba(0,0,0,.18)" }}>
+          {rows.map(([label, v]) => (
+            <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 14 }}>
+              <span style={{ color: "var(--sub)" }}>{label}</span>
+              <strong>+{Math.round(v * 100)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function CameraIndicator({ camera }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const positive = camera.boost_pct > 0;
+  const color = positive ? "#1E7FB0" : "var(--red)";
+  return (
+    <span ref={ref} style={{ position: "relative", display: "inline-flex", verticalAlign: "middle" }}
+      onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <span onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer", color, fontWeight: 600 }}>
+        <Camera size={11} />{Math.round(Math.abs(camera.boost_pct))}%
+      </span>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, width: 200,
+          background: "var(--bg)", border: "1px solid var(--bord2)", borderRadius: 8, padding: "8px 10px",
+          fontSize: 11.5, lineHeight: 1.4, color: "var(--sub)",
+          boxShadow: "0 6px 20px rgba(0,0,0,.18)" }}>
+          {camera.text}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function DayRankCard({ row }) {
   const { stand, periods, wins, proximity } = row;
   const winColor = wins.length ? PERIOD_COLORS[wins[0]] : undefined;
@@ -2238,12 +2320,7 @@ function DayRankCard({ row }) {
         {wins.map((p) => (
           <span key={p} style={{ fontSize: 11.5, fontWeight: 600, color: "#fff", background: PERIOD_COLORS[p], padding: "2px 8px", borderRadius: 6 }}>★ Best {PERIOD_LABEL[p].toLowerCase()}</span>
         ))}
-        {proxTotal > 0 && (
-          <span title={`corridor +${Math.round(proximity.corridor * 100)} · food +${Math.round(proximity.food * 100)} · bedding +${Math.round(proximity.bedding * 100)}`}
-            style={{ fontSize: 11.5, fontWeight: 500, color: "var(--green)", background: "rgba(59,109,17,.12)", padding: "2px 8px", borderRadius: 6 }}>
-            proximity +{proxTotal}
-          </span>
-        )}
+        {proxTotal > 0 && <ProximityPill proximity={proximity} total={proxTotal} />}
       </div>
       <div style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap" }}>
         {["morning", "midday", "evening"].map((p) => {
@@ -2254,6 +2331,7 @@ function DayRankCard({ row }) {
               <div style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 500, color: PERIOD_COLORS[p] }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: PERIOD_COLORS[p], display: "inline-block" }} />
                 {PERIOD_LABEL[p]}{score != null && <span style={{ color: "var(--sub)", fontWeight: 400 }}> · {score}</span>}
+                {sc?.camera && sc.camera.boost_pct !== 0 && <CameraIndicator camera={sc.camera} />}
               </div>
               {sc && (
                 <div style={{ marginTop: 2, lineHeight: 1.45 }}>
