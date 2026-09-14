@@ -1420,6 +1420,11 @@ function CamerasPage({ stands }) {
                   {stand ? <><MapPin size={11} style={{ verticalAlign: "text-bottom" }} /> {stand.name}</> : <span style={{ color: "var(--bord2)" }}>Unassigned</span>}
                   {cam.last_sync_at && <> · synced {formatRelTime(cam.last_sync_at)}</>}
                 </div>
+                {cam.health && !cam.health.healthy && (
+                  <div className="cam-health-warn" title={cam.health.reason}>
+                    <AlertTriangle size={12} /> {cam.health.reason}
+                  </div>
+                )}
               </div>
               <div className="list-card-actions" style={{ flexWrap: "wrap" }}>
                 {prov?.implemented && <>
@@ -1987,6 +1992,11 @@ function SettingsPage() {
           display={`${Math.round(s.camera_lookback_hours ?? 72)}h`}
           onChange={(v) => setS({ ...s, camera_lookback_hours: v })}
           info="How far back to look for daylight deer photos when computing the camera boost/penalty for each hunt period. Longer windows smooth out day-to-day gaps; shorter windows react faster to recent activity." />
+        <SliderRow label="Camera health check-in window" min={12} max={120} step={6}
+          value={s.camera_health_max_age_hours ?? 48}
+          display={`${Math.round(s.camera_health_max_age_hours ?? 48)}h`}
+          onChange={(v) => setS({ ...s, camera_health_max_age_hours: v })}
+          info="If a camera hasn't checked in (or has hit its photo quota) within this window, the penalty is skipped for that stand instead of assuming it saw no deer — the camera may simply be dead or offline. The boost is never affected by this." />
         <SliderRow label="Image retention" min={7} max={365} step={7}
           value={s.image_retention_days ?? 60}
           display={`${Math.round(s.image_retention_days ?? 60)} days`}
@@ -2287,14 +2297,15 @@ function CameraIndicator({ camera }) {
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
+  const unhealthy = camera.status === "unhealthy";
   const positive = camera.boost_pct > 0;
-  const color = positive ? "#1E7FB0" : "var(--red)";
+  const color = unhealthy ? "var(--amber)" : positive ? "#1E7FB0" : "var(--red)";
   return (
     <span ref={ref} style={{ position: "relative", display: "inline-flex", verticalAlign: "middle" }}
       onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <span onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer", color, fontWeight: 600 }}>
-        <Camera size={11} />{Math.round(Math.abs(camera.boost_pct))}%
+        <Camera size={11} />{unhealthy ? <AlertTriangle size={10} /> : `${Math.round(Math.abs(camera.boost_pct))}%`}
       </span>
       {open && (
         <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, width: 200,
@@ -2331,7 +2342,7 @@ function DayRankCard({ row }) {
               <div style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 500, color: PERIOD_COLORS[p] }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: PERIOD_COLORS[p], display: "inline-block" }} />
                 {PERIOD_LABEL[p]}{score != null && <span style={{ color: "var(--sub)", fontWeight: 400 }}> · {score}</span>}
-                {sc?.camera && sc.camera.boost_pct !== 0 && <CameraIndicator camera={sc.camera} />}
+                {sc?.camera && (sc.camera.boost_pct !== 0 || sc.camera.status === "unhealthy") && <CameraIndicator camera={sc.camera} />}
               </div>
               {sc && (
                 <div style={{ marginTop: 2, lineHeight: 1.45 }}>

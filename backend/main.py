@@ -78,6 +78,7 @@ DEFAULT_SETTINGS = {
     "max_camera_boost_pct": 15.0,
     "max_camera_penalty_pct": 15.0,
     "camera_lookback_hours": 72.0,
+    "camera_health_max_age_hours": 48.0,
     "rut_peak_month": 12,
     "rut_peak_day": 5,
     "camera_image_dir": CAMERA_IMAGE_DIR,
@@ -256,6 +257,12 @@ class Camera(Base):
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)  # soft-delete: skip on re-discover
     last_sync_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # provider-reported health, refreshed on every sync — used to avoid
+    # penalizing a stand when its camera simply can't capture/transmit
+    # anything right now (dead/offline, or over its photo plan for the cycle)
+    last_seen_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    photo_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    photo_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     def to_dict(self) -> dict:
         # NEVER expose credentials
@@ -265,6 +272,8 @@ class Camera(Base):
             "stand_id": self.stand_id, "is_active": bool(self.is_active),
             "last_sync_at": self.last_sync_at, "created_at": self.created_at,
             "has_credentials": bool(self.credentials_json),
+            "last_seen_at": self.last_seen_at,
+            "photo_count": self.photo_count, "photo_limit": self.photo_limit,
         }
 
 
@@ -343,6 +352,16 @@ def init_db(retries: int = 30):
                 try:
                     conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS species VARCHAR(64)"))
                     conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS species_confidence FLOAT"))
+                    conn.commit()
+                except Exception:
+                    pass
+                # v2.23: camera health (last check-in + photo quota), refreshed on
+                # sync — lets the camera penalty skip stands whose camera can't
+                # currently capture/transmit anything, instead of assuming "no deer"
+                try:
+                    conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS last_seen_at VARCHAR(32)"))
+                    conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS photo_count INTEGER"))
+                    conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS photo_limit INTEGER"))
                     conn.commit()
                 except Exception:
                     pass
@@ -616,17 +635,23 @@ def _thermal_params(settings: dict) -> dict:
     }
 
 
-def _camera_created_by_stand() -> dict[int, str]:
-    """Earliest creation time of any active, non-deleted camera assigned to
-    each stand — used to gate the camera-penalty grace period below."""
-    out: dict[int, str] = {}
+def _camera_status_by_stand() -> dict[int, dict]:
+    """Per-stand snapshot of its earliest active, non-deleted camera: creation
+    time (for the grace-period check) plus provider-reported health (for the
+    unhealthy-camera check) — see _camera_ready() and _camera_health() below.
+    A stand with multiple cameras just uses the earliest-created one; good
+    enough for the common one-camera-per-stand case."""
+    out: dict[int, dict] = {}
     with Session(engine) as s:
         rows = s.scalars(select(Camera).where(
             Camera.is_active == 1, Camera.is_deleted == 0, Camera.stand_id.isnot(None)
         )).all()
         for c in rows:
-            if c.created_at and (c.stand_id not in out or c.created_at < out[c.stand_id]):
-                out[c.stand_id] = c.created_at
+            if c.created_at and (c.stand_id not in out or c.created_at < out[c.stand_id]["created_at"]):
+                out[c.stand_id] = {
+                    "created_at": c.created_at, "last_seen_at": c.last_seen_at,
+                    "photo_count": c.photo_count, "photo_limit": c.photo_limit,
+                }
     return out
 
 
@@ -643,6 +668,28 @@ def _camera_ready(created_at: str | None, lookback_hours: float) -> bool:
         return False
     age_h = (datetime.now(timezone.utc) - t).total_seconds() / 3600
     return age_h >= lookback_hours
+
+
+def _camera_health(last_seen_at: str | None, photo_count: int | None,
+                    photo_limit: int | None, max_age_hours: float) -> dict:
+    """Is this camera currently capable of capturing/transmitting anything?
+    Used only to gate the camera PENALTY (never the boost — a real deer photo
+    counts regardless of the camera's current health). Missing data defaults
+    to "healthy" (no positive evidence of a problem), so brands/cameras that
+    don't report these fields just behave as before."""
+    if photo_limit is not None and photo_count is not None and photo_count >= photo_limit:
+        return {"healthy": False, "reason": f"Photo quota reached ({photo_count}/{photo_limit})"}
+    if last_seen_at:
+        try:
+            t = datetime.fromisoformat(last_seen_at.replace("Z", "+00:00"))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(timezone.utc) - t).total_seconds() / 3600
+            if age_h > max_age_hours:
+                return {"healthy": False, "reason": f"Camera hasn't checked in for {int(age_h)}h"}
+        except Exception:
+            pass
+    return {"healthy": True, "reason": None}
 
 
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
@@ -1080,17 +1127,21 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     max_cam_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
     max_cam_penalty = float(settings.get("max_camera_penalty_pct", 0.0) or 0.0)
     cam_lookback = float(settings.get("camera_lookback_hours", 72.0) or 72.0)
+    cam_health_max_age = float(settings.get("camera_health_max_age_hours", 48.0) or 48.0)
     utc_offset = int(fc.get("utc_offset_seconds", 0))
     period = scoring.period_for_hour(hour["time_h"])
     tp = _thermal_params(settings)
 
     # Load recent sightings + camera-presence per stand when camera scoring is
-    # configured — keeps map rank in sync with /api/day/ranked.
-    camera_enabled = bool(period and (max_cam_boost or max_cam_penalty))
+    # configured — keeps map rank in sync with /api/day/ranked. Requires
+    # species classification to actually be running (megadetector mode) —
+    # in fallback mode species is always unknown, so boost/penalty can't work.
+    camera_enabled = bool(period and (max_cam_boost or max_cam_penalty)
+                           and detection_mod.species_available())
     sightings_by_stand: dict[int, list] = {}
-    camera_created_by_stand: dict[int, str] = {}
+    camera_status_by_stand: dict[int, dict] = {}
     if camera_enabled:
-        camera_created_by_stand = _camera_created_by_stand()
+        camera_status_by_stand = _camera_status_by_stand()
         with Session(engine) as s:
             for row in s.scalars(select(CameraSighting)).all():
                 sightings_by_stand.setdefault(row.stand_id, []).append(
@@ -1102,14 +1153,17 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
         vec = scoring.stand_hour_vectors(st, hour, tp)
         if camera_enabled:
             sid = st["id"]
-            created_at = camera_created_by_stand.get(sid)
-            if created_at:
+            cam_info = camera_status_by_stand.get(sid)
+            if cam_info:
                 sightings = sightings_by_stand.get(sid, [])
+                health = _camera_health(cam_info["last_seen_at"], cam_info["photo_count"],
+                                         cam_info["photo_limit"], cam_health_max_age)
                 boost = scoring.camera_boost(
                     period, sightings, max_cam_boost, utc_offset,
                     has_camera=True, max_penalty_pct=max_cam_penalty,
                     lookback_hours=cam_lookback,
-                    camera_ready=_camera_ready(created_at, cam_lookback))
+                    camera_ready=_camera_ready(cam_info["created_at"], cam_lookback),
+                    camera_healthy=health["healthy"], unhealthy_reason=health["reason"])
                 vec = dict(vec)  # don't mutate the original
                 vec["total"] = round(vec["total"] * boost["multiplier"], 3)
                 vec["camera_boost"] = boost
@@ -1195,6 +1249,13 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     max_cam_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
     max_cam_penalty = float(settings.get("max_camera_penalty_pct", 0.0) or 0.0)
     cam_lookback = float(settings.get("camera_lookback_hours", 72.0) or 72.0)
+    cam_health_max_age = float(settings.get("camera_health_max_age_hours", 48.0) or 48.0)
+    # Camera boost/penalty both depend on species classification actually
+    # running (megadetector mode) — in fallback mode species is always
+    # unknown, so neither can be evaluated correctly.
+    camera_scoring_on = detection_mod.species_available()
+    if not camera_scoring_on:
+        max_cam_boost = max_cam_penalty = 0.0
     tp = _thermal_params(settings)
 
     # recent sightings + camera-presence per stand (lookback window handled
@@ -1205,9 +1266,10 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
             sightings_by_stand.setdefault(row.stand_id, []).append(
                 {"timestamp": row.timestamp, "confidence_score": row.confidence_score,
                  "species": row.species})
-    camera_created_by_stand = _camera_created_by_stand()
+    camera_status_by_stand = _camera_status_by_stand()
 
-    def score_period(stand, lo, hi, bonus, period_name, sightings, has_camera, camera_ready):
+    def score_period(stand, lo, hi, bonus, period_name, sightings, has_camera, camera_ready,
+                      camera_healthy, unhealthy_reason):
         best = None
         for i in day_idxs:
             hh = datetime.fromisoformat(h["time"][i]).hour
@@ -1223,6 +1285,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
                 stand, hour, period=period_name, sightings=sightings,
                 max_boost_pct=max_cam_boost, max_penalty_pct=max_cam_penalty,
                 lookback_hours=cam_lookback, has_camera=has_camera, camera_ready=camera_ready,
+                camera_healthy=camera_healthy, unhealthy_reason=unhealthy_reason,
                 proximity=bonus, utc_offset_seconds=utc_offset, thermal_params=tp)
             sc = {
                 "total": det["final_score"],
@@ -1244,12 +1307,18 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     for st in stands:
         bonus = proximity_bonus(st, zones, corridors_l, settings, sign=sign_rows)
         sightings = sightings_by_stand.get(st["id"], [])
-        created_at = camera_created_by_stand.get(st["id"])
-        has_camera = created_at is not None
-        camera_ready = has_camera and _camera_ready(created_at, cam_lookback)
+        cam_info = camera_status_by_stand.get(st["id"])
+        has_camera = cam_info is not None
+        camera_ready = has_camera and _camera_ready(cam_info["created_at"], cam_lookback)
+        if has_camera:
+            health = _camera_health(cam_info["last_seen_at"], cam_info["photo_count"],
+                                     cam_info["photo_limit"], cam_health_max_age)
+        else:
+            health = {"healthy": True, "reason": None}
         per = {}
         for p, (lo, hi) in periods.items():
-            b = score_period(st, lo, hi, bonus, p, sightings, has_camera, camera_ready)
+            b = score_period(st, lo, hi, bonus, p, sightings, has_camera, camera_ready,
+                              health["healthy"], health["reason"])
             per[p] = b
             if b and (period_best[p] is None or b["score"]["total"] > period_best[p][1]):
                 period_best[p] = (st["id"], b["score"]["total"])
@@ -1288,6 +1357,7 @@ class SettingsIn(BaseModel):
     max_camera_boost_pct: float | None = None
     max_camera_penalty_pct: float | None = None
     camera_lookback_hours: float | None = None
+    camera_health_max_age_hours: float | None = None
     camera_sync_interval_minutes: float | None = None
     image_retention_days: float | None = None
     camera_backfill_days: float | None = None
@@ -1497,9 +1567,14 @@ def camera_providers(_=Depends(require_token)):
 
 @app.get("/api/cameras")
 def list_cameras(_=Depends(require_token)):
+    max_age = float(get_settings().get("camera_health_max_age_hours", 48.0) or 48.0)
     with Session(engine) as s:
-        return [c.to_dict() for c in
-                s.scalars(select(Camera).where(Camera.is_deleted == 0).order_by(Camera.name)).all()]
+        out = []
+        for c in s.scalars(select(Camera).where(Camera.is_deleted == 0).order_by(Camera.name)).all():
+            d = c.to_dict()
+            d["health"] = _camera_health(c.last_seen_at, c.photo_count, c.photo_limit, max_age)
+            out.append(d)
+        return out
 
 
 @app.post("/api/cameras")
@@ -1566,6 +1641,9 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
                 existing.is_deleted = 0
                 existing.name = name
                 existing.credentials_json = creds_enc
+                existing.last_seen_at = sp.get("last_seen_at")
+                existing.photo_count = sp.get("photo_count")
+                existing.photo_limit = sp.get("photo_limit")
                 s.commit(); s.refresh(existing)
                 restored.append(existing.to_dict())
             elif status == "existing":
@@ -1575,8 +1653,11 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
                 if changed:
                     existing.name = name
                     existing.credentials_json = creds_enc
-                    s.commit()
-                    s.refresh(existing)
+                existing.last_seen_at = sp.get("last_seen_at")
+                existing.photo_count = sp.get("photo_count")
+                existing.photo_limit = sp.get("photo_limit")
+                s.commit()
+                s.refresh(existing)
                 updated.append(existing.to_dict())
             else:
                 if not include:
@@ -1585,6 +1666,8 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
                     name=name, brand=body.brand, provider_ref=ref,
                     credentials_json=creds_enc,
                     stand_id=None, is_active=1, is_deleted=0, created_at=now,
+                    last_seen_at=sp.get("last_seen_at"),
+                    photo_count=sp.get("photo_count"), photo_limit=sp.get("photo_limit"),
                 )
                 s.add(cam)
                 s.commit()
@@ -1815,6 +1898,24 @@ async def _sync_one_camera(camera_id: int) -> dict:
         log.warning("cam %s (%s): fetch_recent_photos failed: %s: %s",
                     camera_id, brand if 'brand' in dir() else "?", type(exc).__name__, exc)
         return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
+
+    # Refresh provider-reported health (last check-in, photo quota) so the
+    # camera-penalty health gate stays current. Best-effort — a failure here
+    # must never block the actual photo sync above.
+    try:
+        cam_list = await prov.fetch_cameras()
+        sp_cam = next((c for c in cam_list if str(c.get("id")) == str(cam_provider_ref)), None)
+        if sp_cam:
+            with Session(engine) as s:
+                cam_row = s.get(Camera, camera_id)
+                if cam_row:
+                    cam_row.last_seen_at = sp_cam.get("last_seen_at")
+                    cam_row.photo_count = sp_cam.get("photo_count")
+                    cam_row.photo_limit = sp_cam.get("photo_limit")
+                    s.commit()
+    except Exception as exc:
+        log.warning("cam %s (%s): health refresh failed: %s: %s",
+                    camera_id, brand, type(exc).__name__, exc)
 
     # User-defined directory structure: [User defined directory]/[Camera Brand]/[Camera Name]/
     cam_dir = get_camera_dir(brand, camera_name)

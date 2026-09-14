@@ -70,6 +70,15 @@ def is_deer(species: str | None) -> bool:
     return bool(species) and species.strip().lower() == DEER_SPECIES.lower()
 
 
+def species_available() -> bool:
+    """True if species classification can actually run (megadetector mode).
+    In fallback mode every sighting's species is always None, so anything
+    gated on a confirmed species (the camera boost/penalty) should be
+    disabled entirely rather than silently treating everything as
+    unconfirmed/non-deer."""
+    return _MODE == "megadetector"
+
+
 def _load_model():
     """Lazy-load MegaDetector via PytorchWildlife. Raises on failure."""
     global _MODEL
