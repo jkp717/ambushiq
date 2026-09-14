@@ -1363,8 +1363,12 @@ function CamerasPage({ stands }) {
   async function backfillSpecies() {
     setBackfilling(true);
     try {
-      await api("/cameras/backfill-species", { method: "POST" });
-      alert("Reclassification started in the background — species labels for older sightings (still saved on disk) will update over the next few minutes.");
+      const r = await api("/cameras/backfill-species", { method: "POST" });
+      if (!r.candidates) {
+        alert("Nothing to reclassify — every sighting either already has a species, or its original photo has already been cleaned up by your image-retention policy.");
+      } else {
+        alert(`Reclassifying ${r.candidates} sighting(s) in the background — check server logs (grep "backfill_species") for progress, or refresh in a bit to see updated species badges.`);
+      }
     } catch (e) { alert(`Reclassification failed to start: ${e.message}`); }
     finally { setBackfilling(false); }
   }
