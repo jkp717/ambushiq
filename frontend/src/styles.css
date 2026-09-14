@@ -218,7 +218,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 }
 .outlook-day {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 10px 11px; border-radius: 14px; width: 76px; flex: 0 0 auto;
+  padding: 10px 11px; border-radius: 14px; width: 86px; flex: 0 0 auto;
   border: 1.5px solid var(--bord); background: var(--bg);
   cursor: pointer; transition: border-color .12s, background .12s;
 }
@@ -232,7 +232,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 .od-label { font-size: 10.5px; color: var(--sub); white-space: nowrap; }
 .od-deer  {
   font-size: 13px; display: flex; flex-wrap: wrap;
-  justify-content: center; width: 50px; row-gap: 2px; column-gap: 1px;
+  justify-content: center; width: 60px; row-gap: 2px; column-gap: 1px;
 }
 .od-deer-icon { opacity: 1; filter: none; }
 .od-deer-icon.empty { opacity: .22; filter: grayscale(1); }
