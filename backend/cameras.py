@@ -47,7 +47,11 @@ class CameraProvider:
         raise NotImplementedProvider(f"{self.brand} verification not implemented yet")
 
     async def fetch_cameras(self) -> list[dict]:
-        """Return [{id, name}] for all cameras on this account."""
+        """Return [{id, name, last_seen_at, photo_count, photo_limit}] for all
+        cameras on this account. The health fields (last_seen_at/photo_count/
+        photo_limit) are best-effort — brands that don't expose them (or
+        stubs) should just omit them; callers treat missing values as
+        "unknown, assume healthy" rather than a failure."""
         raise NotImplementedProvider(f"{self.brand} camera listing not implemented yet")
 
     async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
@@ -90,16 +94,32 @@ class SpyPointProvider(CameraProvider):
         return True
 
     async def fetch_cameras(self) -> list[dict]:
-        """Return [{id, name}] for every camera on this Spypoint account."""
+        """Return [{id, name, last_seen_at, photo_count, photo_limit}] for every
+        camera on this Spypoint account. last_seen_at comes from status.lastUpdate
+        (when the camera itself last checked in — distinct from when WE last
+        synced it); photo_count/photo_limit come from the account's current
+        subscription entry for that camera (community-documented shape, not
+        officially published — adjust if a real account's response differs)."""
         async with httpx.AsyncClient() as client:
             token = await self._login(client)
             headers = {"Authorization": f"Bearer {token}"}
             resp = await client.get(f"{self.BASE}/api/v3/camera/all", headers=headers, timeout=30)
             resp.raise_for_status()
-            return [
-                {"id": c.get("id"), "name": c.get("config", {}).get("name") or c.get("id")}
-                for c in resp.json() if c.get("id")
-            ]
+            out = []
+            for c in resp.json():
+                if not c.get("id"):
+                    continue
+                status = c.get("status") or {}
+                subs = c.get("subscriptions") or []
+                sub = subs[0] if subs else {}
+                out.append({
+                    "id": c["id"],
+                    "name": c.get("config", {}).get("name") or c["id"],
+                    "last_seen_at": status.get("lastUpdate"),
+                    "photo_count": sub.get("photoCount"),
+                    "photo_limit": sub.get("photoLimit"),
+                })
+            return out
 
     async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
         out: list[dict] = []

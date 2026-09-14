@@ -625,6 +625,10 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   font-size: 10px; padding: 2px 5px; border-radius: 4px;
   background: rgba(133,79,11,.12); color: var(--amber);
 }
+.cam-health-warn {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--amber); margin-top: 3px;
+}
 .cam-active-chip {
   margin-left: auto; font-size: 11.5px; font-weight: 500;
   padding: 2px 8px; border-radius: 10px; cursor: pointer;
