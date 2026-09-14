@@ -2322,12 +2322,12 @@ function DayRankCard({ row }) {
         ))}
         {proxTotal > 0 && <ProximityPill proximity={proximity} total={proxTotal} />}
       </div>
-      <div style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
         {["morning", "midday", "evening"].map((p) => {
           const sc = periods[p]?.score;
           const score = pct(p);
           return (
-            <div key={p} style={{ fontSize: 12, color: "var(--sub)", minWidth: 150 }}>
+            <div key={p} style={{ fontSize: 12, color: "var(--sub)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 500, color: PERIOD_COLORS[p] }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: PERIOD_COLORS[p], display: "inline-block" }} />
                 {PERIOD_LABEL[p]}{score != null && <span style={{ color: "var(--sub)", fontWeight: 400 }}> · {score}</span>}
