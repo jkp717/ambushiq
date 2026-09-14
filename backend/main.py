@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
@@ -357,6 +357,21 @@ def init_db(retries: int = 30):
 
 
 app = FastAPI(title="AmbushIQ")
+
+
+@app.middleware("http")
+async def _static_cache_headers(request: Request, call_next):
+    """Vite hashes /assets filenames per build, so those can cache forever —
+    but index.html (which references those hashed names) must always be
+    revalidated, or browsers/phones keep serving a stale shell that points at
+    asset URLs from an old deploy and UI updates never show up."""
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif not path.startswith("/api/") and not path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.get("/api/camera-sightings/{sighting_id}/image")
