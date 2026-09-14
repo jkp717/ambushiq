@@ -1361,6 +1361,7 @@ function CamerasPage({ stands }) {
     finally { setSyncing((s) => ({ ...s, [cam.id]: false })); }
   }
   async function backfillSpecies() {
+    if (!window.confirm("Reclassify all existing photos? This re-runs species detection on every stored sighting and can take a long time depending on how many photos you have. Continue?")) return;
     setBackfilling(true);
     try {
       const r = await api("/cameras/backfill-species", { method: "POST" });
