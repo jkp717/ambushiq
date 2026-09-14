@@ -449,7 +449,11 @@ function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 
               onClick={() => onPick(r.day)} disabled={!loadable}
               title={`${r.score != null ? (1 + r.score * 4).toFixed(1) : r.rating}/5 · ${r.rut?.phase}${r.confidence === "low" ? " · est." : ""}`}>
               <div className="od-label">{r.day === today ? "Today" : r.label}</div>
-              <div className="od-deer">{"🦌".repeat(r.rating)}</div>
+              <div className="od-deer">
+                {Array.from({ length: 5 }, (_, i) => (
+                  <span key={i} className={"od-deer-icon" + (i < r.rating ? "" : " empty")}>🦌</span>
+                ))}
+              </div>
               <div className="od-score" style={{ color: tone }}>{r.score != null ? (1 + r.score * 4).toFixed(1) : r.rating}/5</div>
               {r.confidence === "low" && <div className="od-est">est.</div>}
             </button>
