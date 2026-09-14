@@ -1627,11 +1627,52 @@ async def sync_camera_now(camera_id: int, bg: BackgroundTasks, _=Depends(require
     return {"ok": True, "status": "running"}
 
 
-async def _backfill_species_task() -> None:
+async def _backfill_species_task(sighting_ids: list[int]) -> None:
     """One-time reclassification of sightings recorded before species tracking
     existed. Only sightings whose original JPEG is still on disk (i.e. not yet
     past image_retention_days) can be reclassified — older ones already had
-    their file deleted by the daily cleanup job and can't be recovered."""
+    their file deleted by the daily cleanup job and can't be recovered.
+    Candidate ids are computed synchronously by the endpoint (below) so a bad
+    query surfaces immediately in the HTTP response instead of silently
+    vanishing inside a background task that never gets to its first log line."""
+    log.info("backfill_species: starting on %d candidate sighting(s)", len(sighting_ids))
+    reclassified = missing_file = errors = 0
+    try:
+        for sid in sighting_ids:
+            try:
+                with Session(engine) as s:
+                    row = s.get(CameraSighting, sid)
+                    if not row or not row.image_path:
+                        continue
+                    if not os.path.exists(row.image_path):
+                        missing_file += 1
+                        continue
+                    det = await asyncio.to_thread(detection_mod.detect_animal, row.image_path)
+                    if str(det.get("detector", "")).startswith("error"):
+                        errors += 1
+                        continue
+                    if det.get("species"):
+                        row.species = det.get("species")
+                        row.species_confidence = det.get("species_confidence")
+                        s.commit()
+                        reclassified += 1
+            except Exception:
+                errors += 1
+                log.exception("backfill_species: failed on sighting id=%s", sid)
+    finally:
+        detection_mod.unload_models()
+    log.info("backfill_species: done — checked=%d reclassified=%d missing_file=%d errors=%d",
+              len(sighting_ids), reclassified, missing_file, errors)
+
+
+@app.post("/api/cameras/backfill-species")
+def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
+    """Reclassify existing sightings that predate species tracking. The
+    candidate count is computed here (synchronously) so it's visible in the
+    HTTP response right away; the actual reclassification runs in the
+    background — check server logs (grep for "backfill_species") for a
+    completion summary. Only sightings with their original photo still on
+    disk can be reclassified."""
     with Session(engine) as s:
         ids = [r.id for r in s.scalars(
             select(CameraSighting.id).where(
@@ -1639,40 +1680,9 @@ async def _backfill_species_task() -> None:
                 CameraSighting.image_path.isnot(None),
             )
         ).all()]
-    log.info("backfill_species: %d sighting(s) to check", len(ids))
-    reclassified = missing_file = errors = 0
-    try:
-        for sid in ids:
-            with Session(engine) as s:
-                row = s.get(CameraSighting, sid)
-                if not row or not row.image_path:
-                    continue
-                if not os.path.exists(row.image_path):
-                    missing_file += 1
-                    continue
-                det = await asyncio.to_thread(detection_mod.detect_animal, row.image_path)
-                if str(det.get("detector", "")).startswith("error"):
-                    errors += 1
-                    continue
-                if det.get("species"):
-                    row.species = det.get("species")
-                    row.species_confidence = det.get("species_confidence")
-                    s.commit()
-                    reclassified += 1
-    finally:
-        detection_mod.unload_models()
-    log.info("backfill_species: done — checked=%d reclassified=%d missing_file=%d errors=%d",
-              len(ids), reclassified, missing_file, errors)
-
-
-@app.post("/api/cameras/backfill-species")
-def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
-    """Reclassify existing sightings that predate species tracking. Runs in the
-    background and returns immediately; check server logs for a completion
-    summary (only sightings with their original photo still on disk can be
-    reclassified)."""
-    bg.add_task(_backfill_species_task)
-    return {"ok": True, "status": "running"}
+    log.info("backfill_species: queued — %d candidate sighting(s)", len(ids))
+    bg.add_task(_backfill_species_task, ids)
+    return {"ok": True, "status": "running", "candidates": len(ids)}
 
 
 @app.get("/api/cameras/{camera_id}/sightings")

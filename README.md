@@ -51,32 +51,8 @@ docker compose up -d --build
 The app is now listening on `127.0.0.1:8000` (default). Confirm it's up:
 ```sh
 curl -s http://127.0.0.1:8000/api/health
-# {"ok":true,"auth_required":true,"version":"2.15.0"}  (or "auth_required":false if token is blank/unused)
+# {"ok":true,"auth_required":true,"version":"2.21.0"}  (or "auth_required":false if token is blank/unused)
 ```
-
-## Wire up nginx
-
-`nginx.example.conf` is a ready server block — copy it into your proxy
-(`/etc/nginx/sites-available/`, symlink into `sites-enabled/`), then edit:
-
-- `server_name` → your domain
-- `ssl_certificate` / `ssl_certificate_key` → your cert paths
-- `proxy_pass` upstream → `127.0.0.1:8000` if nginx is on this host, or the Docker
-  host's LAN IP if nginx is on a different machine
-
-```sh
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-Open `https://yourdomain`. If `APP_TOKEN` is set, enter your access key to unlock; if authentication is handled upstream, you will be taken directly to the app.
-
-### Where nginx lives
-
-- **Same host as Docker** (common): keep `APP_BIND=127.0.0.1`. The port is only on
-  loopback, and nginx proxies to `127.0.0.1:8000`.
-- **Different host**: set `APP_BIND=0.0.0.0` in `.env`, re-run `docker compose up -d`,
-  point `proxy_pass` at the Docker host's IP, and firewall port 8000 so only the
-  proxy host can reach it.
 
 ## Day-to-day
 
@@ -208,3 +184,73 @@ lifted verbatim from any single paper — tune against what you observe on your 
   first build is slow. Set DETECTOR_MODE=fallback in .env to skip detection (every
   photo counts as a low-confidence sighting) if it's too heavy on your host.
 - Camera JPEGs are saved to the user-configured storage directory (defaults to `/app/data/camera_images` in the `camera_images` Docker volume) organized as `[directory]/[Camera Brand]/[Camera Name]/`.
+
+## v2.19 — Thermal coherence model
+
+Real anabatic (upslope) airflow is physically strongest near solar noon, but in
+practice wind dominates scent through the middle of the day — thermals only
+reliably drive scent right after sunrise and right before sunset. The scoring
+engine now models this by splitting thermal influence into two parts:
+
+- **Potential** — the raw, solar-driven strength of upslope/downslope airflow
+  (unchanged from before).
+- **Coherence** — how much of that potential actually survives into the net
+  scent direction, instead of being overwhelmed by wind or midday convective
+  mixing. Coherence decays continuously with wind speed (rather than a blunt
+  on/off cutoff), plus an extra discount during the sun-driven "rising" phase
+  to reflect that thermals are least reliable mid-day even in calm wind.
+
+The wind fade point, fade sharpness, and midday mixing discount are all
+tunable in **Settings → Daily Rating → Thermal model**, with an info icon next
+to each explaining what it changes. Values are stored per-deployment in the
+database.
+
+## v2.20 — Corridor width, stand visibility, camera & map polish
+
+- **Corridor width**: a corridor can now have a width (a travel-zone buffer)
+  instead of being scored as an infinitely thin line. A stand inside that
+  buffer gets full proximity credit; once outside it, distance is measured
+  from the buffer's edge rather than the raw center-line.
+- **Stand visibility**: each stand can set its own visibility/cover radius,
+  overriding the corridor's or global falloff just for that stand — a stand in
+  open hardwoods can "see" a corridor from farther away than one boxed into
+  thick cover.
+- **Camera discovery**: re-connecting a camera brand account now shows a
+  checkbox per discovered camera. Previously-removed ("skipped") cameras are
+  unchecked by default but can be checked to bring them back, instead of being
+  permanently excluded from every future discovery run.
+- **Map UI**: the hour slider now paints its morning/midday/evening color band
+  directly on the track (with the thumb rendered on top), adds hour/15-minute
+  tick marks, and shows a tooltip with the selected time while hovering or
+  dragging. The weather pills (cloud/temp/wind) moved off the cramped top bar
+  into a floating card in the map's bottom-right corner. The layer-toggle
+  button now uses a plus icon.
+- **Fixes**: editing a corridor or zone from the map now switches to the
+  correct Zones sub-tab instead of leaving the edit modal on a hidden tab; the
+  app shell (`index.html`) is now served with no-cache headers while the
+  hashed JS/CSS bundles cache aggressively, so browsers (phones especially)
+  pick up new versions right after a deploy instead of caching a stale shell
+  indefinitely.
+
+## v2.21 — Deer species classification
+
+Trail-camera sightings now go through a species classifier on top of the
+existing MegaDetector animal-detection step, so the camera boost reflects
+actual deer activity instead of "any animal that triggered the camera":
+
+- Each photo's tightest animal crop (from MegaDetector) is classified by
+  **DFNE** (Deepfaune–New England, via PytorchWildlife) into one of 24
+  North-American species, including white-tailed deer.
+- The trail-camera ranking boost now only counts sightings **confirmed as
+  white-tailed deer** — a crow, raccoon, coyote, etc. no longer boosts a
+  stand's score. Non-deer sightings are still recorded and shown in the camera
+  log, labeled with their species.
+- A **"Reclassify existing photos"** button on the Cameras page backfills
+  species for sightings recorded before this feature existed, as long as the
+  original photo is still saved on disk (within your `image_retention_days`
+  window).
+- MegaDetector and the species classifier are unloaded from memory after each
+  sync batch (and only ever load when there's an actual new photo to process),
+  to keep the memory footprint low on modest, GPU-less hardware.
+- Buck/doe (sex) classification isn't included — no lightweight pretrained
+  model does this reliably; this is species identification only.
