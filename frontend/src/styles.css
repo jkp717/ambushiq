@@ -342,17 +342,33 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 }
 
 /* slider */
-.map-hour-slider { width: 100%; margin-bottom: 2px; }
-.map-slider-ticks {
-  display: flex; justify-content: space-between;
-  font-size: 10.5px; color: var(--sub); margin-bottom: 6px;
+.map-hour-slider { width: 100%; height: 8px; border-radius: 4px; }
+/* thermal-switch markers, overlaid just above the slider's own track */
+.map-slider-markers {
+  position: absolute; top: -9px; left: 0; right: 0; height: 9px;
+  pointer-events: none;
 }
-/* thermal-switch markers on the period band */
 .map-thermal-marker {
   position: absolute; top: 0;
   transform: translateX(-50%);
   font-size: 8px; line-height: 8px;
   cursor: default; user-select: none;
+}
+/* hour (major) / 15-min (minor) tick marks under the slider */
+.map-slider-tickmarks {
+  position: relative; height: 8px; margin-top: 3px; margin-bottom: 2px;
+  pointer-events: none;
+}
+.map-slider-tick {
+  position: absolute; top: 0; width: 1px;
+  transform: translateX(-50%);
+  background: var(--bord2);
+}
+.map-slider-tick--major { height: 8px; background: var(--sub); }
+.map-slider-tick--minor { height: 4px; }
+.map-slider-ticks {
+  display: flex; justify-content: space-between;
+  font-size: 10.5px; color: var(--sub); margin-bottom: 6px;
 }
 
 /* ── date picker popup ── */

@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu, Layers, Info, Thermometer } from "lucide-react";
+import { Wind, MapPin, Plus, Trash2, Edit3, AlertTriangle, RefreshCw, Save, X, Mountain, Waves, CheckCircle2, Lock, Trees, Wheat, Footprints, Eye, EyeOff, Map as MapIcon, Settings as SettingsIcon, Sun, Target, Play, Pause, ChevronLeft, ChevronRight, Camera, ImageIcon, HardDrive, ChevronDown, Menu, Info, Thermometer } from "lucide-react";
 import HuntMap from "./HuntMap.jsx";
 import MiniMap from "./MiniMap.jsx";
 
@@ -790,38 +790,59 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
             </button>
           </div>
 
-          {/* Slider (15-min steps) + period band + thermal markers + tick labels */}
+          {/* Slider (15-min steps, period colours painted on the track) + hour/15-min
+              tick marks + thermal markers + tick labels */}
           {curDay && (() => {
             const srH = curDay.sunrise_h ?? 6.5;
             const ssH = curDay.sunset_h ?? 19.5;
             const numSlots = curDay.hours.length * 4;
             const hPct = (h) => `${Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100)).toFixed(1)}%`;
-            const hW   = (a, b) => `${Math.max(0, Math.min(100, ((b - a) * 4 / (numSlots - 1)) * 100)).toFixed(1)}%`;
+            const pctNum = (h) => Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100));
             const mStart = Math.max(0, srH - 0.25), mEnd = srH + 3;
             const eStart = ssH - 3, eEnd = Math.min(maxHour, ssH + 0.25);
+            const mStartP = pctNum(mStart), mEndP = pctNum(mEnd), eStartP = pctNum(eStart), eEndP = pctNum(eEnd);
+            // Same three period colours as before, painted directly onto the
+            // slider's own track (transparent everywhere else so var(--bord2)
+            // shows through as the neutral base).
+            const trackGradient =
+              `linear-gradient(to right,` +
+              ` transparent 0%, transparent ${mStartP}%,` +
+              ` rgba(194,136,0,0.75) ${mStartP}%, rgba(194,136,0,0.75) ${mEndP}%,` +
+              ` rgba(30,127,176,0.75) ${mEndP}%, rgba(30,127,176,0.75) ${eStartP}%,` +
+              ` rgba(122,63,160,0.75) ${eStartP}%, rgba(122,63,160,0.75) ${eEndP}%,` +
+              ` transparent ${eEndP}%, transparent 100%), var(--bord2)`;
             return (
               <>
-                <input type="range" className="map-hour-slider"
-                  min={0} max={maxSlot}
-                  value={Math.min(hourPos, maxSlot)}
-                  onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
-                  onTouchMove={(e) => {
-                    const t = e.touches[0];
-                    const rect = e.target.getBoundingClientRect();
-                    const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
-                    setPlaying(false);
-                    setHourPos(Math.round(ratio * maxSlot));
-                  }} />
-                {/* Period colour band + thermal-switch markers */}
-                <div style={{ position: "relative", height: 13, marginTop: 2, marginBottom: 1 }}>
-                  <div style={{ position: "absolute", top: 8, left: 0, right: 0, height: 5, borderRadius: 3, background: "var(--bord)" }} />
-                  <div style={{ position: "absolute", top: 8, left: hPct(mStart), width: hW(mStart, mEnd),  height: 5, background: "#C28800", opacity: 0.75, borderRadius: 3 }} title="Morning" />
-                  <div style={{ position: "absolute", top: 8, left: hPct(mEnd),   width: hW(mEnd, eStart),   height: 5, background: "#1E7FB0", opacity: 0.75 }} title="Midday" />
-                  <div style={{ position: "absolute", top: 8, left: hPct(eStart), width: hW(eStart, eEnd),   height: 5, background: "#7A3FA0", opacity: 0.75, borderRadius: 3 }} title="Evening" />
-                  <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
-                    title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
-                  <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
-                    title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
+                <div style={{ position: "relative" }}>
+                  <input type="range" className="map-hour-slider"
+                    min={0} max={maxSlot}
+                    value={Math.min(hourPos, maxSlot)}
+                    style={{ background: trackGradient }}
+                    onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
+                    onTouchMove={(e) => {
+                      const t = e.touches[0];
+                      const rect = e.target.getBoundingClientRect();
+                      const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
+                      setPlaying(false);
+                      setHourPos(Math.round(ratio * maxSlot));
+                    }} />
+                  <div className="map-slider-markers">
+                    <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
+                      title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
+                    <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
+                      title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
+                  </div>
+                </div>
+                {/* Hour (major) + 15-min (minor) tick marks */}
+                <div className="map-slider-tickmarks">
+                  {Array.from({ length: maxHour + 1 }, (_, h) => (
+                    <React.Fragment key={h}>
+                      <span className="map-slider-tick map-slider-tick--major" style={{ left: hPct(h) }} />
+                      {[0.25, 0.5, 0.75].map((q) => (
+                        <span key={q} className="map-slider-tick map-slider-tick--minor" style={{ left: hPct(h + q) }} />
+                      ))}
+                    </React.Fragment>
+                  ))}
                 </div>
                 <div className="map-slider-ticks">
                   <span>{curDay.hours[0]?.label}</span>
@@ -868,7 +889,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
-            <Layers size={16} />
+            <Plus size={16} />
           </button>
         </div>
         <div className="map-add-btn">
