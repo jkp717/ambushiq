@@ -757,7 +757,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       {/* ── Time controls panel ── */}
       {days.length > 0 && (
         <div className="map-ctrl-panel">
-          {/* Single compact row: date nav + time + weather pills + play */}
+          {/* Single compact row: date nav + time + play (weather moved to a floating card on the map) */}
           <div className="map-ctrl-top">
             {/* Date nav with calendar picker popup */}
             <div className="map-day-nav-wrap" ref={datePickerRef}>
@@ -783,16 +783,6 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
               const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
               return <span className="map-time-compact">{`${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`}</span>;
             })()}
-            {/* Weather pills */}
-            {conditions && (
-              <div className="map-weather-pills">
-                <span className="map-wpill">☁ {conditions.time.cloud}%</span>
-                <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
-                {conditions.time.wind_speed != null && (
-                  <span className="map-wpill"><Wind size={11} /> {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
-                )}
-              </div>
-            )}
             {/* Play / Pause */}
             <button className={"btn map-play-btn" + (playing ? " playing" : "")}
               onClick={() => setPlaying((p) => !p)} disabled={!curDay}>
@@ -918,6 +908,15 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
         <div className="map-add-btn">
           <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
         </div>
+        {conditions && (
+          <div className="map-weather-card">
+            <span className="map-wpill">☁ {conditions.time.cloud}%</span>
+            <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
+            {conditions.time.wind_speed != null && (
+              <span className="map-wpill"><Wind size={11} /> {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
+            )}
+          </div>
+        )}
       </div>
 
       {pendingName && pendingName.type === "zone" && pendingName.kind !== "food" && (

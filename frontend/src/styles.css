@@ -317,17 +317,10 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   letter-spacing: -0.5px; white-space: nowrap; flex-shrink: 0;
 }
 
-/* Weather pills — scrollable, no wrap */
-.map-weather-pills {
-  display: flex; gap: 6px; flex: 1;
-  overflow-x: auto; flex-wrap: nowrap;
-  scrollbar-width: none;
-}
-.map-weather-pills::-webkit-scrollbar { display: none; }
 .map-wpill {
-  font-size: 12px; color: var(--sub);
-  background: var(--surf); border-radius: 20px;
-  padding: 3px 8px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 12px; color: #fff;
+  white-space: nowrap;
 }
 
 .map-play-btn {
@@ -335,6 +328,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   background: var(--surf) !important;
   border-color: var(--bord2) !important;
   min-width: 80px; justify-content: center; flex-shrink: 0;
+  margin-left: auto;
 }
 .map-play-btn.playing {
   background: var(--navy) !important;
@@ -457,6 +451,14 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   padding: 8px 6px; border-radius: 10px;
 }
 .layer-chips-panel .chip { background: var(--bg); font-size: 11.5px; }
+
+/* ── floating weather card, bottom-right — mirrors the layer toggle's style ── */
+.map-weather-card {
+  position: absolute; bottom: 10px; right: 10px; z-index: 500;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 3px;
+  background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
+  border-radius: 10px; padding: 7px 10px;
+}
 
 /* ── map-page nav dropdown in top bar ── */
 .top-bar-nav-drop {
