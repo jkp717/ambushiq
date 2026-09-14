@@ -583,6 +583,8 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const [days, setDays] = useState([]);
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
+  const [sliderHovering, setSliderHovering] = useState(false);
+  const [sliderDragging, setSliderDragging] = useState(false);
   const [utcOffset, setUtcOffset] = useState(0);
   const [conditions, setConditions] = useState(null);
   const [playing, setPlaying] = useState(false);
@@ -617,6 +619,14 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [showDatePicker]);
+
+  useEffect(() => {
+    if (!sliderDragging) return;
+    const end = () => setSliderDragging(false);
+    window.addEventListener("mouseup", end);
+    window.addEventListener("touchend", end);
+    return () => { window.removeEventListener("mouseup", end); window.removeEventListener("touchend", end); };
+  }, [sliderDragging]);
 
   useEffect(() => { api("/home").then(setHome).catch(() => setHome({ set: false })); }, []);
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
@@ -825,13 +835,26 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
                       const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
                       setPlaying(false);
                       setHourPos(Math.round(ratio * maxSlot));
-                    }} />
+                    }}
+                    onMouseEnter={() => setSliderHovering(true)}
+                    onMouseLeave={() => setSliderHovering(false)}
+                    onMouseDown={() => setSliderDragging(true)}
+                    onTouchStart={() => setSliderDragging(true)} />
                   <div className="map-slider-markers">
                     <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
                       title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
                     <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
                       title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
                   </div>
+                  {(sliderHovering || sliderDragging) && curHour && (() => {
+                    const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
+                    const thumbPct = maxSlot > 0 ? (Math.min(hourPos, maxSlot) / maxSlot) * 100 : 0;
+                    return (
+                      <div className="map-slider-tooltip" style={{ left: `${thumbPct}%` }}>
+                        {`${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`}
+                      </div>
+                    );
+                  })()}
                 </div>
                 {/* Hour (major) + 15-min (minor) tick marks */}
                 <div className="map-slider-tickmarks">
