@@ -677,7 +677,8 @@ def _camera_health(last_seen_at: str | None, photo_count: int | None,
     counts regardless of the camera's current health). Missing data defaults
     to "healthy" (no positive evidence of a problem), so brands/cameras that
     don't report these fields just behave as before."""
-    if photo_limit is not None and photo_count is not None and photo_count >= photo_limit:
+    if (photo_limit is not None and photo_limit != -1
+            and photo_count is not None and photo_count >= photo_limit):
         return {"healthy": False, "reason": f"Photo quota reached ({photo_count}/{photo_limit})"}
     if last_seen_at:
         try:
