@@ -271,11 +271,31 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
     aspect_rda = rd.TerrainAttribute(rda, attrib='aspect')
     slope_rda = rd.TerrainAttribute(rda, attrib='slope_riserun')
 
-    # Extract center-cell metrics, handling flat terrain (-9999 aspect)
-    aspect_val = float(aspect_rda[ctr, ctr])
-    downhill_deg = aspect_val if aspect_val >= 0 else 0.0
     slope_pct = round((float(slope_rda[ctr, ctr]) / cell_m) * 100)
-    
+
+    # downhill_deg (uphill/rising-thermal direction) is a slope-magnitude-weighted aspect
+    # average over the same 7x7 neighborhood used for drainage_deg below, rather than a raw
+    # single-cell read. A single pixel is noisy against real DEM error and, more importantly,
+    # against ordinary stand-placement error on the map — a few meters of pin drift shouldn't
+    # be able to flip which side of a micro-feature the thermal direction is read from.
+    ubx = uby = uslope_sum = 0.0
+    for r in range(max(0, ctr - 3), min(n, ctr + 4)):
+        for c in range(max(0, ctr - 3), min(n, ctr + 4)):
+            asp = float(aspect_rda[r, c])
+            if asp < 0:
+                continue
+            w = float(slope_rda[r, c])
+            b = math.radians(asp)
+            ubx += math.sin(b) * w
+            uby += math.cos(b) * w
+            uslope_sum += w
+
+    if uslope_sum > 0 and (abs(ubx) > 1e-6 or abs(uby) > 1e-6):
+        downhill_deg = (math.degrees(math.atan2(ubx, uby)) + 360) % 360
+    else:
+        aspect_val = float(aspect_rda[ctr, ctr])
+        downhill_deg = aspect_val if aspect_val >= 0 else 0.0
+
     # Calculate true D-Infinity accumulation drainage vector across the 7x7 center neighborhood
     bx = by = acc_sum = 0.0
     max_near = 0.0
