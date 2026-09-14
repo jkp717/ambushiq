@@ -60,6 +60,15 @@ _preflight()
 ANIMAL_CLASS_ID = 0
 CONF_THRESHOLD = float(os.environ.get("DETECTOR_CONF", "0.2"))
 
+# The DFNE classifier's exact label for white-tailed deer (see the CLASS_NAMES
+# map in PytorchWildlife.models.classification.timm_base.DFNE). Used to decide
+# which sightings should count toward a stand's trail-camera score boost.
+DEER_SPECIES = "White-tailed Deer"
+
+
+def is_deer(species: str | None) -> bool:
+    return bool(species) and species.strip().lower() == DEER_SPECIES.lower()
+
 
 def _load_model():
     """Lazy-load MegaDetector via PytorchWildlife. Raises on failure."""
@@ -96,26 +105,46 @@ def _load_classifier(device="cpu"):
     with _LOCK:
         if _CLASSIFIER is not None:
             return _CLASSIFIER
-            
+
         from PytorchWildlife.models import classification as pw_classification
-        
+
         log.info("detection: loading DFNE Classifier device=%s", device)
-        _CLASSIFIER = pw_classification.DFNE(device=device) 
-        
+        _CLASSIFIER = pw_classification.DFNE(device=device)
+
         log.info("detection: classifier loaded")
         return _CLASSIFIER
 
 
+def unload_models() -> None:
+    """Release MegaDetector + the species classifier from memory.
+    Both are heavy (MegaDetector is a YOLO model; the species classifier is a
+    ViT-Large backbone) and this app runs on a low-RAM box with no GPU, so we
+    don't keep them resident between sync batches — only load happens lazily
+    when a batch actually has a new photo to process, so this is a no-op on
+    ticks where nothing needed detection."""
+    global _MODEL, _CLASSIFIER
+    with _LOCK:
+        if _MODEL is None and _CLASSIFIER is None:
+            return
+        _MODEL = None
+        _CLASSIFIER = None
+    import gc
+    gc.collect()
+    log.info("detection: models unloaded")
+
+
 def detect_animal(image_path: str) -> dict:
     """
-    Return {"is_animal": bool, "confidence": float, "detector": str, "species": str | None}.
+    Return {"is_animal": bool, "confidence": float, "detector": str,
+            "species": str | None, "species_confidence": float | None}.
 
     Never raises. On model failure returns is_animal=False with detector="error(...)"
     so the caller can decide what to do (currently: save at conf=0 so photos are
     never silently discarded).
     """
     if _MODE == "fallback":
-        return {"is_animal": True, "confidence": 0.0, "detector": "fallback", "species": None}
+        return {"is_animal": True, "confidence": 0.0, "detector": "fallback",
+                "species": None, "species_confidence": None}
 
     try:
         import numpy as np          # type: ignore
@@ -139,10 +168,11 @@ def detect_animal(image_path: str) -> dict:
 
         is_animal = best_conf >= CONF_THRESHOLD
         response = {
-            "is_animal": is_animal, 
+            "is_animal": is_animal,
             "confidence": round(best_conf, 3),
             "detector": "megadetector",
-            "species": None
+            "species": None,
+            "species_confidence": None,
         }
 
         # 2. If an animal is detected, run the classifier on that specific crop
@@ -150,17 +180,22 @@ def detect_animal(image_path: str) -> dict:
             # Determine the device MegaDetector is currently utilizing
             device = "cuda" if "cuda" in str(getattr(model, "device", "cpu")) else "cpu"
             classifier = _load_classifier(device=device)
-            
+
             # Extract coordinates and crop the numpy array
             x1, y1, x2, y2 = map(int, best_box)
             animal_crop = img[max(0, y1):y2, max(0, x1):x2]
 
             # Pass the cropped image into the classification model
-            clf_results = classifier.single_image_classification(animal_crop) 
-            
-            # Extract the top predicted class name 
-            if isinstance(clf_results, dict) and "class_name" in clf_results:
-                response["species"] = clf_results.get("class_name")
+            clf_results = classifier.single_image_classification(animal_crop)
+
+            # Extract the top predicted class name. Note: PytorchWildlife's
+            # TIMM-based classifiers (DFNE, Deepfaune) return {"prediction": ...,
+            # "confidence": ...}, not "class_name" — keyed off the actual
+            # `results_generation()` output shape, not assumed.
+            if isinstance(clf_results, dict) and "prediction" in clf_results:
+                response["species"] = clf_results.get("prediction")
+                conf = clf_results.get("confidence")
+                response["species_confidence"] = round(float(conf), 3) if conf is not None else None
             else:
                 response["species"] = str(clf_results)
 
@@ -168,4 +203,5 @@ def detect_animal(image_path: str) -> dict:
 
     except Exception as e:
         log.warning("Detection/Classification failed on %s: %s: %s", image_path, type(e).__name__, e)
-        return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})", "species": None}
+        return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})",
+                "species": None, "species_confidence": None}

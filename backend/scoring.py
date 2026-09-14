@@ -184,22 +184,33 @@ def period_for_hour(hour_of_day: int) -> str | None:
     return None
 
 
+# The species classifier's exact label for white-tailed deer (DFNE's CLASS_NAMES
+# in PytorchWildlife). Sightings are matched case-insensitively against this.
+DEER_SPECIES = "white-tailed deer"
+
+
+def _is_deer_sighting(s: dict) -> bool:
+    """True if this sighting's species is confirmed deer. A sighting with no
+    species (detector ran in fallback mode, or a detection error) is treated
+    as unknown, NOT deer — species classification must positively confirm deer
+    before it counts toward the boost."""
+    species = s.get("species")
+    return bool(species) and str(species).strip().lower() == DEER_SPECIES
+
+
 def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
                  utc_offset_seconds: int = 0) -> dict:
     """
     Positive-only boost. Given a stand's recent camera sightings (each a dict with
-    'timestamp' ISO and 'confidence_score'), return a multiplier >= 1.0 and a
-    breakdown. Only DAYLIGHT sightings within the last 72h whose LOCAL hour-of-day
-    falls in the current hunt period count. No penalty is ever applied.
+    'timestamp' ISO, 'confidence_score', and optionally 'species'), return a
+    multiplier >= 1.0 and a breakdown. Only DAYLIGHT sightings within the last 72h
+    whose LOCAL hour-of-day falls in the current hunt period AND whose species is
+    confirmed white-tailed deer count. No penalty is ever applied.
 
     utc_offset_seconds is taken from the Open-Meteo forecast for the property's
     location and is used to convert the stored UTC timestamps to local time before
     period matching — without this, a UTC-5 property's 6 AM sighting (stored as
     11:00 UTC) would be misclassified as "midday" instead of "morning".
-
-    NOTE: sightings currently record ANY animal detected by MegaDetector, not
-    exclusively deer. For hunting purposes "wildlife at this stand in this period"
-    is the signal; deer-species classification would require an additional model.
 
     Boost scales with how many qualifying sightings and their confidence, capped at
     max_boost_pct (e.g. 15.0 -> up to +15% -> multiplier up to 1.15).
@@ -207,6 +218,8 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
     now = _dt.datetime.now(_dt.timezone.utc)
     qualifying = []
     for s in sightings or []:
+        if not _is_deer_sighting(s):
+            continue
         ts = s.get("timestamp")
         if not ts:
             continue
@@ -227,7 +240,7 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
         qualifying.append(s)
 
     if not qualifying:
-        return {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "no recent daylight photos"}
+        return {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "text": "no recent daylight deer photos"}
 
     # Accumulate confidence with diminishing returns; ~3 solid sightings approaches cap.
     accum = 0.0
@@ -240,7 +253,7 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
     mult = 1.0 + boost_pct / 100.0
     return {
         "multiplier": mult, "boost_pct": boost_pct, "count": len(qualifying),
-        "text": f"+{boost_pct}% from {len(qualifying)} daylight photo(s) in the last 72h",
+        "text": f"+{boost_pct}% from {len(qualifying)} daylight deer photo(s) in the last 72h",
     }
 
 

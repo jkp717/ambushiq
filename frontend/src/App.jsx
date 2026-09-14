@@ -1321,6 +1321,7 @@ function CamerasPage({ stands }) {
   const [editingCam, setEditingCam] = useState(null);
   const [viewingCam, setViewingCam] = useState(null);
   const [syncing, setSyncing] = useState({});
+  const [backfilling, setBackfilling] = useState(false);
   const [err, setErr] = useState(null);
 
   const load = useCallback(async () => {
@@ -1359,13 +1360,27 @@ function CamerasPage({ stands }) {
     } catch (e) { alert(`Sync failed: ${e.message}`); }
     finally { setSyncing((s) => ({ ...s, [cam.id]: false })); }
   }
+  async function backfillSpecies() {
+    setBackfilling(true);
+    try {
+      await api("/cameras/backfill-species", { method: "POST" });
+      alert("Reclassification started in the background — species labels for older sightings (still saved on disk) will update over the next few minutes.");
+    } catch (e) { alert(`Reclassification failed to start: ${e.message}`); }
+    finally { setBackfilling(false); }
+  }
 
   return (
     <div className="list-page">
       {err && <Banner>{err}</Banner>}
       <div className="list-header">
         <h1>Trail Cameras</h1>
-        <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus size={15} /> Connect cameras</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" disabled={backfilling} onClick={backfillSpecies}
+            title="Reclassify older sightings recorded before species detection existed">
+            {backfilling ? <><RefreshCw size={14} className="spin" /> Starting...</> : "Reclassify existing photos"}
+          </button>
+          <button className="btn btn-primary" onClick={() => setAdding(true)}><Plus size={15} /> Connect cameras</button>
+        </div>
       </div>
       {!cameras.length && (
         <div className="cameras-empty">
@@ -1766,6 +1781,7 @@ function SightingsPanel({ cam, onClose }) {
           const confCls = conf >= 0.7 ? "conf-high" : conf >= 0.4 ? "conf-med" : "conf-low";
           return (
             <div key={s.id} className="sighting-card" onClick={() => s.image_url && setViewImg(s.image_url)}>
+              {s.species && <span className="sighting-species">{s.species}</span>}
               {s.image_url
                 ? <img src={s.image_url} alt="sighting" className="sighting-thumb" loading="lazy" />
                 : <div className="sighting-nophoto"><Camera size={22} color="var(--bord2)" /></div>
