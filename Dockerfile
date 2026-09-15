@@ -29,4 +29,4 @@ ENV STATIC_DIR=/app/static
 ENV CAMERA_IMAGE_DIR=/app/data/camera_images
 RUN mkdir -p /app/data/camera_images
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
