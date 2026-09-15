@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
+import { TILE_SOURCES } from "../utils/tileSources.js";
 
 /* global L */
 
@@ -6,8 +7,8 @@ const DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW"
 const degToCompass = (d) => DIRS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
 
 // USGS topo tile layers (public, no key). Imagery topo is the shaded relief + contours.
-const USGS_TOPO = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}";
-const USGS_IMAGERY = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}";
+const USGS_TOPO = TILE_SOURCES.find((t) => t.id === "topo").url;
+const USGS_IMAGERY = TILE_SOURCES.find((t) => t.id === "imagery").url;
 
 const COLORS = {
   wind: "#0C447C",
@@ -125,18 +126,26 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
   }
 }
 
-export default function HuntMap({
+const HuntMap = forwardRef(function HuntMap({
   stands, zones, corridors, sign, conditions,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, center,
   height = 420,
-}) {
+}, ref) {
   const mapRef = useRef(null);
   const mapEl = useRef(null);
   const layerGroups = useRef({});
   const baseLayers = useRef({});
+  const offlineLayers = useRef({});
   const standsMarkers = useRef({}); // Prevents unmounting marker to keep popup open
   const [ready, setReady] = useState(false);
+
+  // Exposes the underlying Leaflet map + base tile layers for callers that need
+  // to drive them directly (currently: the offline-tile download panel).
+  useImperativeHandle(ref, () => ({
+    getMap: () => mapRef.current,
+    getBaseLayers: () => offlineLayers.current,
+  }));
 
   // init map once (waits for the Leaflet global if the CDN script is slow)
   useEffect(() => {
@@ -148,10 +157,18 @@ export default function HuntMap({
         return;
       }
       const map = L.map(mapEl.current, { zoomControl: true });
-      const topo = L.tileLayer(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
-      const imagery = L.tileLayer(USGS_IMAGERY, { maxZoom: 16, attribution: "USGS The National Map" });
+      // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
+      // from IndexedDB when it's been downloaded for offline use, network otherwise.
+      const topo = L.tileLayer.offline(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
+      const imagery = L.tileLayer.offline(USGS_IMAGERY, { maxZoom: 16, attribution: "USGS The National Map" });
       topo.addTo(map);
       baseLayers.current = { Topo: topo, "Imagery+Topo": imagery };
+      // id-keyed (matches TILE_SOURCES) for the offline-download panel, which
+      // needs each layer instance's getTileUrls() and its exact urlTemplate.
+      offlineLayers.current = {
+        topo: { ...TILE_SOURCES.find((t) => t.id === "topo"), layer: topo },
+        imagery: { ...TILE_SOURCES.find((t) => t.id === "imagery"), layer: imagery },
+      };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "scent" is added before "stands" so cones render below stand markers
       ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
@@ -446,4 +463,6 @@ export default function HuntMap({
   }, [stands, ready, standLayers]);
 
   return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
-}
+});
+
+export default HuntMap;

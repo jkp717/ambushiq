@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, Download } from "lucide-react";
 import { api } from "../services/api.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
@@ -9,6 +9,7 @@ import LayerChip from "../components/ui/LayerChip.jsx";
 import HuntMap from "../components/HuntMap.jsx";
 import HomeSetup from "../components/HomeSetup.jsx";
 import AddMenu from "../components/AddMenu.jsx";
+import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
 
 function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
@@ -100,6 +101,8 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const [err, setErr] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef(null);
+  const huntMapRef = useRef(null);
+  const [showOfflinePanel, setShowOfflinePanel] = useState(false);
 
   // function to toggle individual stand layers
   const toggleStandLayer = useCallback((standId, layerKey) => {
@@ -382,7 +385,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       {/* map fills all remaining vertical space */}
       <div className="map-body">
         <div className="map-fill">
-          <HuntMap stands={stands} zones={zones} corridors={corridors} sign={sign} conditions={conditions}
+          <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign} conditions={conditions}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home}
@@ -397,6 +400,9 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
             </div>
           )}
+          <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
+            <Download size={16} />
+          </button>
           <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
             <Plus size={16} />
           </button>
@@ -423,6 +429,9 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       )}
       {pendingName && pendingName.type === "corridor" && (
         <CorridorPrompt onCancel={() => setPendingName(null)} onConfirm={confirmName} />
+      )}
+      {showOfflinePanel && huntMapRef.current && (
+        <OfflineMapsPanel mapApi={huntMapRef.current} onClose={() => setShowOfflinePanel(false)} />
       )}
     </div>
   );
