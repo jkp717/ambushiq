@@ -20,6 +20,7 @@ class SettingsIn(BaseModel):
     rate_w_rain: float | None = None
     rate_w_temp: float | None = None
     max_camera_boost_pct: float | None = None
+    camera_boost_saturation: float | None = None
     max_camera_penalty_pct: float | None = None
     camera_lookback_hours: float | None = None
     camera_health_max_age_hours: float | None = None

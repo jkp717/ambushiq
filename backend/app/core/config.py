@@ -50,6 +50,10 @@ DEFAULT_SETTINGS = {
     "image_retention_days": 60,
     "camera_backfill_days": 7,
     "max_camera_boost_pct": 15.0,
+    # summed, confidence-weighted deer-photo "evidence" (each qualifying photo
+    # contributes 0.1-1.0) needed in a period to reach the full boost above —
+    # see scoring.camera_boost / scoring.CAMERA_BOOST_SATURATION_DEFAULT
+    "camera_boost_saturation": 3.0,
     "max_camera_penalty_pct": 15.0,
     "camera_lookback_hours": 72.0,
     "camera_health_max_age_hours": 48.0,

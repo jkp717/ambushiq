@@ -198,11 +198,17 @@ def _is_deer_sighting(s: dict) -> bool:
     return bool(species) and str(species).strip().lower() == DEER_SPECIES
 
 
+# Default confidence-weighted evidence sum (see `saturation` below) at which the
+# boost reaches its cap. Exposed as the "camera_boost_saturation" setting.
+CAMERA_BOOST_SATURATION_DEFAULT = 3.0
+
+
 def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
                  utc_offset_seconds: int = 0, has_camera: bool = False,
                  max_penalty_pct: float = 0.0, lookback_hours: float = 72.0,
                  camera_ready: bool = True, camera_healthy: bool = True,
-                 unhealthy_reason: str | None = None) -> dict:
+                 unhealthy_reason: str | None = None,
+                 saturation: float = CAMERA_BOOST_SATURATION_DEFAULT) -> dict:
     """
     Given a stand's recent camera sightings (each a dict with 'timestamp' ISO,
     'confidence_score', and optionally 'species'), return a multiplier and a
@@ -214,7 +220,11 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
       last `lookback_hours`: positive boost, scaling with count/confidence
       (diminishing returns) and capped at max_boost_pct. This applies
       regardless of camera_healthy — a real deer photo counts even from a
-      camera that's since gone offline or hit its quota.
+      camera that's since gone offline or hit its quota. Each qualifying
+      sighting contributes its confidence score (0.1-1.0) to a running sum;
+      once that sum reaches `saturation`, the boost is fully at max_boost_pct
+      — e.g. with the default saturation of 3.0, ~3 high-confidence photos
+      (or more, lower-confidence ones) reach the cap.
     - Camera present, ZERO qualifying deer photos in this period, the camera
       has been in place at least `lookback_hours` (camera_ready=True), AND the
       camera looks healthy (camera_healthy=True): negative penalty, capped at
@@ -266,13 +276,15 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
         qualifying.append(s)
 
     if qualifying:
-        # Accumulate confidence with diminishing returns; ~3 solid sightings approaches cap.
+        # Accumulate confidence with diminishing returns; `saturation` solid-confidence
+        # sightings' worth of evidence reaches the cap.
         accum = 0.0
         for s in qualifying:
             raw_conf = s.get("confidence_score")
             conf = max(0.1, min(1.0, float(raw_conf) if raw_conf is not None else 0.5))
             accum += conf
-        frac = min(1.0, accum / 3.0)
+        sat = saturation if saturation and saturation > 0 else CAMERA_BOOST_SATURATION_DEFAULT
+        frac = min(1.0, accum / sat)
         boost_pct = round(max_boost_pct * frac, 1)
         mult = 1.0 + boost_pct / 100.0
         return {
@@ -307,7 +319,8 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          camera_healthy: bool = True, unhealthy_reason: str | None = None,
                          proximity: dict | None = None,
                          utc_offset_seconds: int = 0,
-                         thermal_params: dict | None = None) -> dict:
+                         thermal_params: dict | None = None,
+                         camera_boost_saturation: float = CAMERA_BOOST_SATURATION_DEFAULT) -> dict:
 
     base = score_stand_hour(stand, hour, thermal_params)
     breakdown = []
@@ -340,7 +353,8 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         cam = camera_boost(period, sightings or [], max_boost_pct, utc_offset_seconds,
                             has_camera=has_camera, max_penalty_pct=max_penalty_pct,
                             lookback_hours=lookback_hours, camera_ready=camera_ready,
-                            camera_healthy=camera_healthy, unhealthy_reason=unhealthy_reason)
+                            camera_healthy=camera_healthy, unhealthy_reason=unhealthy_reason,
+                            saturation=camera_boost_saturation)
         total *= cam["multiplier"]
         if cam["status"] != "none":
             breakdown.append({"factor": "Trail-camera", "value": cam["boost_pct"] / 100.0,

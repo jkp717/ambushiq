@@ -193,6 +193,8 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     max_cam_penalty = float(settings.get("max_camera_penalty_pct", 0.0) or 0.0)
     cam_lookback = float(settings.get("camera_lookback_hours", 72.0) or 72.0)
     cam_health_max_age = float(settings.get("camera_health_max_age_hours", 48.0) or 48.0)
+    cam_saturation = float(settings.get("camera_boost_saturation", 0.0)
+                            or scoring.CAMERA_BOOST_SATURATION_DEFAULT)
     utc_offset = int(fc.get("utc_offset_seconds", 0))
     period = scoring.period_for_hour(hour["time_h"])
     tp = _thermal_params(settings)
@@ -228,7 +230,8 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
                     has_camera=True, max_penalty_pct=max_cam_penalty,
                     lookback_hours=cam_lookback,
                     camera_ready=_camera_ready(cam_info["created_at"], cam_lookback),
-                    camera_healthy=health["healthy"], unhealthy_reason=health["reason"])
+                    camera_healthy=health["healthy"], unhealthy_reason=health["reason"],
+                    saturation=cam_saturation)
                 vec = dict(vec)  # don't mutate the original
                 vec["total"] = round(vec["total"] * boost["multiplier"], 3)
                 vec["camera_boost"] = boost
@@ -308,6 +311,8 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     max_cam_penalty = float(settings.get("max_camera_penalty_pct", 0.0) or 0.0)
     cam_lookback = float(settings.get("camera_lookback_hours", 72.0) or 72.0)
     cam_health_max_age = float(settings.get("camera_health_max_age_hours", 48.0) or 48.0)
+    cam_saturation = float(settings.get("camera_boost_saturation", 0.0)
+                            or scoring.CAMERA_BOOST_SATURATION_DEFAULT)
     # Camera boost/penalty both depend on species classification actually
     # running (megadetector mode) — in fallback mode species is always
     # unknown, so neither can be evaluated correctly.
@@ -344,7 +349,8 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
                 max_boost_pct=max_cam_boost, max_penalty_pct=max_cam_penalty,
                 lookback_hours=cam_lookback, has_camera=has_camera, camera_ready=camera_ready,
                 camera_healthy=camera_healthy, unhealthy_reason=unhealthy_reason,
-                proximity=bonus, utc_offset_seconds=utc_offset, thermal_params=tp)
+                proximity=bonus, utc_offset_seconds=utc_offset, thermal_params=tp,
+                camera_boost_saturation=cam_saturation)
             sc = {
                 "total": det["final_score"],
                 "base_total": det["base_score"],

@@ -209,6 +209,11 @@ function SettingsPage() {
           display={`+${Math.round(s.max_camera_boost_pct ?? 15)}%`}
           onChange={(v) => setS({ ...s, max_camera_boost_pct: v })}
           info="How much a stand's period score can increase when its camera has recently caught deer during that time of day." />
+        <SliderRow label="Camera boost saturation" min={1} max={10} step={0.5}
+          value={s.camera_boost_saturation ?? 3}
+          display={`${(s.camera_boost_saturation ?? 3).toFixed(1)} pts`}
+          onChange={(v) => setS({ ...s, camera_boost_saturation: v })}
+          info="Each qualifying deer photo in a period contributes its detection confidence (0.1-1.0) to a running total. Once that total reaches this many points, the boost above is fully applied — so a few high-confidence photos, or more lower-confidence ones, both reach the cap. Lower this to have the boost max out with less evidence; raise it to require more." />
         <SliderRow label="Max camera penalty (per stand)" min={0} max={50} step={1}
           value={s.max_camera_penalty_pct ?? 15}
           display={`-${Math.round(s.max_camera_penalty_pct ?? 15)}%`}
