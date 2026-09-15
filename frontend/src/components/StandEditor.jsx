@@ -139,13 +139,11 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         </Field>
       </div>
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
-        <input type="checkbox" checked={s.is_active !== false}
-          onChange={(e) => setS({ ...s, is_active: e.target.checked })} />
+        <input type="checkbox" checked={s.is_active !== false} style={{ maxWidth: 20 }} onChange={(e) => setS({ ...s, is_active: e.target.checked })} />
         Active — included in rankings and map scoring
       </label>
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-        <button className="btn btn-primary" disabled={!valid}
-          onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m }, savedId)}>
+        <button className="btn btn-primary" disabled={!valid} onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m }, savedId)}>
           <Save size={15} /> Save stand
         </button>
         {onMoveOnMap && <button className="btn" onClick={() => { onMoveOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Move on Map</button>}
