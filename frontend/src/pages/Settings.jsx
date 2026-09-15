@@ -1,20 +1,35 @@
 import { useState, useEffect } from "react";
-import { MapPin, Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive } from "lucide-react";
+import { MapPin, Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun } from "lucide-react";
 import { api } from "../services/api.js";
 import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
 import Field from "../components/ui/Field.jsx";
 import SliderRow from "../components/ui/SliderRow.jsx";
+import InfoTip from "../components/ui/InfoTip.jsx";
 
 function SettingsPage() {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
   const [homeLat, setHomeLat] = useState(""); const [homeLon, setHomeLon] = useState(""); const [homeSaved, setHomeSaved] = useState(false);
+  const [weatherProviders, setWeatherProviders] = useState([]);
+  const [weatherKeyInput, setWeatherKeyInput] = useState("");
+  const [weatherSecondaryKeyInput, setWeatherSecondaryKeyInput] = useState("");
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn't load settings.")); }, []);
   useEffect(() => { api("/home").then((h) => { if (h.set) { setHomeLat(String(h.lat)); setHomeLon(String(h.lon)); } }).catch(() => {}); }, []);
+  useEffect(() => { api("/weather-providers").then((r) => setWeatherProviders(r.providers || [])).catch(() => {}); }, []);
 
   async function save() {
-    try { const r = await api("/settings", { method: "PUT", body: JSON.stringify(s) }); setS(r); setSaved(true); setTimeout(() => setSaved(false), 1800); }
-    catch { setErr("Couldn't save settings."); }
+    try {
+      const body = { ...s };
+      if (weatherKeyInput) body.weather_provider_api_key = weatherKeyInput;
+      if (weatherSecondaryKeyInput) body.weather_secondary_provider_api_key = weatherSecondaryKeyInput;
+      const r = await api("/settings", { method: "PUT", body: JSON.stringify(body) });
+      setS(r); setWeatherKeyInput(""); setWeatherSecondaryKeyInput("");
+      setSaved(true); setTimeout(() => setSaved(false), 1800);
+    } catch { setErr("Couldn't save settings."); }
+  }
+  async function clearWeatherKey(field) {
+    try { const r = await api("/settings", { method: "PUT", body: JSON.stringify({ [field]: "" }) }); setS(r); }
+    catch { setErr("Couldn't clear key."); }
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80 }); }
   function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
@@ -43,6 +58,11 @@ function SettingsPage() {
   ];
   const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
 
+  const selectedProvider = weatherProviders.find((p) => p.id === (s.weather_provider || "open_meteo"));
+  const needsSecondary = selectedProvider && !selectedProvider.has_solar;
+  const secondaryOptions = weatherProviders.filter((p) => p.has_solar && p.id !== selectedProvider?.id);
+  const selectedSecondary = weatherProviders.find((p) => p.id === s.weather_secondary_provider);
+
   return (
     <div className="settings-page">
       {err && <Banner>{err}</Banner>}
@@ -55,6 +75,60 @@ function SettingsPage() {
           <Field label="Longitude"><input value={homeLon} onChange={(e) => setHomeLon(e.target.value)} placeholder="-92.2896" inputMode="decimal" /></Field>
           <button className="btn btn-primary" disabled={!homeValid} onClick={saveHome} style={{ height: 38 }}><Save size={15} /> {homeSaved ? "Saved" : "Save"}</button>
         </div>
+      </div>
+
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20 }}>
+        <CloudSun size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Weather source
+      </div>
+      <p className="settings-desc">Which weather service supplies the hourly forecast that drives wind, thermal, and rating scoring.</p>
+      <div className="settings-section">
+        <Field label="Weather provider">
+          <select value={s.weather_provider ?? "open_meteo"} onChange={(e) => setS({ ...s, weather_provider: e.target.value })}>
+            {weatherProviders.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}{p.needs_key ? " (API key required)" : ""}</option>
+            ))}
+          </select>
+        </Field>
+        {selectedProvider?.needs_key && (
+          <div style={{ marginTop: 10 }}>
+            <Field label={s.weather_provider_api_key_set ? "API key (already set — leave blank to keep)" : "API key"}>
+              <input type="password" value={weatherKeyInput} onChange={(e) => setWeatherKeyInput(e.target.value)}
+                placeholder={s.weather_provider_api_key_set ? "••••••••" : `${selectedProvider.label} API key`} />
+            </Field>
+            {s.weather_provider_api_key_set && (
+              <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey("weather_provider_api_key")}>Clear stored key</button>
+            )}
+          </div>
+        )}
+        {needsSecondary && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
+            <Field label={
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                Secondary provider (for solar radiation)
+                <InfoTip text={`${selectedProvider.label} doesn't report solar radiation, which the thermal model uses. Pick a secondary source just to backfill that one field, or leave it on "none" to use a rough daylight/cloud-cover estimate instead.`} />
+              </span>
+            }>
+              <select value={s.weather_secondary_provider ?? ""} onChange={(e) => setS({ ...s, weather_secondary_provider: e.target.value })}>
+                <option value="">None — estimate from daylight/cloud cover</option>
+                {secondaryOptions.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </Field>
+            {selectedSecondary?.needs_key && (
+              <div style={{ marginTop: 10 }}>
+                <Field label={s.weather_secondary_provider_api_key_set ? "Secondary API key (already set — leave blank to keep)" : "Secondary API key"}>
+                  <input type="password" value={weatherSecondaryKeyInput} onChange={(e) => setWeatherSecondaryKeyInput(e.target.value)}
+                    placeholder={s.weather_secondary_provider_api_key_set ? "••••••••" : `${selectedSecondary.label} API key`} />
+                </Field>
+                {s.weather_secondary_provider_api_key_set && (
+                  <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey("weather_secondary_provider_api_key")}>Clear stored key</button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
       </div>
 
       <div className="settings-section-title">Proximity weights</div>

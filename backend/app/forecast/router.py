@@ -14,6 +14,7 @@ from app.corridors.models import Corridor
 from app.deer_sign.models import DeerSign
 from app.dependencies import require_token
 from app.forecast import scoring
+from app.forecast.providers import weather_provider_meta
 from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
 from app.forecast.service import (
     _camera_health,
@@ -29,6 +30,12 @@ from app.stands.models import Stand
 from app.zones.models import Zone
 
 router = APIRouter(tags=["forecast"])
+
+
+@router.get("/api/weather-providers")
+def weather_providers(_=Depends(require_token)):
+    """Provider metadata for the settings weather-source dropdown."""
+    return {"providers": weather_provider_meta()}
 
 
 @router.get("/api/forecast")

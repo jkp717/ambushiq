@@ -57,4 +57,11 @@ DEFAULT_SETTINGS = {
     "rut_peak_day": 5,
     "camera_image_dir": CAMERA_IMAGE_DIR,
     "property_timezone": "America/Chicago",
+    # weather source: primary provider (+ its API key, if it needs one) and an
+    # optional secondary provider used only to backfill fields the primary
+    # doesn't report (most commonly solar radiation, for the thermal model)
+    "weather_provider": "open_meteo",
+    "weather_provider_api_key": "",
+    "weather_secondary_provider": "",
+    "weather_secondary_provider_api_key": "",
 }
