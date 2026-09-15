@@ -285,11 +285,18 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
     # timestamps to local time before period matching in camera_boost.
     utc_offset = int(fc.get("utc_offset_seconds", 0))
 
-    # period hour windows (clamped to available forecast hours for the day)
+    # period hour windows. midday spans whatever's actually left between morning
+    # and evening (rather than a fixed 10-15) so no hour is ever stranded outside
+    # all three windows — a fixed midday window left gaps on early-sunrise days
+    # (morning could end before 10) and late-sunset days (evening could start
+    # after 15). On a very short day this can make midday's range empty (lo > hi),
+    # which is correct — score_period() then simply returns no result for it.
+    morning_end = int(sr_h + 3)
+    evening_start = int(ss_h - 3)
     periods = {
-        "morning": (int(sr_h - 1), int(sr_h + 3)),
-        "midday": (max(int(sr_h + 3) + 1, 10), 15),
-        "evening": (int(ss_h - 3), int(ss_h)),
+        "morning": (int(sr_h - 1), morning_end),
+        "midday": (morning_end + 1, evening_start - 1),
+        "evening": (evening_start, int(ss_h)),
     }
     # index hours of this day
     day_idxs = [i for i, t in enumerate(h["time"]) if t[:10] == day]
