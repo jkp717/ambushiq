@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, Lock, Menu, Sun, Map as MapIcon, MapPin, Wheat, Camera, Settings as SettingsIcon, RefreshCw } from "lucide-react";
+import { Lock, Menu, Sun, Map as MapIcon, MapPin, Wheat, Camera, Settings as SettingsIcon, RefreshCw } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import { useAuth } from "./hooks/useAuth.js";
 import { api } from "./services/api.js";
@@ -100,11 +100,11 @@ function Shell({ onLogout, version }) {
     <div className="app-shell">
       {/* top bar */}
       <header className="top-bar">
-        <div className="top-bar-brand">
-          <Wind size={18} color="var(--navy)" />
+        <button className="top-bar-brand" onClick={() => setView("today")} title="Overview">
+          <img src="/icon.png" alt="" className="top-bar-icon" />
           <strong>AmbushIQ</strong>
           {version && <span className="top-bar-ver">v{version}</span>}
-        </div>
+        </button>
         {/* On map page: burger menu dropdown (with Lock at bottom); other pages: lock icon */}
         {view === "map" ? (
           <div className="top-bar-nav-drop" ref={navDropRef}>
