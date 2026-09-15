@@ -94,8 +94,13 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--bord);
   position: sticky; top: 0; z-index: 1000; flex-shrink: 0;
 }
-.top-bar-brand { display: flex; align-items: center; gap: 8px; }
+.top-bar-brand {
+  display: flex; align-items: center; gap: 8px;
+  background: none; border: none; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer;
+}
 .top-bar-brand strong { font-size: 15px; }
+.top-bar-icon { width: 20px; height: 20px; border-radius: 5px; display: block; }
 .top-bar-ver {
   font-size: 10.5px; color: var(--sub);
   background: var(--surf); border-radius: 5px;

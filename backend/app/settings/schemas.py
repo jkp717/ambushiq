@@ -20,6 +20,7 @@ class SettingsIn(BaseModel):
     rate_w_rain: float | None = None
     rate_w_temp: float | None = None
     max_camera_boost_pct: float | None = None
+    camera_boost_saturation: float | None = None
     max_camera_penalty_pct: float | None = None
     camera_lookback_hours: float | None = None
     camera_health_max_age_hours: float | None = None
@@ -33,6 +34,10 @@ class SettingsIn(BaseModel):
     thermal_wind_half_scale: float | None = None
     thermal_wind_exponent: float | None = None
     thermal_midday_discount: float | None = None
+    weather_provider: str | None = None
+    weather_provider_api_key: str | None = None
+    weather_secondary_provider: str | None = None
+    weather_secondary_provider_api_key: str | None = None
 
 
 class HomeIn(BaseModel):

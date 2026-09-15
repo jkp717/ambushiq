@@ -7,8 +7,8 @@ Each stand pulls a real USGS elevation grid and maps cold-air drainage channels
 Runs as a Docker stack on your Debian server: a FastAPI app + PostgreSQL. The app
 is published on a local host port for your **existing nginx reverse proxy** to
 handle HTTPS and public traffic. All elevation and forecast calls happen
-server-side, so there's no browser sandbox to fight — your server reaches USGS and
-Open-Meteo directly.
+server-side, so there's no browser sandbox to fight — your server reaches USGS
+and your chosen weather provider (Open-Meteo by default) directly.
 
 ## What's in the box
 
@@ -254,3 +254,29 @@ actual deer activity instead of "any animal that triggered the camera":
   to keep the memory footprint low on modest, GPU-less hardware.
 - Buck/doe (sex) classification isn't included — no lightweight pretrained
   model does this reliably; this is species identification only.
+
+## v2.25 — Selectable weather providers
+
+The forecast source is now pluggable via **Settings → Weather source**, instead
+of being hard-wired to Open-Meteo:
+
+- **Open-Meteo** remains the default (free, no key, includes solar radiation).
+- **National Weather Service** is a second fully-working, no-key option
+  (US-only coverage).
+- **OpenWeatherMap**, **WeatherAPI.com**, **Visual Crossing**, and
+  **Tomorrow.io** are also available — each needs an API key entered in
+  Settings, encrypted at rest the same way trail-camera credentials are. These
+  four are implemented against each vendor's documented API but, unlike
+  Open-Meteo/NWS, haven't been exercised against a live paid account; treat
+  them the way the non-SpyPoint camera brands are treated — expect to verify
+  once you've got a real key in.
+- **Secondary provider (solar radiation backfill)**: the thermal model needs
+  solar radiation, which NWS, OpenWeatherMap, WeatherAPI.com, and Tomorrow.io
+  don't report. When you pick one of those as primary, Settings offers a
+  secondary provider (Open-Meteo or Visual Crossing, the two that do report
+  it) used only to fill that one field, hour by hour. With no secondary
+  chosen, a rough daylight/cloud-cover estimate is used instead so scoring
+  never breaks — just less precisely.
+- All providers normalize to the same internal forecast shape, so switching
+  providers doesn't change how ranking, the day rating, or the map work —
+  only where the underlying weather data comes from.

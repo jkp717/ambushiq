@@ -49,3 +49,13 @@ def decrypt_credentials(blob: Optional[str]) -> dict:
     except Exception:
         return {}
 
+
+def encrypt_settings_key(plaintext: str) -> str:
+    """Encrypt a single secret value (e.g. a weather-provider API key) for
+    storage in the generic app-settings key/value table."""
+    return encrypt_credentials({"key": plaintext})
+
+
+def decrypt_settings_key(blob: Optional[str]) -> Optional[str]:
+    return decrypt_credentials(blob).get("key") if blob else None
+

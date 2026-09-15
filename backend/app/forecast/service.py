@@ -5,12 +5,14 @@ import math
 import time
 from datetime import datetime, timezone
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cameras.models import Camera
 from app.core.database import engine
+from app.core.security import decrypt_settings_key
+from app.forecast.providers import get_weather_provider
+from app.settings.service import get_settings
 
 
 def _camera_status_by_stand() -> dict[int, dict]:
@@ -181,22 +183,93 @@ def _temp_swing_by_day(hourly: dict) -> dict[str, float]:
     return {d: max(v) - min(v) for d, v in buckets.items() if v}
 
 
+_HARD_REQUIRED_HOURLY_FIELDS = ("wind_direction_10m", "wind_speed_10m", "wind_gusts_10m",
+                                "shortwave_radiation", "temperature_2m")
+
+
+def _backfill_from_secondary(hourly: dict, secondary_hourly: dict) -> None:
+    """Fill None entries in `hourly`'s hard-required fields (typically
+    shortwave_radiation, when the primary provider doesn't report it) using
+    the secondary provider's data for the same hour, matched by local hour."""
+    by_hour = {t[:13]: i for i, t in enumerate(secondary_hourly.get("time", []))}
+    for field in _HARD_REQUIRED_HOURLY_FIELDS:
+        vals = hourly.get(field) or []
+        sec_vals = secondary_hourly.get(field) or []
+        for i, (t, v) in enumerate(zip(hourly.get("time", []), vals)):
+            if v is not None:
+                continue
+            j = by_hour.get(t[:13])
+            if j is not None and j < len(sec_vals) and sec_vals[j] is not None:
+                vals[i] = sec_vals[j]
+
+
+def _apply_safety_defaults(forecast: dict) -> None:
+    """Last-resort fill for any hard-required hourly field still missing after
+    the (optional) secondary-provider backfill, so the scoring engine — which
+    does direct arithmetic on these values — never sees a None. Gust simply
+    falls back to no extra spread; solar radiation falls back to a coarse
+    daylight-triangle estimate (scaled down by cloud cover when known)."""
+    hourly, daily = forecast["hourly"], forecast["daily"]
+    times = hourly.get("time", [])
+    gust, wind = hourly.get("wind_gusts_10m") or [], hourly.get("wind_speed_10m") or []
+    for i in range(len(gust)):
+        if gust[i] is None:
+            gust[i] = wind[i] if i < len(wind) else 0.0
+
+    sun_by_day: dict[str, tuple[datetime, datetime]] = {}
+    for i, day_str in enumerate([s[:10] for s in daily.get("sunrise", [])]):
+        try:
+            sun_by_day[day_str] = (datetime.fromisoformat(daily["sunrise"][i]),
+                                    datetime.fromisoformat(daily["sunset"][i]))
+        except (ValueError, IndexError):
+            continue
+
+    solar = hourly.get("shortwave_radiation") or []
+    cloud = hourly.get("cloud_cover") or []
+    for i, tstr in enumerate(times):
+        if i >= len(solar) or solar[i] is not None:
+            continue
+        sun = sun_by_day.get(tstr[:10])
+        try:
+            hour_dt = datetime.fromisoformat(tstr)
+        except ValueError:
+            solar[i] = 0.0
+            continue
+        if not sun or not (sun[0] <= hour_dt <= sun[1]):
+            solar[i] = 0.0
+            continue
+        span = (sun[1] - sun[0]).total_seconds() or 1
+        frac = (hour_dt - sun[0]).total_seconds() / span
+        cloud_i = cloud[i] if i < len(cloud) and cloud[i] is not None else 40
+        solar[i] = round(700 * math.sin(math.pi * frac) * (1 - 0.75 * cloud_i / 100), 1)
+
+
 async def get_forecast(lat: float, lon: float, days: int = 3) -> dict:
-    key = f"{lat:.3f},{lon:.3f}:{days}"
+    settings = get_settings()
+    tz_name = str(settings.get("property_timezone") or "America/Chicago")
+    primary_id = str(settings.get("weather_provider") or "open_meteo")
+    secondary_id = str(settings.get("weather_secondary_provider") or "")
+
+    key = f"{lat:.3f},{lon:.3f}:{days}:{primary_id}:{secondary_id}"
     now = time.time()
     if key in _fc_cache and now - _fc_cache[key][0] < FC_TTL:
         return _fc_cache[key][1]
-    url = (
-        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-        "&hourly=wind_direction_10m,wind_speed_10m,wind_gusts_10m,shortwave_radiation,temperature_2m,cloud_cover,surface_pressure,precipitation"
-        f"&daily=sunrise,sunset&wind_speed_unit=mph&timezone=auto&forecast_days={days}"
-    )
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, timeout=20)
-        r.raise_for_status()
-        j = r.json()
-    _fc_cache[key] = (now, j)
-    return j
+
+    primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get("weather_provider_api_key")))
+    forecast = await primary.fetch(lat, lon, days, tz_name)
+
+    if not primary.has_solar and secondary_id and secondary_id != primary_id:
+        secondary = get_weather_provider(secondary_id, decrypt_settings_key(settings.get("weather_secondary_provider_api_key")))
+        try:
+            secondary_forecast = await secondary.fetch(lat, lon, days, tz_name)
+            _backfill_from_secondary(forecast["hourly"], secondary_forecast["hourly"])
+        except Exception:
+            pass  # best-effort — the safety-net defaults below still cover any gaps
+
+    _apply_safety_defaults(forecast)
+
+    _fc_cache[key] = (now, forecast)
+    return forecast
 
 
 def build_sits(forecast: dict) -> list[dict]:

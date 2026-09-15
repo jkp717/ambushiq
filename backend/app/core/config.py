@@ -50,6 +50,10 @@ DEFAULT_SETTINGS = {
     "image_retention_days": 60,
     "camera_backfill_days": 7,
     "max_camera_boost_pct": 15.0,
+    # summed, confidence-weighted deer-photo "evidence" (each qualifying photo
+    # contributes 0.1-1.0) needed in a period to reach the full boost above —
+    # see scoring.camera_boost / scoring.CAMERA_BOOST_SATURATION_DEFAULT
+    "camera_boost_saturation": 3.0,
     "max_camera_penalty_pct": 15.0,
     "camera_lookback_hours": 72.0,
     "camera_health_max_age_hours": 48.0,
@@ -57,4 +61,11 @@ DEFAULT_SETTINGS = {
     "rut_peak_day": 5,
     "camera_image_dir": CAMERA_IMAGE_DIR,
     "property_timezone": "America/Chicago",
+    # weather source: primary provider (+ its API key, if it needs one) and an
+    # optional secondary provider used only to backfill fields the primary
+    # doesn't report (most commonly solar radiation, for the thermal model)
+    "weather_provider": "open_meteo",
+    "weather_provider_api_key": "",
+    "weather_secondary_provider": "",
+    "weather_secondary_provider_api_key": "",
 }
