@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -270,6 +272,52 @@ async def get_forecast(lat: float, lon: float, days: int = 3) -> dict:
 
     _fc_cache[key] = (now, forecast)
     return forecast
+
+
+# ---------- historical baseline (deer-rating temp-shift factor) ----------
+_hist_cache: dict[str, tuple[float, Optional[float]]] = {}
+HIST_TTL = 12 * 3600  # actual past days never change; just avoids hammering the API
+
+
+async def get_historical_baseline_f(lat: float, lon: float, end_date: date, days: int = 7) -> Optional[float]:
+    """Actual (observed) daily-high average over the `days` ending `end_date`
+    (inclusive), from Open-Meteo's free historical archive.
+
+    This is what the deer-rating temp-shift factor compares each rated day
+    against to detect a genuine cooling/warming departure from what's actually
+    been normal recently — as opposed to the mean of the same forward-looking
+    forecast window being rated, which is self-referential (every day in a
+    forecast that trends warm or cold just compares against its own drifted
+    average) and can't represent "recent" at all for the earliest rated days.
+
+    Best-effort: returns None on any failure so callers fall back to their
+    existing no-baseline behavior rather than breaking the rating endpoint.
+    """
+    key = f"{lat:.3f},{lon:.3f}:{end_date.isoformat()}:{days}"
+    now = time.time()
+    if key in _hist_cache and now - _hist_cache[key][0] < HIST_TTL:
+        return _hist_cache[key][1]
+
+    start = end_date - timedelta(days=days - 1)
+    url = (
+        "https://archive-api.open-meteo.com/v1/archive"
+        f"?latitude={lat}&longitude={lon}&start_date={start.isoformat()}&end_date={end_date.isoformat()}"
+        "&daily=temperature_2m_max&temperature_unit=fahrenheit&timezone=auto"
+    )
+    baseline: Optional[float] = None
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, timeout=15)
+            r.raise_for_status()
+            j = r.json()
+        highs = [v for v in (j.get("daily", {}).get("temperature_2m_max") or []) if v is not None]
+        if highs:
+            baseline = sum(highs) / len(highs)
+    except Exception:
+        baseline = None
+
+    _hist_cache[key] = (now, baseline)
+    return baseline
 
 
 def build_sits(forecast: dict) -> list[dict]:

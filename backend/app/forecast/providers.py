@@ -14,6 +14,7 @@ WeatherProvider.fetch() and normalizes its response to one shared shape:
         "cloud_cover": [...],           # percent, or None where unavailable
         "surface_pressure": [...],      # hPa, or None where unavailable
         "precipitation": [...],         # mm, or None where unavailable
+        "dew_point_2m": [...],          # Celsius, or None where unavailable
       },
       "daily": {"sunrise": [...], "sunset": [...]},  # local-naive ISO datetimes, one per day
       "utc_offset_seconds": int,
@@ -67,7 +68,7 @@ def _empty_hourly() -> dict:
     return {
         "time": [], "wind_direction_10m": [], "wind_speed_10m": [], "wind_gusts_10m": [],
         "shortwave_radiation": [], "temperature_2m": [], "cloud_cover": [],
-        "surface_pressure": [], "precipitation": [],
+        "surface_pressure": [], "precipitation": [], "dew_point_2m": [],
     }
 
 
@@ -156,7 +157,7 @@ class OpenMeteoProvider(WeatherProvider):
         url = (
             f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
             "&hourly=wind_direction_10m,wind_speed_10m,wind_gusts_10m,shortwave_radiation,"
-            "temperature_2m,cloud_cover,surface_pressure,precipitation"
+            "temperature_2m,cloud_cover,surface_pressure,precipitation,dew_point_2m"
             f"&daily=sunrise,sunset&wind_speed_unit=mph&timezone=auto&forecast_days={days}"
         )
         async with httpx.AsyncClient() as client:
@@ -224,6 +225,7 @@ class NWSProvider(WeatherProvider):
             "cloud_cover": series("skyCover"),
             "surface_pressure": series("pressure", lambda v: round(v / 100, 1)),  # Pa -> hPa
             "precipitation": series("quantitativePrecipitation"),
+            "dew_point_2m": series("dewpoint"),
             "shortwave_radiation": [None] * len(target_hours),  # not reported by NWS
         }
 
@@ -299,6 +301,7 @@ class OpenWeatherMapProvider(WeatherProvider):
             hourly["cloud_cover"].append(h.get("clouds"))
             hourly["surface_pressure"].append(h.get("pressure"))
             hourly["precipitation"].append((h.get("rain") or {}).get("1h", 0.0))
+            hourly["dew_point_2m"].append(h.get("dew_point"))
             hourly["shortwave_radiation"].append(None)  # not part of One Call 3.0
 
         daily = {"sunrise": [], "sunset": []}
@@ -351,6 +354,7 @@ class WeatherAPIProvider(WeatherProvider):
                 hourly["cloud_cover"].append(h.get("cloud"))
                 hourly["surface_pressure"].append(h.get("pressure_mb"))
                 hourly["precipitation"].append(h.get("precip_mm"))
+                hourly["dew_point_2m"].append(h.get("dewpoint_c"))
                 hourly["shortwave_radiation"].append(None)  # WeatherAPI has UV index only, not irradiance
 
         return {"hourly": hourly, "daily": daily, "utc_offset_seconds": _tz_offset_seconds(tz_name)}
@@ -402,6 +406,7 @@ class VisualCrossingProvider(WeatherProvider):
                 hourly["cloud_cover"].append(h.get("cloudcover"))
                 hourly["surface_pressure"].append(h.get("pressure"))
                 hourly["precipitation"].append(_in_to_mm(h.get("precip")))
+                hourly["dew_point_2m"].append(_f_to_c(h.get("dew")))  # unitGroup=us -> dew is °F
                 hourly["shortwave_radiation"].append(h.get("solarradiation"))
 
         return {"hourly": hourly, "daily": daily, "utc_offset_seconds": int(float(j.get("tzoffset", 0)) * 3600)}
@@ -454,6 +459,7 @@ class TomorrowIoProvider(WeatherProvider):
             hourly["surface_pressure"].append(v.get("pressureSurfaceLevel"))
             precip_rate = v.get("precipitationIntensity")
             hourly["precipitation"].append(round(precip_rate * 25.4, 1) if precip_rate is not None else None)
+            hourly["dew_point_2m"].append(_f_to_c(v.get("dewPoint")))  # units=imperial -> dewPoint is °F
             hourly["shortwave_radiation"].append(None)  # not in the standard forecast timeline
 
         days_seen, daily = set(), {"sunrise": [], "sunset": []}

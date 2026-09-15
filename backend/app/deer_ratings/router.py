@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import engine
 from app.deer_ratings import rating as deer_rating
 from app.dependencies import require_token
-from app.forecast.service import get_forecast
+from app.forecast.service import get_forecast, get_historical_baseline_f
 from app.settings.service import get_settings
 from app.stands.models import Stand
 
@@ -54,15 +54,14 @@ async def deer_ratings(_=Depends(require_token)):
     for i, t in enumerate(times):
         by_day.setdefault(t[:10], []).append(i)
 
-    # trailing baseline high (mean of available daily highs) for temp-shift
-    daily_highs = []
+    # trailing baseline high — the actual (observed) daily-high average over the
+    # last 7 days ending yesterday (property-local), from Open-Meteo's historical
+    # archive. NOT the mean of this same forward-looking forecast window: that
+    # was self-referential (every day just compared against a baseline that
+    # includes itself and every other forecast day) and couldn't represent
+    # "recent" for the earliest, highest-confidence rated days.
     day_keys = sorted(by_day.keys())
-    for dk in day_keys:
-        highs = [h["temperature_2m"][i] for i in by_day[dk]]
-        daily_highs.append(max(highs) if highs else None)
-    valid_highs = [x for x in daily_highs if x is not None]
-    baseline_c = sum(valid_highs) / len(valid_highs) if valid_highs else None
-    baseline_f = (baseline_c * 9 / 5 + 32) if baseline_c is not None else None
+    baseline_f = await get_historical_baseline_f(lat, lon, _local_today - timedelta(days=1))
 
     out = []
     for di, dk in enumerate(day_keys):
@@ -82,6 +81,8 @@ async def deer_ratings(_=Depends(require_token)):
                   sum((h["rain"][i] if h.get("rain") else 0) or 0 for i in day_idxs)
         high_c = max((h["temperature_2m"][i] for i in day_idxs), default=None)
         high_f = (high_c * 9 / 5 + 32) if high_c is not None else None
+        dew_c = davg(h.get("dew_point_2m") or [None] * len(times))
+        dew_f = (dew_c * 9 / 5 + 32) if dew_c is not None else None
 
         # pressure: daytime mean (hPa→inHg) and trend across the daytime window
         p_vals = [pressures[i] for i in day_idxs if pressures[i] is not None]
@@ -99,6 +100,7 @@ async def deer_ratings(_=Depends(require_token)):
             "rain_mm": round(rain_mm, 1),
             "day_high_f": round(high_f) if high_f is not None else None,
             "baseline_f": round(baseline_f) if baseline_f is not None else None,
+            "dew_point_f": round(dew_f) if dew_f is not None else None,
         }
         y, m, d = (int(x) for x in dk.split("-"))
         rating = deer_rating.rate_day(_date(y, m, d), wx, rate_weights,
