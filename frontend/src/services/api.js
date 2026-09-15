@@ -1,0 +1,17 @@
+/* ───────── API client ───────── */
+const tokenStore = {
+  get: () => localStorage.getItem("sa_token") || "",
+  set: (t) => localStorage.setItem("sa_token", t),
+  clear: () => localStorage.removeItem("sa_token"),
+};
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const tok = tokenStore.get();
+  if (tok) headers["Authorization"] = `Bearer ${tok}`;
+  const r = await fetch(`/api${path}`, { ...opts, headers });
+  if (r.status === 401) { const e = new Error("unauthorized"); e.code = 401; throw e; }
+  if (!r.ok) { const e = new Error((await r.json().catch(() => ({}))).detail || `error ${r.status}`); e.code = r.status; throw e; }
+  return r.json();
+}
+
+export { tokenStore, api };

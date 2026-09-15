@@ -1,0 +1,283 @@
+"""Route handlers for trail cameras, sightings, and camera images."""
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import FileResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.cameras import providers as cameras_mod
+from app.cameras.models import Camera, CameraSighting
+from app.cameras.schemas import CameraDiscoverIn, CameraIn, CameraUpdateIn
+from app.cameras.service import (
+    _backfill_species_task,
+    _sync_one_camera_task,
+    get_camera_dir,
+)
+from app.core.config import CAMERA_BRANDS, CAMERA_IMAGE_DIR
+from app.core.database import engine
+from app.core.security import decrypt_credentials, encrypt_credentials
+from app.dependencies import require_token
+from app.forecast.service import _camera_health
+from app.settings.service import get_settings
+
+log = logging.getLogger(__name__)
+
+router = APIRouter(tags=["cameras"])
+
+
+@router.get("/api/camera-sightings/{sighting_id}/image")
+def get_sighting_image(sighting_id: int):
+    with Session(engine) as s:
+        sighting = s.get(CameraSighting, sighting_id)
+        if not sighting or not sighting.image_path or not os.path.exists(sighting.image_path):
+            raise HTTPException(404, "image not found")
+        return FileResponse(sighting.image_path)
+
+
+@router.get("/static/camera_images/{subpath:path}")
+def get_static_camera_image(subpath: str):
+    settings = get_settings()
+    base_dir = str(settings.get("camera_image_dir") or CAMERA_IMAGE_DIR)
+    candidate = os.path.join(base_dir, subpath)
+    if os.path.isfile(candidate):
+        return FileResponse(candidate)
+    candidate_default = os.path.join(CAMERA_IMAGE_DIR, subpath)
+    if os.path.isfile(candidate_default):
+        return FileResponse(candidate_default)
+    raise HTTPException(404, "image not found")
+
+
+@router.get("/api/camera-providers")
+def camera_providers(_=Depends(require_token)):
+    """Brand metadata for the setup wizard (which are implemented + required fields)."""
+    return {"providers": cameras_mod.provider_meta()}
+
+
+@router.get("/api/cameras")
+def list_cameras(_=Depends(require_token)):
+    max_age = float(get_settings().get("camera_health_max_age_hours", 48.0) or 48.0)
+    with Session(engine) as s:
+        out = []
+        for c in s.scalars(select(Camera).where(Camera.is_deleted == 0).order_by(Camera.name)).all():
+            d = c.to_dict()
+            d["health"] = _camera_health(c.last_seen_at, c.photo_count, c.photo_limit, max_age)
+            out.append(d)
+        return out
+
+
+@router.post("/api/cameras")
+def create_camera(body: CameraIn, _=Depends(require_token)):
+    if body.brand not in CAMERA_BRANDS:
+        raise HTTPException(400, "unknown brand")
+    now = datetime.now(timezone.utc).isoformat()
+    with Session(engine) as s:
+        cam = Camera(
+            name=body.name, brand=body.brand, stand_id=body.stand_id, is_active=1,
+            created_at=now,
+            credentials_json=encrypt_credentials(body.credentials) if body.credentials else None,
+        )
+        s.add(cam); s.commit(); s.refresh(cam)
+        return cam.to_dict()
+
+
+@router.post("/api/cameras/discover")
+async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
+    """Connect a brand account and list/create/update camera records from the provider.
+    With no `selections`, this is a preview/dry-run: cameras are classified
+    ("new" / "existing" / "previously_removed") but nothing is written. Pass
+    `selections` (provider_ref -> include) to apply — a previously-removed
+    camera is only restored (un-skipped) if its ref is selected."""
+    try:
+        prov = cameras_mod.get_provider(body.brand, body.credentials)
+    except cameras_mod.CameraError as e:
+        raise HTTPException(400, str(e))
+    if not prov.implemented:
+        raise HTTPException(501, f"{body.brand} sync is not implemented yet")
+    try:
+        sp_cameras = await prov.fetch_cameras()
+    except cameras_mod.CameraError as e:
+        raise HTTPException(400, str(e))
+
+    creds_enc = encrypt_credentials(body.credentials)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with Session(engine) as s:
+        def classify(ref):
+            existing = s.scalars(
+                select(Camera).where(Camera.brand == body.brand, Camera.provider_ref == ref)
+            ).first()
+            if existing and existing.is_deleted:
+                return existing, "previously_removed"
+            if existing:
+                return existing, "existing"
+            return None, "new"
+
+        if body.selections is None:
+            cameras = [{"provider_ref": sp["id"], "name": sp["name"], "status": classify(sp["id"])[1]}
+                       for sp in sp_cameras]
+            return {"preview": True, "cameras": cameras}
+
+        created, updated, restored, skipped = [], [], [], []
+        for sp in sp_cameras:
+            ref, name = sp["id"], sp["name"]
+            include = body.selections.get(ref, True)
+            existing, status = classify(ref)
+            if status == "previously_removed":
+                if not include:
+                    skipped.append({"name": name, "provider_ref": ref})
+                    continue
+                existing.is_deleted = 0
+                existing.name = name
+                existing.credentials_json = creds_enc
+                existing.last_seen_at = sp.get("last_seen_at")
+                existing.photo_count = sp.get("photo_count")
+                existing.photo_limit = sp.get("photo_limit")
+                s.commit(); s.refresh(existing)
+                restored.append(existing.to_dict())
+            elif status == "existing":
+                if not include:
+                    continue
+                changed = existing.name != name or existing.credentials_json != creds_enc
+                if changed:
+                    existing.name = name
+                    existing.credentials_json = creds_enc
+                existing.last_seen_at = sp.get("last_seen_at")
+                existing.photo_count = sp.get("photo_count")
+                existing.photo_limit = sp.get("photo_limit")
+                s.commit()
+                s.refresh(existing)
+                updated.append(existing.to_dict())
+            else:
+                if not include:
+                    continue
+                cam = Camera(
+                    name=name, brand=body.brand, provider_ref=ref,
+                    credentials_json=creds_enc,
+                    stand_id=None, is_active=1, is_deleted=0, created_at=now,
+                    last_seen_at=sp.get("last_seen_at"),
+                    photo_count=sp.get("photo_count"), photo_limit=sp.get("photo_limit"),
+                )
+                s.add(cam)
+                s.commit()
+                s.refresh(cam)
+                created.append(cam.to_dict())
+
+    log.info("discover_cameras: brand=%s created=%d updated=%d restored=%d skipped=%d",
+             body.brand, len(created), len(updated), len(restored), len(skipped))
+    return {"preview": False, "created": created, "updated": updated, "restored": restored, "skipped": skipped}
+
+
+@router.put("/api/cameras/{camera_id}")
+def update_camera(camera_id: int, body: CameraUpdateIn, _=Depends(require_token)):
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam:
+            raise HTTPException(404, "not found")
+        if body.name is not None:
+            cam.name = body.name
+        # Use model_fields_set to distinguish "field not sent" from "field sent as null".
+        # {"stand_id": null}  → unassign camera from its stand (cam.stand_id = None)
+        # {"stand_id": 3}     → assign to stand 3
+        # {}                  → don't touch stand_id at all
+        if "stand_id" in body.model_fields_set:
+            cam.stand_id = body.stand_id
+        if body.is_active is not None:
+            cam.is_active = 1 if body.is_active else 0
+        if body.credentials is not None:
+            cam.credentials_json = encrypt_credentials(body.credentials)
+        s.commit(); s.refresh(cam)
+        return cam.to_dict()
+
+
+@router.delete("/api/cameras/{camera_id}")
+def delete_camera(camera_id: int, delete_images: bool = False, _=Depends(require_token)):
+    deleted_dir = None
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if cam:
+            if delete_images:
+                deleted_dir = get_camera_dir(cam.brand, cam.name)
+            # Delete all sightings for this camera
+            for sg in s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all():
+                s.delete(sg)
+            # Soft-delete so this camera is never auto-recreated by discover
+            cam.is_deleted = 1
+            s.commit()
+    if delete_images and deleted_dir:
+        import shutil
+        if os.path.isdir(deleted_dir):
+            try:
+                shutil.rmtree(deleted_dir)
+                log.info("delete_camera: removed image dir %s", deleted_dir)
+            except Exception as exc:
+                log.warning("delete_camera: failed to remove %s: %s", deleted_dir, exc)
+    return {"ok": True}
+
+
+@router.post("/api/cameras/{camera_id}/verify")
+async def verify_camera(camera_id: int, _=Depends(require_token)):
+    """Test stored credentials against the provider."""
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam:
+            raise HTTPException(404, "not found")
+        creds = decrypt_credentials(cam.credentials_json)
+        brand = cam.brand
+    try:
+        prov = cameras_mod.get_provider(brand, creds)
+        ok = await prov.verify()
+        return {"ok": bool(ok), "implemented": prov.implemented}
+    except cameras_mod.NotImplementedProvider as e:
+        raise HTTPException(501, str(e))
+    except cameras_mod.CameraError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/api/cameras/{camera_id}/sync")
+async def sync_camera_now(camera_id: int, bg: BackgroundTasks, _=Depends(require_token)):
+    """Manually trigger a sync for one camera. Returns immediately; sync runs in background."""
+    bg.add_task(_sync_one_camera_task, camera_id)
+    return {"ok": True, "status": "running"}
+
+
+@router.post("/api/cameras/backfill-species")
+def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
+    """Reclassify existing sightings that predate species tracking. The
+    candidate count is computed here (synchronously) so it's visible in the
+    HTTP response right away; the actual reclassification runs in the
+    background — check server logs (grep for "backfill_species") for a
+    completion summary. Only sightings with their original photo still on
+    disk can be reclassified."""
+    with Session(engine) as s:
+        ids = list(s.scalars(
+            select(CameraSighting.id).where(
+                CameraSighting.species.is_(None),
+                CameraSighting.image_path.isnot(None),
+            )
+        ).all())
+    log.info("backfill_species: queued — %d candidate sighting(s)", len(ids))
+    bg.add_task(_backfill_species_task, ids)
+    return {"ok": True, "status": "running", "candidates": len(ids)}
+
+
+@router.get("/api/cameras/{camera_id}/sightings")
+def camera_sightings(
+    camera_id: int,
+    limit: int = 100,       # max rows returned; capped at 1000
+    since: Optional[str] = None,  # ISO timestamp — return only sightings newer than this
+    _=Depends(require_token),
+):
+    """Paginated sighting list. Default: 100 most-recent. Use `since` for incremental
+    loads (pass the last timestamp you received to get only newer records)."""
+    with Session(engine) as s:
+        q = select(CameraSighting).where(CameraSighting.camera_id == camera_id)
+        if since:
+            q = q.where(CameraSighting.timestamp > since)
+        q = q.order_by(CameraSighting.timestamp.desc()).limit(max(1, min(limit, 1000)))
+        return [r.to_dict() for r in s.scalars(q).all()]
