@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { MapPin, Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun } from "lucide-react";
+import { MapPin, Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars } from "lucide-react";
 import { api } from "../services/api.js";
 import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
@@ -34,6 +34,15 @@ function SettingsPage() {
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80 }); }
   function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
   function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3 }); }
+  function resetScouting() {
+    setS({ ...s,
+      scout_radius_default_m: 800.0, scout_radius_min_m: 60.0, scout_radius_max_m: 2400.0,
+      scout_grid_n: 60, scout_steep_slope_pct: 20.0, scout_max_pinch_width_m: 120.0,
+      scout_min_candidate_score: 40.0, scout_min_separation_m: 150.0, scout_max_suggestions_per_run: 8,
+      scout_suggestion_radius_m: 60.0, scout_overlap_skip_threshold: 0.5,
+      scout_weight_terrain: 0.55, scout_weight_proximity: 0.20, scout_weight_camera: 0.15, scout_weight_unexplored: 0.10,
+    });
+  }
 
   const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) && +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
   async function saveHome() {
@@ -57,6 +66,8 @@ function SettingsPage() {
     { key: "rate_w_temp",     label: "Temperature shift" },
   ];
   const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
+  const scoutWSum = (s.scout_weight_terrain ?? 0.55) + (s.scout_weight_proximity ?? 0.20)
+    + (s.scout_weight_camera ?? 0.15) + (s.scout_weight_unexplored ?? 0.10) || 1;
 
   const selectedProvider = weatherProviders.find((p) => p.id === (s.weather_provider || "open_meteo"));
   const needsSecondary = selectedProvider && !selectedProvider.has_solar;
@@ -247,6 +258,82 @@ function SettingsPage() {
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+      </div>
+
+      {/* ── Scouting suggestions ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
+        <Binoculars size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Scouting suggestions
+      </div>
+      <p className="settings-desc">
+        Controls how the "Scouting Suggestions" map tool analyzes a drawn area for
+        candidate hunting locations — terrain funnels, habitat edges, and how much
+        weight your own zones/corridors/sign/cameras carry versus the raw terrain model.
+      </p>
+      <div className="settings-section">
+        <SliderRow label="Default analysis radius" min={60} max={2400} step={20}
+          value={s.scout_radius_default_m ?? 800} display={`${Math.round(s.scout_radius_default_m ?? 800)} m`}
+          onChange={(v) => setS({ ...s, scout_radius_default_m: v })}
+          info="Starting circle size when you drop a new scouting-analysis point. You can still drag the edge to resize before running it." />
+        <SliderRow label="Minimum analysis radius" min={20} max={500} step={10}
+          value={s.scout_radius_min_m ?? 60} display={`${Math.round(s.scout_radius_min_m ?? 60)} m`}
+          onChange={(v) => setS({ ...s, scout_radius_min_m: v })}
+          info="Smallest area you're allowed to analyze — keeps you from accidentally requesting a useless few-foot circle." />
+        <SliderRow label="Maximum analysis radius" min={500} max={8000} step={100}
+          value={s.scout_radius_max_m ?? 2400}
+          display={(s.scout_radius_max_m ?? 2400) >= 1000 ? `${((s.scout_radius_max_m ?? 2400) / 1609.34).toFixed(1)} mi` : `${Math.round(s.scout_radius_max_m ?? 2400)} m`}
+          onChange={(v) => setS({ ...s, scout_radius_max_m: v })}
+          info="Largest area you're allowed to analyze in one run. Raising this doesn't slow anything down by itself — see grid resolution below — but a bigger circle does mean coarser detail per cell." />
+        <SliderRow label="Analysis grid resolution" min={20} max={100} step={5}
+          value={s.scout_grid_n ?? 60} display={`${Math.round(s.scout_grid_n ?? 60)}×${Math.round(s.scout_grid_n ?? 60)}`}
+          onChange={(v) => setS({ ...s, scout_grid_n: v })}
+          info="Number of sample points across the analysis circle, in both directions. Higher = finer terrain/land-cover detail but a slower analysis (grows roughly with the square of this number) — this is what keeps runtime predictable regardless of how large a circle you draw." />
+        <SliderRow label="Steep-slope threshold" min={5} max={40} step={1}
+          value={s.scout_steep_slope_pct ?? 20} display={`${Math.round(s.scout_steep_slope_pct ?? 20)}%`}
+          onChange={(v) => setS({ ...s, scout_steep_slope_pct: v })}
+          info="Slope grade treated as a 'wall' when detecting pinch points — a narrow gap between two of these counts as a terrain funnel." />
+        <SliderRow label="Max pinch-point width" min={30} max={300} step={10}
+          value={s.scout_max_pinch_width_m ?? 120} display={`${Math.round(s.scout_max_pinch_width_m ?? 120)} m`}
+          onChange={(v) => setS({ ...s, scout_max_pinch_width_m: v })}
+          info="Widest gap between two steep-slope walls that still counts as a funnel pinch point. Narrower = only tight, obvious funnels qualify." />
+        <SliderRow label="Minimum suggestion score" min={0} max={100} step={5}
+          value={s.scout_min_candidate_score ?? 40} display={`${Math.round(s.scout_min_candidate_score ?? 40)}`}
+          onChange={(v) => setS({ ...s, scout_min_candidate_score: v })}
+          info="A location has to score at least this high (of 100) before it's even considered as a candidate — raise it to see only your strongest suggestions." />
+        <SliderRow label="Minimum suggestion separation" min={50} max={500} step={25}
+          value={s.scout_min_separation_m ?? 150} display={`${Math.round(s.scout_min_separation_m ?? 150)} m`}
+          onChange={(v) => setS({ ...s, scout_min_separation_m: v })}
+          info="How close two candidate spots can be before they're merged into a single suggestion instead of two separate ones." />
+        <SliderRow label="Max suggestions per run" min={1} max={20} step={1}
+          value={s.scout_max_suggestions_per_run ?? 8} display={`${Math.round(s.scout_max_suggestions_per_run ?? 8)}`}
+          onChange={(v) => setS({ ...s, scout_max_suggestions_per_run: v })} />
+        <SliderRow label="Suggestion marker size" min={20} max={200} step={10}
+          value={s.scout_suggestion_radius_m ?? 60} display={`${Math.round(s.scout_suggestion_radius_m ?? 60)} m`}
+          onChange={(v) => setS({ ...s, scout_suggestion_radius_m: v })}
+          info="Radius of the flagged area drawn on the map for each suggestion." />
+        <SliderRow label="'Only show new ones' overlap threshold" min={0.1} max={0.9} step={0.05}
+          value={s.scout_overlap_skip_threshold ?? 0.5} display={`${Math.round((s.scout_overlap_skip_threshold ?? 0.5) * 100)}%`}
+          onChange={(v) => setS({ ...s, scout_overlap_skip_threshold: v })}
+          info="When re-analyzing overlapping ground with 'Only show new ones', a new candidate is skipped if it overlaps an existing suggestion by more than this fraction of its own area." />
+      </div>
+      <p className="settings-desc" style={{ marginTop: 4 }}>Score weights — how much each factor contributes to a suggestion's 0–100 score. Relative to each other; you don't need them to sum to 1.</p>
+      <div className="settings-section">
+        <SliderRow label={`Terrain (funnels + habitat edges) — ${Math.round((s.scout_weight_terrain ?? 0.55) / scoutWSum * 100)}%`}
+          min={0} max={1} step={0.05} value={s.scout_weight_terrain ?? 0.55} display={(s.scout_weight_terrain ?? 0.55).toFixed(2)}
+          onChange={(v) => setS({ ...s, scout_weight_terrain: v })} />
+        <SliderRow label={`Proximity to your zones/corridors/sign — ${Math.round((s.scout_weight_proximity ?? 0.20) / scoutWSum * 100)}%`}
+          min={0} max={1} step={0.05} value={s.scout_weight_proximity ?? 0.20} display={(s.scout_weight_proximity ?? 0.20).toFixed(2)}
+          onChange={(v) => setS({ ...s, scout_weight_proximity: v })} />
+        <SliderRow label={`Nearby camera confirmation — ${Math.round((s.scout_weight_camera ?? 0.15) / scoutWSum * 100)}%`}
+          min={0} max={1} step={0.05} value={s.scout_weight_camera ?? 0.15} display={(s.scout_weight_camera ?? 0.15).toFixed(2)}
+          onChange={(v) => setS({ ...s, scout_weight_camera: v })} />
+        <SliderRow label={`Unexplored-ground bonus — ${Math.round((s.scout_weight_unexplored ?? 0.10) / scoutWSum * 100)}%`}
+          min={0} max={1} step={0.05} value={s.scout_weight_unexplored ?? 0.10} display={(s.scout_weight_unexplored ?? 0.10).toFixed(2)}
+          onChange={(v) => setS({ ...s, scout_weight_unexplored: v })}
+          info="Biases suggestions toward ground far from your existing stands/cameras/suggestions, so the feature surfaces genuinely new spots instead of just re-confirming places you already know about." />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+        <button className="btn" onClick={resetScouting}>Reset defaults</button>
       </div>
 
       {/* ── Rut calendar ── */}

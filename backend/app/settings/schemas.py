@@ -38,6 +38,21 @@ class SettingsIn(BaseModel):
     weather_provider_api_key: str | None = None
     weather_secondary_provider: str | None = None
     weather_secondary_provider_api_key: str | None = None
+    scout_radius_default_m: float | None = None
+    scout_radius_min_m: float | None = None
+    scout_radius_max_m: float | None = None
+    scout_grid_n: float | None = None
+    scout_steep_slope_pct: float | None = None
+    scout_max_pinch_width_m: float | None = None
+    scout_min_candidate_score: float | None = None
+    scout_min_separation_m: float | None = None
+    scout_max_suggestions_per_run: float | None = None
+    scout_suggestion_radius_m: float | None = None
+    scout_overlap_skip_threshold: float | None = None
+    scout_weight_terrain: float | None = None
+    scout_weight_proximity: float | None = None
+    scout_weight_camera: float | None = None
+    scout_weight_unexplored: float | None = None
 
 
 class HomeIn(BaseModel):

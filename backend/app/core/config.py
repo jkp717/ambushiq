@@ -68,4 +68,21 @@ DEFAULT_SETTINGS = {
     "weather_provider_api_key": "",
     "weather_secondary_provider": "",
     "weather_secondary_provider_api_key": "",
+    # v2.28: Scouting Suggestions — terrain/land-cover analysis of a user-drawn
+    # circle that flags candidate locations to go scout in person
+    "scout_radius_default_m": 800.0,
+    "scout_radius_min_m": 60.0,
+    "scout_radius_max_m": 2400.0,          # ~1.5 mi
+    "scout_grid_n": 60,                    # fixed sample-grid dimension (NxN), independent of radius
+    "scout_steep_slope_pct": 20.0,         # slope% treated as a "wall" for pinch-point detection
+    "scout_max_pinch_width_m": 120.0,      # widest gap between two walls still called a pinch point
+    "scout_min_candidate_score": 40.0,     # floor before a grid cell is considered at all (0-100 scale)
+    "scout_min_separation_m": 150.0,       # non-max-suppression radius when clustering candidates
+    "scout_max_suggestions_per_run": 8,
+    "scout_suggestion_radius_m": 60.0,     # radius of each persisted suggestion's map marker
+    "scout_overlap_skip_threshold": 0.5,   # "merge" mode: skip a candidate overlapping an existing one by more than this fraction
+    "scout_weight_terrain": 0.55,
+    "scout_weight_proximity": 0.20,
+    "scout_weight_camera": 0.15,
+    "scout_weight_unexplored": 0.10,
 }
