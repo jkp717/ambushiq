@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { MapPin, Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars } from "lucide-react";
 import { api } from "../services/api.js";
 import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
@@ -9,12 +9,10 @@ import InfoTip from "../components/ui/InfoTip.jsx";
 
 function SettingsPage() {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
-  const [homeLat, setHomeLat] = useState(""); const [homeLon, setHomeLon] = useState(""); const [homeSaved, setHomeSaved] = useState(false);
   const [weatherProviders, setWeatherProviders] = useState([]);
   const [weatherKeyInput, setWeatherKeyInput] = useState("");
   const [weatherSecondaryKeyInput, setWeatherSecondaryKeyInput] = useState("");
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn't load settings.")); }, []);
-  useEffect(() => { api("/home").then((h) => { if (h.set) { setHomeLat(String(h.lat)); setHomeLon(String(h.lon)); } }).catch(() => {}); }, []);
   useEffect(() => { api("/weather-providers").then((r) => setWeatherProviders(r.providers || [])).catch(() => {}); }, []);
 
   async function save() {
@@ -44,12 +42,6 @@ function SettingsPage() {
     });
   }
 
-  const homeValid = homeLat !== "" && homeLon !== "" && !isNaN(+homeLat) && !isNaN(+homeLon) && +homeLat >= -90 && +homeLat <= 90 && +homeLon >= -180 && +homeLon <= 180;
-  async function saveHome() {
-    try { await api("/home", { method: "PUT", body: JSON.stringify({ lat: +homeLat, lon: +homeLon }) }); setHomeSaved(true); setTimeout(() => setHomeSaved(false), 1800); }
-    catch { setErr("Couldn't save."); }
-  }
-
   if (!s) return <div style={{ padding: 16 }}>{err ? <Banner>{err}</Banner> : <Empty>Loading…</Empty>}</div>;
 
   const PROX_TYPES = [
@@ -77,16 +69,6 @@ function SettingsPage() {
   return (
     <div className="settings-page">
       {err && <Banner>{err}</Banner>}
-
-      <div className="settings-section">
-        <div className="settings-section-hd"><MapPin size={16} color="var(--navy)" /><strong>Hunt region</strong></div>
-        <p className="settings-desc">Centers the map before you've placed any stands.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
-          <Field label="Latitude"><input value={homeLat} onChange={(e) => setHomeLat(e.target.value)} placeholder="34.7465" inputMode="decimal" /></Field>
-          <Field label="Longitude"><input value={homeLon} onChange={(e) => setHomeLon(e.target.value)} placeholder="-92.2896" inputMode="decimal" /></Field>
-          <button className="btn btn-primary" disabled={!homeValid} onClick={saveHome} style={{ height: 38 }}><Save size={15} /> {homeSaved ? "Saved" : "Save"}</button>
-        </div>
-      </div>
 
       <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20 }}>
         <CloudSun size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Weather source
@@ -334,58 +316,6 @@ function SettingsPage() {
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={resetScouting}>Reset defaults</button>
-      </div>
-
-      {/* ── Rut calendar ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
-        🦌 Rut calendar
-      </div>
-      <p className="settings-desc">Peak rut date for your region. Default is Dec 5 (central Arkansas). Move earlier for northern latitudes, later for deep South.</p>
-      <div className="settings-section">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Field label="Peak rut month">
-            <select value={s.rut_peak_month ?? 12} onChange={(e) => setS({ ...s, rut_peak_month: +e.target.value })}>
-              {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => (
-                <option key={i + 1} value={i + 1}>{m}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Peak rut day">
-            <select value={s.rut_peak_day ?? 5} onChange={(e) => setS({ ...s, rut_peak_day: +e.target.value })}>
-              {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </Field>
-        </div>
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
-      </div>
-
-      {/* ── Property timezone ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 24 }}>
-        🕐 Property timezone
-      </div>
-      <p className="settings-desc">
-        Timezone where your hunting property is located. Keeps "Today" labels,
-        stand rankings, and the nightly cleanup job aligned with local time rather
-        than the server's UTC clock.
-      </p>
-      <div className="settings-section">
-        <Field label="Timezone">
-          <select value={s.property_timezone ?? "America/Chicago"}
-            onChange={(e) => setS({ ...s, property_timezone: e.target.value })}>
-            <option value="America/New_York">Eastern — New York, Atlanta, Miami (ET)</option>
-            <option value="America/Chicago">Central — Chicago, Dallas, Kansas City (CT)</option>
-            <option value="America/Denver">Mountain — Denver, Salt Lake City (MT)</option>
-            <option value="America/Phoenix">Mountain no-DST — Phoenix (MST year-round)</option>
-            <option value="America/Los_Angeles">Pacific — Los Angeles, Seattle (PT)</option>
-            <option value="America/Anchorage">Alaska (AKT)</option>
-            <option value="Pacific/Honolulu">Hawaii (no DST)</option>
-          </select>
-        </Field>
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
-        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
       </div>
     </div>
   );

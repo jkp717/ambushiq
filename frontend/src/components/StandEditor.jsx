@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Mountain, Save, X, MapPin } from "lucide-react";
-import { tokenStore, api } from "../services/api.js";
+import { tokenStore, regionStore, api } from "../services/api.js";
 import Field from "./ui/Field.jsx";
 import DirPicker from "./ui/DirPicker.jsx";
 import TerrainPanel from "./TerrainPanel.jsx";
@@ -43,13 +43,15 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
 
       setStatusText("Connecting to elevation service...");
       
-      // Use the application's native tokenStore helper for consistency
+      // Use the application's native tokenStore/regionStore helpers for consistency
       const tok = tokenStore.get();
+      const regionId = regionStore.get();
       const res = await fetch(`/api/stands/${id}/terrain`, {
         method: "POST",
-        headers: { 
-          "Content-Type": "application/json", 
-          ...(tok ? { "Authorization": `Bearer ${tok}` } : {}) 
+        headers: {
+          "Content-Type": "application/json",
+          ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
+          ...(regionId ? { "X-Region-Id": regionId } : {}),
         }
       });
 

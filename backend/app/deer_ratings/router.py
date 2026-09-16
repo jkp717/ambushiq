@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.deer_ratings import rating as deer_rating
-from app.dependencies import require_token
+from app.dependencies import get_active_region_id, require_token
 from app.forecast.service import get_forecast, get_historical_baseline_f
+from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 from app.stands.models import Stand
 
@@ -18,16 +19,17 @@ router = APIRouter(tags=["deer_ratings"])
 
 
 @router.get("/api/deer-ratings")
-async def deer_ratings(_=Depends(require_token)):
+async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """1-5 deer movement rating per forecast day, optimized for daytime movement."""
     from datetime import date as _date
     # local_today derived from the forecast UTC offset below, after fc is fetched.
+    region = get_region_dict(region_id)
     with Session(engine) as s:
-        first = s.scalars(select(Stand).order_by(Stand.name)).first()
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "add a stand first")
         lat, lon = first.lat, first.lon
-    fc = await get_forecast(lat, lon, days=14)
+    fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
     sun = fc["daily"]
     times = h["time"]
@@ -104,8 +106,8 @@ async def deer_ratings(_=Depends(require_token)):
         }
         y, m, d = (int(x) for x in dk.split("-"))
         rating = deer_rating.rate_day(_date(y, m, d), wx, rate_weights,
-                                      rut_peak_month=int(_set.get("rut_peak_month", 12)),
-                                      rut_peak_day=int(_set.get("rut_peak_day", 5)))
+                                      rut_peak_month=int(region["rut_peak_month"]),
+                                      rut_peak_day=int(region["rut_peak_day"]))
         label = datetime.fromisoformat(dk + "T12:00").strftime("%a %b %-d")
         rating["day"] = dk
         rating["label"] = label

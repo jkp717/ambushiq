@@ -17,7 +17,7 @@ from app.forecast.providers import get_weather_provider
 from app.settings.service import get_settings
 
 
-def _camera_status_by_stand() -> dict[int, dict]:
+def _camera_status_by_stand(region_id: int) -> dict[int, dict]:
     """Per-stand snapshot of its earliest active, non-deleted camera: creation
     time (for the grace-period check) plus provider-reported health (for the
     unhealthy-camera check) — see _camera_ready() and _camera_health() below.
@@ -26,7 +26,8 @@ def _camera_status_by_stand() -> dict[int, dict]:
     out: dict[int, dict] = {}
     with Session(engine) as s:
         rows = s.scalars(select(Camera).where(
-            Camera.is_active == 1, Camera.is_deleted == 0, Camera.stand_id.isnot(None)
+            Camera.is_active == 1, Camera.is_deleted == 0, Camera.stand_id.isnot(None),
+            Camera.region_id == region_id,
         )).all()
         for c in rows:
             if c.created_at and (c.stand_id not in out or c.created_at < out[c.stand_id]["created_at"]):
@@ -246,13 +247,15 @@ def _apply_safety_defaults(forecast: dict) -> None:
         solar[i] = round(700 * math.sin(math.pi * frac) * (1 - 0.75 * cloud_i / 100), 1)
 
 
-async def get_forecast(lat: float, lon: float, days: int = 3) -> dict:
+async def get_forecast(lat: float, lon: float, days: int = 3, tz_name: str | None = None) -> dict:
     settings = get_settings()
-    tz_name = str(settings.get("property_timezone") or "America/Chicago")
+    tz_name = tz_name or "America/Chicago"
     primary_id = str(settings.get("weather_provider") or "open_meteo")
     secondary_id = str(settings.get("weather_secondary_provider") or "")
 
-    key = f"{lat:.3f},{lon:.3f}:{days}:{primary_id}:{secondary_id}"
+    # tz_name is part of the key: two regions at the same lat/lon with
+    # different timezones must not share a cached forecast.
+    key = f"{lat:.3f},{lon:.3f}:{days}:{primary_id}:{secondary_id}:{tz_name}"
     now = time.time()
     if key in _fc_cache and now - _fc_cache[key][0] < FC_TTL:
         return _fc_cache[key][1]

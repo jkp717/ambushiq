@@ -10,10 +10,16 @@ import {
 
 const MIN_ZOOM_FLOOR = 5; // leaflet.offline's own sanity floor — prevents saving the whole USA
 
+// Records from before regions existed carry no regionId — keep them visible
+// under every region rather than orphaning them.
+function filterAreasForRegion(areas, activeRegion) {
+  return areas.filter((a) => !a.regionId || a.regionId === activeRegion.id);
+}
+
 /** Map-page panel for downloading the current view's tiles into IndexedDB so
  * the map still renders with no/poor signal. Reads the Leaflet map + base
  * layers off the HuntMap ref rather than owning any map state itself. */
-function OfflineMapsPanel({ mapApi, onClose }) {
+function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
   const map = mapApi.getMap();
   const offlineLayers = mapApi.getBaseLayers(); // { topo: {id,label,url,layer}, imagery: {...} }
   const layerList = Object.values(offlineLayers || {});
@@ -25,7 +31,7 @@ function OfflineMapsPanel({ mapApi, onClose }) {
   const [progress, setProgress] = useState(null); // { layerLabel, done, total, layerIdx, layerCount }
   const cancelledRef = useRef(false);
   const [err, setErr] = useState(null);
-  const [areas, setAreas] = useState(() => listSavedAreas());
+  const [areas, setAreas] = useState(() => filterAreasForRegion(listSavedAreas(), activeRegion));
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
@@ -88,6 +94,7 @@ function OfflineMapsPanel({ mapApi, onClose }) {
           label: label.trim() || `${target.label} area`,
           layerId: target.id,
           layerLabel: target.label,
+          regionId: activeRegion.id,
           minZoom, maxZoom,
           tileKeys: result.tileKeys,
           tileCount: result.total,
@@ -100,13 +107,13 @@ function OfflineMapsPanel({ mapApi, onClose }) {
       }
     }
     setProgress(null);
-    setAreas(listSavedAreas());
+    setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
     setLabel("");
   }
 
   async function removeArea(id) {
     await deleteSavedArea(id);
-    setAreas(listSavedAreas());
+    setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
   }
 
   return (

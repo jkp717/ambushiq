@@ -12,7 +12,7 @@ from app.cameras.models import CameraSighting
 from app.core.database import engine
 from app.corridors.models import Corridor
 from app.deer_sign.models import DeerSign
-from app.dependencies import require_token
+from app.dependencies import get_active_region_id, require_token
 from app.forecast import scoring
 from app.forecast.providers import weather_provider_meta
 from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
@@ -25,6 +25,7 @@ from app.forecast.service import (
     get_forecast,
     proximity_bonus,
 )
+from app.regions.service import get_region_dict
 from app.settings.service import _thermal_params, get_settings
 from app.stands.models import Stand
 from app.zones.models import Zone
@@ -39,28 +40,31 @@ def weather_providers(_=Depends(require_token)):
 
 
 @router.get("/api/forecast")
-async def forecast_endpoint(_=Depends(require_token)):
+async def forecast_endpoint(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    region = get_region_dict(region_id)
     with Session(engine) as s:
-        first = s.scalars(select(Stand).order_by(Stand.name)).first()
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "add a stand first")
         lat, lon = first.lat, first.lon
     try:
-        fc = await get_forecast(lat, lon)
+        fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
     except Exception as e:
         raise HTTPException(502, f"forecast unreachable: {e}")
     return {"sits": build_sits(fc)}
 
 
 @router.post("/api/rank/sit")
-async def rank_sit(body: SitRankIn, _=Depends(require_token)):
+async def rank_sit(body: SitRankIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    region = get_region_dict(region_id)
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
-        first = s.scalars(select(Stand).order_by(Stand.name)).first()
+        stands = [r.to_dict() for r in s.scalars(
+            select(Stand).where(Stand.is_active == 1, Stand.region_id == region_id)).all()]
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "no stands")
         lat, lon = first.lat, first.lon
-    fc = await get_forecast(lat, lon)
+    fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
     h = fc["hourly"]
     temp_swing_by_day = _temp_swing_by_day(h)
     mid = (body.sunrise_h + body.sunset_h) / 2
@@ -88,9 +92,10 @@ async def rank_sit(body: SitRankIn, _=Depends(require_token)):
 
 
 @router.post("/api/rank/manual")
-def rank_manual(body: ManualRankIn, _=Depends(require_token)):
+def rank_manual(body: ManualRankIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
+        stands = [r.to_dict() for r in s.scalars(
+            select(Stand).where(Stand.is_active == 1, Stand.region_id == region_id)).all()]
     wind_from = scoring.compass_to_deg(body.wind_dir)
     time_h = {"morning": 7, "midday": 13, "evening": 18}.get(body.period, 13)
     solar = 500 if body.period == "midday" else 50
@@ -106,15 +111,16 @@ def rank_manual(body: ManualRankIn, _=Depends(require_token)):
 
 
 @router.get("/api/hours")
-async def list_hours(_=Depends(require_token)):
+async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """Forecast hours grouped by day, for the day picker + hourly slider."""
+    region = get_region_dict(region_id)
     with Session(engine) as s:
-        first = s.scalars(select(Stand).order_by(Stand.name)).first()
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "add a stand first")
         lat, lon = first.lat, first.lon
     try:
-        fc = await get_forecast(lat, lon, days=14)
+        fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     except Exception as e:
         raise HTTPException(502, f"forecast unreachable: {e}")
     times = fc["hourly"]["time"]
@@ -155,17 +161,20 @@ async def list_hours(_=Depends(require_token)):
 
 
 @router.post("/api/map/conditions")
-async def map_conditions(body: HourRankIn, _=Depends(require_token)):
+async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_region_id),
+                          _=Depends(require_token)):
     """Per-stand wind + thermal vectors at one forecast hour, plus a ranked list
     in sync with that same hour. Drives the map indicators and the list together.
     Camera boost is applied when configured so the map rank matches /api/day/ranked."""
+    region = get_region_dict(region_id)
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
-        first = s.scalars(select(Stand).order_by(Stand.name)).first()
+        stands = [r.to_dict() for r in s.scalars(
+            select(Stand).where(Stand.is_active == 1, Stand.region_id == region_id)).all()]
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "no stands")
         lat, lon = first.lat, first.lon
-    fc = await get_forecast(lat, lon, days=14)
+    fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
     temp_swing_by_day = _temp_swing_by_day(h)
     i = body.time_index
@@ -208,7 +217,7 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
     sightings_by_stand: dict[int, list] = {}
     camera_status_by_stand: dict[int, dict] = {}
     if camera_enabled:
-        camera_status_by_stand = _camera_status_by_stand()
+        camera_status_by_stand = _camera_status_by_stand(region_id)
         with Session(engine) as s:
             for row in s.scalars(select(CameraSighting)).all():
                 sightings_by_stand.setdefault(row.stand_id, []).append(
@@ -258,17 +267,19 @@ async def map_conditions(body: HourRankIn, _=Depends(require_token)):
 
 
 @router.post("/api/day/ranked")
-async def day_ranked(body: DayRankIn, _=Depends(require_token)):
+async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """For a given day, score every stand across morning / midday / evening and
     return the full ranked list (by best period score) with each stand tagged for
     any period it wins."""
+    region = get_region_dict(region_id)
     with Session(engine) as s:
-        stands = [r.to_dict() for r in s.scalars(select(Stand).where(Stand.is_active == 1)).all()]
-        first = s.scalars(select(Stand).order_by(Stand.name)).first()
+        stands = [r.to_dict() for r in s.scalars(
+            select(Stand).where(Stand.is_active == 1, Stand.region_id == region_id)).all()]
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
         if not first:
             raise HTTPException(400, "no stands")
         lat, lon = first.lat, first.lon
-    fc = await get_forecast(lat, lon, days=14)
+    fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
     temp_swing_by_day = _temp_swing_by_day(h)
     sun = fc["daily"]
@@ -305,9 +316,12 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
 
     # proximity inputs
     with Session(engine) as s:
-        zones = [z.to_dict() for z in s.scalars(select(Zone).where(Zone.is_active == 1)).all()]
-        corridors_l = [c.to_dict() for c in s.scalars(select(Corridor).where(Corridor.is_active == 1)).all()]
-        sign_rows = [r.to_dict() for r in s.scalars(select(DeerSign).where(DeerSign.is_active == 1)).all()]
+        zones = [z.to_dict() for z in s.scalars(
+            select(Zone).where(Zone.is_active == 1, Zone.region_id == region_id)).all()]
+        corridors_l = [c.to_dict() for c in s.scalars(
+            select(Corridor).where(Corridor.is_active == 1, Corridor.region_id == region_id)).all()]
+        sign_rows = [r.to_dict() for r in s.scalars(
+            select(DeerSign).where(DeerSign.is_active == 1, DeerSign.region_id == region_id)).all()]
     settings = get_settings()
     # honor the per-type enable toggles from the rank list
     settings = dict(settings)
@@ -336,7 +350,7 @@ async def day_ranked(body: DayRankIn, _=Depends(require_token)):
             sightings_by_stand.setdefault(row.stand_id, []).append(
                 {"timestamp": row.timestamp, "confidence_score": row.confidence_score,
                  "species": row.species})
-    camera_status_by_stand = _camera_status_by_stand()
+    camera_status_by_stand = _camera_status_by_stand(region_id)
 
     def score_period(stand, lo, hi, bonus, period_name, sightings, has_camera, camera_ready,
                       camera_healthy, unhealthy_reason):

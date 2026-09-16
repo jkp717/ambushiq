@@ -10,6 +10,7 @@ from app.core.database import Base
 class DeerSign(Base):
     __tablename__ = "deer_sign"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    region_id: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[str] = mapped_column(String(20))          # "scrape" | "rub"
     name: Mapped[str] = mapped_column(String(120))          # auto-generated
     lat: Mapped[float] = mapped_column(Float)

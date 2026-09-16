@@ -216,7 +216,7 @@ const HuntMap = forwardRef(function HuntMap({
     if (pts.length) { map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 }); fitted.current = true; }
   }, [stands, zones, corridors]);
 
-  // when there are no features to fit, follow the configured home center
+  // when there are no features to fit, follow the active region's center
   useEffect(() => {
     const map = mapRef.current;
     if (!map || fitted.current || !center || center.lat == null) return;

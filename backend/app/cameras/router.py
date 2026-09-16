@@ -22,7 +22,7 @@ from app.cameras.service import (
 from app.core.config import CAMERA_BRANDS, CAMERA_IMAGE_DIR
 from app.core.database import engine
 from app.core.security import decrypt_credentials, encrypt_credentials
-from app.dependencies import require_token
+from app.dependencies import get_active_region_id, require_token
 from app.forecast.service import _camera_health
 from app.settings.service import get_settings
 
@@ -60,11 +60,13 @@ def camera_providers(_=Depends(require_token)):
 
 
 @router.get("/api/cameras")
-def list_cameras(_=Depends(require_token)):
+def list_cameras(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     max_age = float(get_settings().get("camera_health_max_age_hours", 48.0) or 48.0)
     with Session(engine) as s:
         out = []
-        for c in s.scalars(select(Camera).where(Camera.is_deleted == 0).order_by(Camera.name)).all():
+        for c in s.scalars(select(Camera).where(
+            Camera.is_deleted == 0, Camera.region_id == region_id
+        ).order_by(Camera.name)).all():
             d = c.to_dict()
             d["health"] = _camera_health(c.last_seen_at, c.photo_count, c.photo_limit, max_age)
             out.append(d)
@@ -72,14 +74,14 @@ def list_cameras(_=Depends(require_token)):
 
 
 @router.post("/api/cameras")
-def create_camera(body: CameraIn, _=Depends(require_token)):
+def create_camera(body: CameraIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     if body.brand not in CAMERA_BRANDS:
         raise HTTPException(400, "unknown brand")
     now = datetime.now(timezone.utc).isoformat()
     with Session(engine) as s:
         cam = Camera(
             name=body.name, brand=body.brand, stand_id=body.stand_id, is_active=1,
-            created_at=now,
+            created_at=now, region_id=region_id,
             credentials_json=encrypt_credentials(body.credentials) if body.credentials else None,
         )
         s.add(cam); s.commit(); s.refresh(cam)
@@ -87,7 +89,8 @@ def create_camera(body: CameraIn, _=Depends(require_token)):
 
 
 @router.post("/api/cameras/discover")
-async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
+async def discover_cameras(body: CameraDiscoverIn, region_id: int = Depends(get_active_region_id),
+                            _=Depends(require_token)):
     """Connect a brand account and list/create/update camera records from the provider.
     With no `selections`, this is a preview/dry-run: cameras are classified
     ("new" / "existing" / "previously_removed") but nothing is written. Pass
@@ -109,8 +112,11 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
 
     with Session(engine) as s:
         def classify(ref):
+            # Scoped to the active region — the same provider account connected
+            # in two different regions must not collide on brand+provider_ref.
             existing = s.scalars(
-                select(Camera).where(Camera.brand == body.brand, Camera.provider_ref == ref)
+                select(Camera).where(Camera.brand == body.brand, Camera.provider_ref == ref,
+                                      Camera.region_id == region_id)
             ).first()
             if existing and existing.is_deleted:
                 return existing, "previously_removed"
@@ -158,7 +164,7 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
                     continue
                 cam = Camera(
                     name=name, brand=body.brand, provider_ref=ref,
-                    credentials_json=creds_enc,
+                    credentials_json=creds_enc, region_id=region_id,
                     stand_id=None, is_active=1, is_deleted=0, created_at=now,
                     last_seen_at=sp.get("last_seen_at"),
                     photo_count=sp.get("photo_count"), photo_limit=sp.get("photo_limit"),
@@ -174,10 +180,11 @@ async def discover_cameras(body: CameraDiscoverIn, _=Depends(require_token)):
 
 
 @router.put("/api/cameras/{camera_id}")
-def update_camera(camera_id: int, body: CameraUpdateIn, _=Depends(require_token)):
+def update_camera(camera_id: int, body: CameraUpdateIn, region_id: int = Depends(get_active_region_id),
+                   _=Depends(require_token)):
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
-        if not cam:
+        if not cam or cam.region_id != region_id:
             raise HTTPException(404, "not found")
         if body.name is not None:
             cam.name = body.name
@@ -196,13 +203,14 @@ def update_camera(camera_id: int, body: CameraUpdateIn, _=Depends(require_token)
 
 
 @router.delete("/api/cameras/{camera_id}")
-def delete_camera(camera_id: int, delete_images: bool = False, _=Depends(require_token)):
+def delete_camera(camera_id: int, delete_images: bool = False,
+                   region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     deleted_dir = None
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
-        if cam:
+        if cam and cam.region_id == region_id:
             if delete_images:
-                deleted_dir = get_camera_dir(cam.brand, cam.name)
+                deleted_dir = get_camera_dir(cam.brand, cam.name, cam.region_id)
             # Delete all sightings for this camera
             for sg in s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all():
                 s.delete(sg)
@@ -221,11 +229,12 @@ def delete_camera(camera_id: int, delete_images: bool = False, _=Depends(require
 
 
 @router.post("/api/cameras/{camera_id}/verify")
-async def verify_camera(camera_id: int, _=Depends(require_token)):
+async def verify_camera(camera_id: int, region_id: int = Depends(get_active_region_id),
+                         _=Depends(require_token)):
     """Test stored credentials against the provider."""
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
-        if not cam:
+        if not cam or cam.region_id != region_id:
             raise HTTPException(404, "not found")
         creds = decrypt_credentials(cam.credentials_json)
         brand = cam.brand
@@ -240,14 +249,20 @@ async def verify_camera(camera_id: int, _=Depends(require_token)):
 
 
 @router.post("/api/cameras/{camera_id}/sync")
-async def sync_camera_now(camera_id: int, bg: BackgroundTasks, _=Depends(require_token)):
+async def sync_camera_now(camera_id: int, bg: BackgroundTasks, region_id: int = Depends(get_active_region_id),
+                           _=Depends(require_token)):
     """Manually trigger a sync for one camera. Returns immediately; sync runs in background."""
+    with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam or cam.region_id != region_id:
+            raise HTTPException(404, "not found")
     bg.add_task(_sync_one_camera_task, camera_id)
     return {"ok": True, "status": "running"}
 
 
 @router.post("/api/cameras/backfill-species")
-def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
+def backfill_species(bg: BackgroundTasks, region_id: int = Depends(get_active_region_id),
+                      _=Depends(require_token)):
     """Reclassify existing sightings that predate species tracking. The
     candidate count is computed here (synchronously) so it's visible in the
     HTTP response right away; the actual reclassification runs in the
@@ -256,9 +271,12 @@ def backfill_species(bg: BackgroundTasks, _=Depends(require_token)):
     disk can be reclassified."""
     with Session(engine) as s:
         ids = list(s.scalars(
-            select(CameraSighting.id).where(
+            select(CameraSighting.id)
+            .join(Camera, Camera.id == CameraSighting.camera_id)
+            .where(
                 CameraSighting.species.is_(None),
                 CameraSighting.image_path.isnot(None),
+                Camera.region_id == region_id,
             )
         ).all())
     log.info("backfill_species: queued — %d candidate sighting(s)", len(ids))
@@ -271,11 +289,15 @@ def camera_sightings(
     camera_id: int,
     limit: int = 100,       # max rows returned; capped at 1000
     since: Optional[str] = None,  # ISO timestamp — return only sightings newer than this
+    region_id: int = Depends(get_active_region_id),
     _=Depends(require_token),
 ):
     """Paginated sighting list. Default: 100 most-recent. Use `since` for incremental
     loads (pass the last timestamp you received to get only newer records)."""
     with Session(engine) as s:
+        cam = s.get(Camera, camera_id)
+        if not cam or cam.region_id != region_id:
+            raise HTTPException(404, "not found")
         q = select(CameraSighting).where(CameraSighting.camera_id == camera_id)
         if since:
             q = q.where(CameraSighting.timestamp > since)

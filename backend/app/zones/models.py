@@ -13,6 +13,7 @@ from app.core.database import Base
 class Zone(Base):
     __tablename__ = "zones"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    region_id: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[str] = mapped_column(String(16))  # "bedding" | "food"
     name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     lat: Mapped[float] = mapped_column(Float)

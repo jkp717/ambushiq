@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, Download } from "lucide-react";
-import { api, tokenStore } from "../services/api.js";
+import { api, tokenStore, regionStore } from "../services/api.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M } from "../utils/geo.js";
@@ -8,7 +8,6 @@ import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
 import LayerChip from "../components/ui/LayerChip.jsx";
 import HuntMap from "../components/HuntMap.jsx";
-import HomeSetup from "../components/HomeSetup.jsx";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
@@ -76,7 +75,7 @@ function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
   );
 }
 
-function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, reloadZones, reloadCorridors, reloadSign,
+function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
                    openStandEditor, onEditFeature, onDeleteFeature }) {
@@ -100,7 +99,6 @@ function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, re
   const [standLayers, setStandLayers] = useState({});
 
   const [pendingName, setPendingName] = useState(null);
-  const [home, setHome] = useState(null);
   const [err, setErr] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef(null);
@@ -150,7 +148,6 @@ function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, re
     return () => { window.removeEventListener("mouseup", end); window.removeEventListener("touchend", end); };
   }, [sliderDragging]);
 
-  useEffect(() => { api("/home").then(setHome).catch(() => setHome({ set: false })); }, []);
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
   useEffect(() => { if (relocateRequest) { setRelocating(relocateRequest); setDrawMode("relocate"); setDraftPoints([]); clearRelocateRequest(); } }, [relocateRequest, clearRelocateRequest]);
 
@@ -290,9 +287,12 @@ function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, re
     setScoutAnalyzing(true); setScoutError(null); setScoutProgress({ pct: 0, msg: "Starting..." });
     try {
       const tok = tokenStore.get();
+      const regionId = regionStore.get();
       const res = await fetch(`/api/scouting/analyze`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(tok ? { "Authorization": `Bearer ${tok}` } : {}) },
+        headers: { "Content-Type": "application/json",
+          ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
+          ...(regionId ? { "X-Region-Id": regionId } : {}) },
         body: JSON.stringify({ lat, lon, radius_m, mode }),
       });
       if (!res.ok) {
@@ -325,7 +325,6 @@ function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, re
   }
 
   if (!stands.length) {
-    if (home && !home.set) return <div style={{ padding: 16 }}><HomeSetup onSaved={setHome} onCancel={() => {}} /></div>;
     return <div style={{ padding: 16 }}><Empty>Add a stand first to use the map.</Empty></div>;
   }
 
@@ -473,7 +472,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, re
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
-            onDismissSuggestion={onDismissSuggestion} center={home}
+            onDismissSuggestion={onDismissSuggestion} center={{ lat: activeRegion.lat, lon: activeRegion.lon, set: true }}
             scoutDraft={scoutDraft} onScoutRadiusChange={onScoutRadiusChange}
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             height="100%" />
@@ -534,7 +533,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, re
         <CorridorPrompt onCancel={() => setPendingName(null)} onConfirm={confirmName} />
       )}
       {showOfflinePanel && huntMapRef.current && (
-        <OfflineMapsPanel mapApi={huntMapRef.current} onClose={() => setShowOfflinePanel(false)} />
+        <OfflineMapsPanel mapApi={huntMapRef.current} activeRegion={activeRegion} onClose={() => setShowOfflinePanel(false)} />
       )}
       {scoutOverlap && (
         <ScoutingOverlapPrompt count={scoutOverlap.count}

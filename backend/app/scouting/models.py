@@ -13,6 +13,7 @@ from app.core.database import Base
 class ScoutingSuggestion(Base):
     __tablename__ = "scouting_suggestions"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    region_id: Mapped[int] = mapped_column(Integer, nullable=False)
     lat: Mapped[float] = mapped_column(Float)
     lon: Mapped[float] = mapped_column(Float)
     radius_m: Mapped[float] = mapped_column(Float, default=60.0)

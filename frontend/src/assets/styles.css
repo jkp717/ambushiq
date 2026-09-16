@@ -506,7 +506,55 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 }
 .top-bar-nav-item:hover { background: var(--surf); }
 .top-bar-nav-item.active { color: var(--navy); font-weight: 700; background: rgba(12,68,124,.06); }
+.top-bar-nav-item:disabled { opacity: .4; cursor: not-allowed; }
+.top-bar-nav-item:disabled:hover { background: none; }
 .top-bar-nav-divider { height: 1px; background: var(--bord); margin: 4px 0; }
+
+/* ── centered hunting-region switcher in top bar ── */
+/* flex:1 + internal justify-content:center, NOT absolute+left:50% — on a
+   real phone width (~375px) the brand block (icon+"AmbushIQ"+version badge)
+   and this switcher's centered-on-the-whole-bar position can overlap, since
+   absolutely-positioned elements don't participate in the flex layout and
+   don't get pushed aside. Making it a flex:1 child instead centers it in
+   whatever space is actually left between the brand and the nav/lock button
+   — flex children can't overlap their siblings the way absolute ones can. */
+.top-bar-region-drop {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; justify-content: center;
+}
+.top-bar-region-trigger {
+  display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%;
+  background: none; border: none; padding: 6px 10px; border-radius: 8px;
+  color: var(--txt); font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background 0.12s;
+}
+.top-bar-region-trigger:hover { background: var(--surf); }
+.top-bar-region-trigger span { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-bar-region-menu {
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--bord); border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.18); overflow: hidden; z-index: 1100;
+  min-width: 200px; max-width: calc(100vw - 28px);
+}
+/* Ellipsis rather than wrap/overflow for a long region name in the switch
+   list — flex:1 lets it take the available row width (up to the "default"
+   badge, which stays fixed-width via margin-left:auto) and min-width:0
+   overrides flex's default "never shrink below content size" so the
+   ellipsis actually has room to kick in instead of pushing the row wider
+   than the menu (which would otherwise force horizontal scroll/clipping). */
+.region-menu-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.region-badge {
+  font-size: 10px; color: var(--sub); margin-left: auto;
+  background: var(--surf); border-radius: 5px; padding: 1px 5px;
+}
+/* On the narrowest common phone widths (iPhone SE class, ~375px and below),
+   give the region name less room so the trigger reliably fits in whatever
+   space remains between the brand and nav/lock button. */
+@media (max-width: 420px) {
+  .top-bar-region-trigger span { max-width: 80px; }
+}
 
 /* ══════════════════════════════════════
    LIST PAGES (Stands, Zones, Corridors)
