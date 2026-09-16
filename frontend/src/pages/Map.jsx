@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, Download } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download } from "lucide-react";
 import { api, tokenStore, regionStore } from "../services/api.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
@@ -343,7 +343,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       {/* ── Time controls panel ── */}
       {days.length > 0 && (
         <div className="map-ctrl-panel">
-          {/* Single compact row: date nav + time + play (weather moved to a floating card on the map) */}
+          {/* Single compact row: date nav + time (weather moved to a floating card on the map) */}
           <div className="map-ctrl-top">
             {/* Date nav with calendar picker popup */}
             <div className="map-day-nav-wrap" ref={datePickerRef}>
@@ -369,14 +369,10 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
               return <span className="map-time-compact">{`${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`}</span>;
             })()}
-            {/* Play / Pause */}
-            <button className={"btn map-play-btn" + (playing ? " playing" : "")}
-              onClick={() => setPlaying((p) => !p)} disabled={!curDay}>
-              {playing ? <><Pause size={15} /> Pause</> : <><Play size={15} /> Play</>}
-            </button>
           </div>
 
-          {/* Slider (15-min steps, period colours painted on the track) + hour/15-min
+          {/* Media-control row: back/forward step buttons + play/pause flank the
+              slider (15-min steps, period colours painted on the track) + hour/15-min
               tick marks + thermal markers + tick labels */}
           {curDay && (() => {
             const srH = curDay.sunrise_h ?? 6.5;
@@ -398,57 +394,78 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               ` rgba(122,63,160,0.75) ${eStartP}%, rgba(122,63,160,0.75) ${eEndP}%,` +
               ` transparent ${eEndP}%, transparent 100%), var(--bord2)`;
             return (
-              <>
-                <div style={{ position: "relative" }}>
-                  <input type="range" className="map-hour-slider"
-                    min={0} max={maxSlot}
-                    value={Math.min(hourPos, maxSlot)}
-                    style={{ background: trackGradient }}
-                    onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
-                    onTouchMove={(e) => {
-                      const t = e.touches[0];
-                      const rect = e.target.getBoundingClientRect();
-                      const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
-                      setPlaying(false);
-                      setHourPos(Math.round(ratio * maxSlot));
-                    }}
-                    onMouseEnter={() => setSliderHovering(true)}
-                    onMouseLeave={() => setSliderHovering(false)}
-                    onMouseDown={() => setSliderDragging(true)}
-                    onTouchStart={() => setSliderDragging(true)} />
-                  <div className="map-slider-markers">
-                    <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
-                      title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
-                    <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
-                      title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
+              // Media-control row: skip-back, scrubber (slider + tick marks/labels),
+              // skip-forward, play/pause — all in one row. The tick marks/labels stay
+              // nested inside the same flex-sized column as the slider (rather than
+              // spanning the full panel width on their own) so their hPct()-based
+              // percentage positions keep lining up under the now-narrower slider.
+              <div className="map-scrub-row">
+                <button className="icon-btn map-nav-btn map-step-btn"
+                  onClick={() => { setPlaying(false); setHourPos((p) => Math.max(0, p - 1)); }}
+                  disabled={hourPos <= 0} title="Back 15 minutes">
+                  <SkipBack size={16} />
+                </button>
+                <div className="map-scrub-track">
+                  <div style={{ position: "relative" }}>
+                    <input type="range" className="map-hour-slider"
+                      min={0} max={maxSlot}
+                      value={Math.min(hourPos, maxSlot)}
+                      style={{ background: trackGradient }}
+                      onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
+                      onTouchMove={(e) => {
+                        const t = e.touches[0];
+                        const rect = e.target.getBoundingClientRect();
+                        const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
+                        setPlaying(false);
+                        setHourPos(Math.round(ratio * maxSlot));
+                      }}
+                      onMouseEnter={() => setSliderHovering(true)}
+                      onMouseLeave={() => setSliderHovering(false)}
+                      onMouseDown={() => setSliderDragging(true)}
+                      onTouchStart={() => setSliderDragging(true)} />
+                    <div className="map-slider-markers">
+                      <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
+                        title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
+                      <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
+                        title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
+                    </div>
+                    {(sliderHovering || sliderDragging) && curHour && (() => {
+                      const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
+                      const thumbPct = maxSlot > 0 ? (Math.min(hourPos, maxSlot) / maxSlot) * 100 : 0;
+                      return (
+                        <div className="map-slider-tooltip" style={{ left: `${thumbPct}%` }}>
+                          {`${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`}
+                        </div>
+                      );
+                    })()}
                   </div>
-                  {(sliderHovering || sliderDragging) && curHour && (() => {
-                    const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
-                    const thumbPct = maxSlot > 0 ? (Math.min(hourPos, maxSlot) / maxSlot) * 100 : 0;
-                    return (
-                      <div className="map-slider-tooltip" style={{ left: `${thumbPct}%` }}>
-                        {`${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`}
-                      </div>
-                    );
-                  })()}
+                  {/* Hour (major) + 15-min (minor) tick marks */}
+                  <div className="map-slider-tickmarks">
+                    {Array.from({ length: maxHour + 1 }, (_, h) => (
+                      <React.Fragment key={h}>
+                        <span className="map-slider-tick map-slider-tick--major" style={{ left: hPct(h) }} />
+                        {[0.25, 0.5, 0.75].map((q) => (
+                          <span key={q} className="map-slider-tick map-slider-tick--minor" style={{ left: hPct(h + q) }} />
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  <div className="map-slider-ticks">
+                    <span>{curDay.hours[0]?.label}</span>
+                    <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
+                    <span>{curDay.hours[maxHour]?.label}</span>
+                  </div>
                 </div>
-                {/* Hour (major) + 15-min (minor) tick marks */}
-                <div className="map-slider-tickmarks">
-                  {Array.from({ length: maxHour + 1 }, (_, h) => (
-                    <React.Fragment key={h}>
-                      <span className="map-slider-tick map-slider-tick--major" style={{ left: hPct(h) }} />
-                      {[0.25, 0.5, 0.75].map((q) => (
-                        <span key={q} className="map-slider-tick map-slider-tick--minor" style={{ left: hPct(h + q) }} />
-                      ))}
-                    </React.Fragment>
-                  ))}
-                </div>
-                <div className="map-slider-ticks">
-                  <span>{curDay.hours[0]?.label}</span>
-                  <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
-                  <span>{curDay.hours[maxHour]?.label}</span>
-                </div>
-              </>
+                <button className="icon-btn map-nav-btn map-step-btn"
+                  onClick={() => { setPlaying(false); setHourPos((p) => Math.min(maxSlot, p + 1)); }}
+                  disabled={hourPos >= maxSlot} title="Forward 15 minutes">
+                  <SkipForward size={16} />
+                </button>
+                <button className="map-play-circle" onClick={() => setPlaying((p) => !p)}
+                  disabled={!curDay} title={playing ? "Pause" : "Play"}>
+                  {playing ? <Pause size={16} /> : <Play size={16} />}
+                </button>
+              </div>
             );
           })()}
         </div>
