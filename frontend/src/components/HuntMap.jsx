@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { TILE_SOURCES } from "../utils/tileSources.js";
+import { clamp } from "../utils/geo.js";
 
 /* global L */
 
@@ -17,6 +18,7 @@ const COLORS = {
   bedding: "#6B4FA0",
   food: "#3B6D11",
   stand: "#A32D2D",
+  suggestion: "#0E8A7D",
 };
 
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
@@ -69,7 +71,8 @@ function standIcon(vectors, rank) {
 }
 
 // Build a popup with edit/delete buttons and wire them up after it opens.
-function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer }) {
+function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
+                                    dismissed, onDismiss }) {
   let html = `<div class="feat-popup">
     <div class="feat-popup-title">${title || "(unnamed)"}</div>
     ${subtitle ? `<div class="feat-popup-sub">${subtitle}</div>` : ""}
@@ -88,11 +91,19 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
     `;
   }
 
-  html += `<div class="feat-popup-actions">
-      <button data-act="edit" class="feat-popup-btn">✎ Edit</button>
-      <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
-    </div>
-  </div>`;
+  if (kind === "suggestion") {
+    html += `<div class="feat-popup-actions">
+        <button data-act="dismiss" class="feat-popup-btn">${dismissed ? "↺ Restore" : "✕ Dismiss"}</button>
+        <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
+      </div>
+    </div>`;
+  } else {
+    html += `<div class="feat-popup-actions">
+        <button data-act="edit" class="feat-popup-btn">✎ Edit</button>
+        <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
+      </div>
+    </div>`;
+  }
 
   // Check if the popup is currently open before we overwrite it
   const isOpen = layer.isPopupOpen && layer.isPopupOpen();
@@ -104,8 +115,10 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
     if (!popupElement) return;
     const editBtn = popupElement.querySelector('[data-act="edit"]');
     const delBtn = popupElement.querySelector('[data-act="del"]');
+    const dismissBtn = popupElement.querySelector('[data-act="dismiss"]');
     if (editBtn) editBtn.onclick = () => { layer.closePopup(); onEdit && onEdit(kind, id); };
     if (delBtn) delBtn.onclick = () => { layer.closePopup(); onDelete && onDelete(kind, id); };
+    if (dismissBtn) dismissBtn.onclick = () => { layer.closePopup(); onDismiss && onDismiss(id, dismissed); };
 
     if (kind === "stand" && onToggleStandLayer) {
       popupElement.querySelectorAll('input[type="checkbox"][data-layer]').forEach(cb => {
@@ -127,9 +140,10 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
 }
 
 const HuntMap = forwardRef(function HuntMap({
-  stands, zones, corridors, sign, conditions,
+  stands, zones, corridors, sign, suggestions, conditions,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
-  layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, center,
+  layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
+  scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   height = 420,
 }, ref) {
   const mapRef = useRef(null);
@@ -138,6 +152,7 @@ const HuntMap = forwardRef(function HuntMap({
   const baseLayers = useRef({});
   const offlineLayers = useRef({});
   const standsMarkers = useRef({}); // Prevents unmounting marker to keep popup open
+  const scoutDraftLayer = useRef(null);
   const [ready, setReady] = useState(false);
 
   // Exposes the underlying Leaflet map + base tile layers for callers that need
@@ -171,7 +186,7 @@ const HuntMap = forwardRef(function HuntMap({
       };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "scent" is added before "stands" so cones render below stand markers
-      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -276,6 +291,62 @@ const HuntMap = forwardRef(function HuntMap({
       m.addTo(g);
     });
   }, [sign, ready, layers.scrapes, layers.rubs, drawMode, onEditFeature, onDeleteFeature]);
+
+  // render scout-analysis draft circle: drag-to-resize, mirrors MiniMap.jsx's
+  // Geoman pattern (L.circle + circle.pm.enable) ported onto the main map.
+  useEffect(() => {
+    if (!ready) return;
+    const map = mapRef.current;
+    if (drawMode !== "scout" || !scoutDraft) return undefined;
+    const minR = scoutRadiusMin ?? 60, maxR = scoutRadiusMax ?? 2400;
+    const circle = L.circle([scoutDraft.lat, scoutDraft.lon], {
+      radius: scoutDraft.radius_m, color: COLORS.suggestion, fillColor: COLORS.suggestion,
+      fillOpacity: 0.12, weight: 2, dashArray: "4 4",
+    }).addTo(map);
+    if (circle.pm) {
+      circle.pm.enable({ allowEditing: true });
+      const emit = () => {
+        const raw = circle.getRadius();
+        const clamped = clamp(raw, minR, maxR);
+        if (clamped !== raw) circle.setRadius(clamped); // snap back past the bound
+        onScoutRadiusChange && onScoutRadiusChange(clamped);
+      };
+      circle.on("pm:edit", emit);
+      circle.on("pm:dragend", emit);
+    }
+    map.fitBounds(circle.getBounds(), { padding: [40, 40] });
+    scoutDraftLayer.current = circle;
+    return () => { map.removeLayer(circle); scoutDraftLayer.current = null; };
+    // scoutDraft.radius_m intentionally excluded — re-running this effect on every
+    // drag tick would fight the user's own resize gesture.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, drawMode, scoutDraft?.lat, scoutDraft?.lon, scoutRadiusMin, scoutRadiusMax, onScoutRadiusChange]);
+
+  // render scouting suggestions
+  useEffect(() => {
+    if (!ready) return;
+    const g = layerGroups.current.suggestions; g.clearLayers();
+    if (!layers.suggestions) return;
+    (suggestions || []).forEach((sg) => {
+      const dismissed = sg.status === "dismissed";
+      const circle = L.circle([sg.lat, sg.lon], {
+        radius: sg.radius_m,
+        color: COLORS.suggestion, fillColor: COLORS.suggestion,
+        fillOpacity: dismissed ? 0.06 : 0.15 + 0.35 * (Math.max(0, Math.min(100, sg.score)) / 100),
+        opacity: dismissed ? 0.35 : 0.9,
+        weight: 2,
+        dashArray: dismissed ? "3 5" : null,
+        interactive: !drawMode,
+      });
+      if (!drawMode) bindFeaturePopup(circle, {
+        title: `Scouting suggestion (${Math.round(sg.score)}/100)`,
+        subtitle: sg.reasoning?.text || "",
+        kind: "suggestion", id: sg.id,
+        dismissed, onDismiss: onDismissSuggestion, onDelete: onDeleteFeature,
+      });
+      circle.addTo(g);
+    });
+  }, [suggestions, ready, layers.suggestions, drawMode, onDismissSuggestion, onDeleteFeature]);
 
   // render scent cones — geographic sector from each stand in the blended scent direction
   useEffect(() => {

@@ -23,6 +23,7 @@ from app.deer_sign.router import router as deer_sign_router
 from app.dependencies import require_token
 from app.forecast.router import router as forecast_router
 from app.scheduler import start_scheduler
+from app.scouting.router import router as scouting_router
 from app.settings.router import router as settings_router
 from app.stands.router import router as stands_router
 from app.zones.router import router as zones_router
@@ -72,6 +73,7 @@ app.include_router(forecast_router)
 app.include_router(deer_ratings_router)
 app.include_router(settings_router)
 app.include_router(cameras_router)
+app.include_router(scouting_router)
 
 
 # ---------- static frontend ----------

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, Download } from "lucide-react";
-import { api } from "../services/api.js";
+import { api, tokenStore } from "../services/api.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
+import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M } from "../utils/geo.js";
 import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
 import LayerChip from "../components/ui/LayerChip.jsx";
@@ -11,6 +12,7 @@ import HomeSetup from "../components/HomeSetup.jsx";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
+import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 
 function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
   const today = localDate(utcOffset);
@@ -74,7 +76,8 @@ function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
   );
 }
 
-function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, reloadCorridors, reloadSign,
+function MapPage({ stands, zones, corridors, sign, suggestions, reloadStands, reloadZones, reloadCorridors, reloadSign,
+                   reloadSuggestions, onDismissSuggestion,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
                    openStandEditor, onEditFeature, onDeleteFeature }) {
   const [days, setDays] = useState([]);
@@ -90,9 +93,9 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: false, scrapes: false, rubs: false });
+  const [layers, setLayers] = useState({ corridors: true, zones: false, scrapes: false, rubs: false, suggestions: true });
   const [layersOpen, setLayersOpen] = useState(false);
-  
+
   // New stand-specific layer state
   const [standLayers, setStandLayers] = useState({});
 
@@ -103,6 +106,26 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
   const datePickerRef = useRef(null);
   const huntMapRef = useRef(null);
   const [showOfflinePanel, setShowOfflinePanel] = useState(false);
+
+  // Scouting Suggestions: draw-a-circle analysis flow
+  const [scoutSettings, setScoutSettings] = useState({
+    scout_radius_default_m: SCOUT_RADIUS_DEFAULT_M,
+    scout_radius_min_m: SCOUT_RADIUS_MIN_M,
+    scout_radius_max_m: SCOUT_RADIUS_MAX_M,
+  });
+  const [scoutDraft, setScoutDraft] = useState(null); // { lat, lon, radius_m }
+  const [scoutOverlap, setScoutOverlap] = useState(null); // { lat, lon, radius_m, count }
+  const [scoutAnalyzing, setScoutAnalyzing] = useState(false);
+  const [scoutProgress, setScoutProgress] = useState({ pct: 0, msg: "" });
+  const [scoutError, setScoutError] = useState(null);
+
+  useEffect(() => {
+    api("/settings").then((s) => setScoutSettings({
+      scout_radius_default_m: s.scout_radius_default_m ?? SCOUT_RADIUS_DEFAULT_M,
+      scout_radius_min_m: s.scout_radius_min_m ?? SCOUT_RADIUS_MIN_M,
+      scout_radius_max_m: s.scout_radius_max_m ?? SCOUT_RADIUS_MAX_M,
+    })).catch(() => {});
+  }, []);
 
   // function to toggle individual stand layers
   const toggleStandLayer = useCallback((standId, layerKey) => {
@@ -195,6 +218,8 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
         await reloadSign();
       } catch { setErr(`Couldn't save ${drawMode}.`); }
       setDrawMode(null);
+    } else if (drawMode === "scout" && !scoutDraft) {
+      setScoutDraft({ lat: pt.lat, lon: pt.lon, radius_m: scoutSettings.scout_radius_default_m });
     } else if (drawMode === "relocate" && relocating) {
       const { kind, id } = relocating;
       if (kind === "corridor") { setDraftPoints((p) => [...p, pt]); return; }
@@ -211,7 +236,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       } catch { setErr("Couldn't move feature."); }
       setRelocating(null); setDrawMode(null);
     }
-  }, [drawMode, relocating, stands, zones, openStandEditor, reloadStands, reloadZones]);
+  }, [drawMode, relocating, stands, zones, openStandEditor, reloadStands, reloadZones, scoutDraft, scoutSettings]);
 
   function finishCorridor() {
     if (draftPoints.length >= 2)
@@ -241,8 +266,63 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       }
     } catch { setErr(`Couldn't save ${pn.type}.`); }
   }
-  function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); }
+  function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); setScoutDraft(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
+
+  // Stable identity — a new function reference here on every radius tick would
+  // re-trigger HuntMap's draft-circle effect mid-drag and fight the user's own gesture.
+  const onScoutRadiusChange = useCallback((radius_m) => {
+    setScoutDraft((d) => (d ? { ...d, radius_m } : d));
+  }, []);
+
+  async function confirmScoutArea() {
+    if (!scoutDraft) return;
+    const { lat, lon, radius_m } = scoutDraft;
+    try {
+      const res = await api(`/scouting/overlap?lat=${lat}&lon=${lon}&radius_m=${radius_m}`);
+      if (res.overlaps) setScoutOverlap({ lat, lon, radius_m, count: res.suggestions.length });
+      else await runScoutAnalysis(lat, lon, radius_m, null);
+    } catch { setErr("Couldn't check for existing scouting suggestions."); }
+  }
+
+  async function runScoutAnalysis(lat, lon, radius_m, mode) {
+    setScoutOverlap(null);
+    setScoutAnalyzing(true); setScoutError(null); setScoutProgress({ pct: 0, msg: "Starting..." });
+    try {
+      const tok = tokenStore.get();
+      const res = await fetch(`/api/scouting/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(tok ? { "Authorization": `Bearer ${tok}` } : {}) },
+        body: JSON.stringify({ lat, lon, radius_m, mode }),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Analysis failed (status ${res.status})`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const data = JSON.parse(line);
+          if (data.error) throw new Error(data.error);
+          if (data.progress != null) setScoutProgress((p) => ({ ...p, pct: data.progress }));
+          if (data.message) setScoutProgress((p) => ({ ...p, msg: data.message }));
+          if (data.complete) await reloadSuggestions();
+        }
+      }
+    } catch (e) {
+      setScoutError(e.message || "Couldn't run scouting analysis.");
+    } finally {
+      setScoutAnalyzing(false); setScoutDraft(null); setDrawMode(null);
+    }
+  }
 
   if (!stands.length) {
     if (home && !home.set) return <div style={{ padding: 16 }}><HomeSetup onSaved={setHome} onCancel={() => {}} /></div>;
@@ -375,6 +455,9 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
           {(drawMode === "scrape" || drawMode === "rub") && `Click the map to mark this ${drawMode}.`}
           {drawMode === "corridor" && `Click points along the deer path (${draftPoints.length} set).`}
           {drawMode === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
+          {drawMode === "scout" && !scoutDraft && "Click the map to drop the scouting-analysis area."}
+          {drawMode === "scout" && scoutDraft && `Drag the circle's edge to resize (${Math.round(scoutDraft.radius_m)} m).`}
+          {drawMode === "scout" && scoutDraft && <button className="btn" style={{ marginLeft: 8 }} onClick={confirmScoutArea} disabled={scoutAnalyzing}>Scout this area</button>}
           {drawMode === "relocate" && relocating?.kind !== "corridor" && "Tap the map to move to the new location."}
           {drawMode === "relocate" && relocating?.kind === "corridor" && `Click new path points (${draftPoints.length} set).`}
           {drawMode === "relocate" && relocating?.kind === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishRelocateCorridor} disabled={draftPoints.length < 2}>Finish</button>}
@@ -385,10 +468,14 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       {/* map fills all remaining vertical space */}
       <div className="map-body">
         <div className="map-fill">
-          <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign} conditions={conditions}
+          <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign}
+            suggestions={suggestions} conditions={conditions}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
-            onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature} center={home}
+            onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
+            onDismissSuggestion={onDismissSuggestion} center={home}
+            scoutDraft={scoutDraft} onScoutRadiusChange={onScoutRadiusChange}
+            scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             height="100%" />
         </div>
         <div className="layer-overlay">
@@ -398,6 +485,7 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
               <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
+              <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
@@ -419,6 +507,21 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
             )}
           </div>
         )}
+        {scoutAnalyzing && (
+          <div className="map-scout-progress">
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--sub)", marginBottom: 4 }}>
+              <span>{scoutProgress.msg}</span><span>{scoutProgress.pct}%</span>
+            </div>
+            <div style={{ width: "100%", height: 6, background: "var(--surf)", borderRadius: 3, overflow: "hidden" }}>
+              <div style={{ width: `${scoutProgress.pct}%`, height: "100%", background: "var(--navy)", transition: "width 0.2s ease" }} />
+            </div>
+          </div>
+        )}
+        {scoutError && !scoutAnalyzing && (
+          <div className="map-scout-progress">
+            <Banner>{scoutError}</Banner>
+          </div>
+        )}
       </div>
 
       {pendingName && pendingName.type === "zone" && pendingName.kind !== "food" && (
@@ -432,6 +535,12 @@ function MapPage({ stands, zones, corridors, sign, reloadStands, reloadZones, re
       )}
       {showOfflinePanel && huntMapRef.current && (
         <OfflineMapsPanel mapApi={huntMapRef.current} onClose={() => setShowOfflinePanel(false)} />
+      )}
+      {scoutOverlap && (
+        <ScoutingOverlapPrompt count={scoutOverlap.count}
+          onOverride={() => runScoutAnalysis(scoutOverlap.lat, scoutOverlap.lon, scoutOverlap.radius_m, "override")}
+          onMergeOnly={() => runScoutAnalysis(scoutOverlap.lat, scoutOverlap.lon, scoutOverlap.radius_m, "merge")}
+          onCancel={() => setScoutOverlap(null)} />
       )}
     </div>
   );

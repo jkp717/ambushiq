@@ -17,8 +17,8 @@ import numpy as np
 import richdem as rd
 
 
-GRID = 41           # denser than the artifact (24) — odd number ensures exact center alignment
-BOX_M = 800.0
+DEFAULT_GRID = 41   # denser than the artifact (24) — odd number ensures exact center alignment
+DEFAULT_BOX_M = 800.0
 M_PER_DEG_LAT = 111320.0
 
 DR = [-1, -1, -1, 0, 0, 1, 1, 1]
@@ -26,13 +26,13 @@ DC = [-1, 0, 1, -1, 1, -1, 0, 1]
 D8_BEARING = [315, 0, 45, 270, 90, 225, 180, 135]
 
 
-def build_sample_grid(lat: float, lon: float):
-    half_lat = (BOX_M / 2) / M_PER_DEG_LAT
+def build_sample_grid(lat: float, lon: float, grid: int = DEFAULT_GRID, box_m: float = DEFAULT_BOX_M):
+    half_lat = (box_m / 2) / M_PER_DEG_LAT
     m_per_deg_lon = M_PER_DEG_LAT * math.cos(math.radians(lat))
-    half_lon = (BOX_M / 2) / m_per_deg_lon
-    lats = [lat + half_lat - (2 * half_lat * r) / (GRID - 1) for r in range(GRID)]
-    lons = [lon - half_lon + (2 * half_lon * c) / (GRID - 1) for c in range(GRID)]
-    cell_m = BOX_M / (GRID - 1)
+    half_lon = (box_m / 2) / m_per_deg_lon
+    lats = [lat + half_lat - (2 * half_lat * r) / (grid - 1) for r in range(grid)]
+    lons = [lon - half_lon + (2 * half_lon * c) / (grid - 1) for c in range(grid)]
+    cell_m = box_m / (grid - 1)
     return lats, lons, cell_m
 
 
@@ -40,11 +40,13 @@ USGS_BATCH = 100    # getSamples caps points per request well under 1600
 OM_BATCH = 10       # Open-Meteo rejects very large batches (400)
 
 
-async def _fetch_usgs(client: httpx.AsyncClient, lats, lons, progress_callback=None) -> list[float]:
+async def _fetch_usgs(client: httpx.AsyncClient, lats, lons, progress_callback=None,
+                       progress_span: tuple[int, int] = (0, 75)) -> list[float]:
     points = [[lons[c], lats[r]] for r in range(len(lats)) for c in range(len(lons))]
     url = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples"
     out: list[Optional[float]] = [None] * len(points)
 
+    span_lo, span_hi = progress_span
     total_batches = math.ceil(len(points) / USGS_BATCH)
     completed_batches = 0
     semaphore = asyncio.Semaphore(2)
@@ -77,8 +79,8 @@ async def _fetch_usgs(client: httpx.AsyncClient, lats, lons, progress_callback=N
 
                     completed_batches += 1
                     if progress_callback:
-                        # USGS accounts for roughly 75% of total progress
-                        pct = int((completed_batches / total_batches) * 75)
+                        # USGS accounts for the caller-supplied progress_span of total progress
+                        pct = int(span_lo + (completed_batches / total_batches) * (span_hi - span_lo))
                         await progress_callback(pct, f"USGS Batch {completed_batches}/{total_batches}")
 
                     return start, samples
@@ -135,8 +137,9 @@ async def _fetch_open_meteo(client: httpx.AsyncClient, lats, lons) -> list[float
     return out
 
 
-async def fetch_terrain(lat: float, lon: float, progress_callback=None) -> dict:
-    lats, lons, cell_m = build_sample_grid(lat, lon)
+async def fetch_terrain(lat: float, lon: float, grid: int = DEFAULT_GRID, box_m: float = DEFAULT_BOX_M,
+                         progress_callback=None) -> dict:
+    lats, lons, cell_m = build_sample_grid(lat, lon, grid=grid, box_m=box_m)
     if progress_callback:
         await progress_callback(5, "Initializing elevation grid...")
 
@@ -153,8 +156,8 @@ async def fetch_terrain(lat: float, lon: float, progress_callback=None) -> dict:
     if progress_callback:
         await progress_callback(85, "Running D-Infinity terrain analysis...")
 
-    dem = [flat[r * GRID:(r + 1) * GRID] for r in range(GRID)]
-    result = analyze_terrain(dem, cell_m, source)
+    dem = [flat[r * grid:(r + 1) * grid] for r in range(grid)]
+    result = analyze_terrain(dem, cell_m, source, box_m=box_m)
 
     if progress_callback:
         await progress_callback(100, "Complete!")
@@ -250,26 +253,33 @@ def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
         "elevation": round(dem[ctr][ctr]),
         "relief": round(max_e - min_e),
         "grid_size": n,
-        "box_m": BOX_M,
+        "box_m": DEFAULT_BOX_M,
     }
 
 
-def analyze_terrain(dem, cell_m: float, source: str) -> dict:
+def compute_slope_aspect(dem_np):
+    """Fill sinks + compute D-Infinity slope/aspect grids. Shared by analyze_terrain()
+    and scouting/terrain_features.py so funnel detection can get full per-cell slope
+    grids without duplicating this RichDEM setup."""
+    rda = rd.rdarray(dem_np, no_data=-9999)
+    # Fill artificial sinks to prevent the D-infinity flow from getting trapped
+    rd.FillDepressions(rda, epsilon=True, in_place=True)
+    slope_rda = rd.TerrainAttribute(rda, attrib='slope_riserun')
+    aspect_rda = rd.TerrainAttribute(rda, attrib='aspect')
+    return rda, slope_rda, aspect_rda
+
+
+def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_M) -> dict:
     """Analyze terrian using the D-Infinity spatial analysis algorithm"""
     n = len(dem)
     ctr = n // 2
 
     # Load 2D list into a numpy array and wrap it for RichDEM
     dem_np = np.array(dem, dtype=np.float32)
-    rda = rd.rdarray(dem_np, no_data=-9999)
+    rda, slope_rda, aspect_rda = compute_slope_aspect(dem_np)
 
-    # Fill artificial sinks to prevent the D-infinity flow from getting trapped
-    rd.FillDepressions(rda, epsilon=True, in_place=True)
-
-    # Calculate D-Infinity Flow Accumulation and terrain attributes
+    # Calculate D-Infinity Flow Accumulation (sinks already filled by compute_slope_aspect)
     accum_rda = rd.FlowAccumulation(rda, method='Dinf')
-    aspect_rda = rd.TerrainAttribute(rda, attrib='aspect')
-    slope_rda = rd.TerrainAttribute(rda, attrib='slope_riserun')
 
     slope_pct = round((float(slope_rda[ctr, ctr]) / cell_m) * 100)
 
@@ -334,5 +344,5 @@ def analyze_terrain(dem, cell_m: float, source: str) -> dict:
         "elevation": round(dem[ctr][ctr]),
         "relief": round(max_e - min_e),
         "grid_size": n,
-        "box_m": BOX_M,
+        "box_m": box_m,
     }

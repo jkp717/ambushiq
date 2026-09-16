@@ -37,6 +37,7 @@ function Shell({ onLogout, version }) {
   const [zones, setZones] = useState([]);
   const [corridors, setCorridors] = useState([]);
   const [sign, setSign] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
   const [drawRequest, setDrawRequest] = useState(null);
   const [editingStand, setEditingStand] = useState(null);
   const [editingZone, setEditingZone] = useState(null);
@@ -47,7 +48,8 @@ function Shell({ onLogout, version }) {
   const loadZones     = useCallback(async () => { try { setZones(await api("/zones")); } catch {} }, []);
   const loadCorridors = useCallback(async () => { try { setCorridors(await api("/corridors")); } catch {} }, []);
   const loadSign      = useCallback(async () => { try { setSign(await api("/sign")); } catch {} }, []);
-  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign()]); }, [loadStands, loadZones, loadCorridors, loadSign]);
+  const loadSuggestions = useCallback(async () => { try { setSuggestions(await api("/scouting")); } catch {} }, []);
+  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions]);
 
   const toggleActiveStand = useCallback(async (stand) => {
     try {
@@ -73,7 +75,15 @@ function Shell({ onLogout, version }) {
     else if (kind === "food" || kind === "bedding") { await api(`/zones/${id}`, { method: "DELETE" }); await loadZones(); }
     else if (kind === "corridor") { await api(`/corridors/${id}`, { method: "DELETE" }); await loadCorridors(); }
     else if (kind === "scrape" || kind === "rub") { await api(`/sign/${id}`, { method: "DELETE" }); await loadSign(); }
-  }, [loadStands, loadZones, loadCorridors, loadSign]);
+    else if (kind === "suggestion") { await api(`/scouting/${id}`, { method: "DELETE" }); await loadSuggestions(); }
+  }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions]);
+
+  const dismissSuggestion = useCallback(async (id, dismissed) => {
+    try {
+      await api(`/scouting/${id}`, { method: "PUT", body: JSON.stringify({ status: dismissed ? "new" : "dismissed" }) });
+      await loadSuggestions();
+    } catch {}
+  }, [loadSuggestions]);
 
   function goDraw(kind) { setDrawRequest(kind); setView("map"); }
 
@@ -149,8 +159,9 @@ function Shell({ onLogout, version }) {
             onGoDraw={goDraw} openStandEditor={openStandEditor} />
         )}
         {view === "map" && (
-          <MapPage stands={stands} zones={zones} corridors={corridors} sign={sign}
+          <MapPage stands={stands} zones={zones} corridors={corridors} sign={sign} suggestions={suggestions}
             reloadStands={loadStands} reloadZones={loadZones} reloadCorridors={loadCorridors} reloadSign={loadSign}
+            reloadSuggestions={loadSuggestions} onDismissSuggestion={dismissSuggestion}
             drawRequest={drawRequest} clearDrawRequest={() => setDrawRequest(null)}
             relocateRequest={relocateRequest} clearRelocateRequest={() => setRelocateRequest(null)}
             openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature} />

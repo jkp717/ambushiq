@@ -470,6 +470,14 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   border-radius: 10px; padding: 7px 10px;
 }
 
+/* ── floating scouting-analysis progress/error card, bottom-left ── */
+.map-scout-progress {
+  position: absolute; bottom: 20px; left: 10px; z-index: 500;
+  width: 220px;
+  background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
+  border-radius: 10px; padding: 7px 10px;
+}
+
 /* ── map-page nav dropdown in top bar ── */
 .top-bar-nav-drop {
   position: relative;
