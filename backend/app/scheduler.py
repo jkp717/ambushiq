@@ -5,7 +5,6 @@ import datetime as _dt
 import logging
 import os
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -39,7 +38,11 @@ async def sync_cameras_job():
 
 
 def auto_cleanup_job():
-    """Scheduler job (daily 3 AM): delete JPEGs older than retention; keep sighting rows."""
+    """Scheduler job (daily 3 AM UTC): delete JPEGs older than retention; keep
+    sighting rows. Runs at a fixed UTC hour rather than any one region's local
+    time — with multiple regions there's no longer a single canonical "local
+    3 AM," and this is a background maintenance job, not user-facing, so exact
+    fire time doesn't matter."""
     import datetime as _dt
     settings = get_settings()
     retention = int(settings.get("image_retention_days", 60))
@@ -84,26 +87,6 @@ def _reschedule_sync(interval_minutes: int) -> None:
         pass  # best-effort; scheduler may not be running yet
 
 
-def _reschedule_cleanup_tz(tz_name: str) -> None:
-    """Update the nightly cleanup job's fire-time timezone without restarting.
-    Called from write_settings when property_timezone changes so the 3 AM cron
-    fires at 3 AM in the new local timezone instead of UTC."""
-    if _scheduler is None:
-        return
-    try:
-        from apscheduler.triggers.cron import CronTrigger
-        try:
-            tz = ZoneInfo(tz_name)
-        except Exception:
-            tz = ZoneInfo("America/Chicago")
-        _scheduler.reschedule_job(
-            "auto_cleanup",
-            trigger=CronTrigger(hour=3, minute=0, timezone=tz),
-        )
-    except Exception:
-        pass  # best-effort
-
-
 def start_scheduler():
     """Start APScheduler with the sync + cleanup jobs. Lazy import so app boots even
     if apscheduler isn't installed (jobs simply won't run)."""
@@ -118,14 +101,10 @@ def start_scheduler():
         return
     settings = get_settings()
     interval = int(settings.get("camera_sync_interval_minutes", 30)) or 30
-    try:
-        prop_tz: ZoneInfo | timezone = ZoneInfo(str(settings.get("property_timezone") or "America/Chicago"))
-    except Exception:
-        prop_tz = ZoneInfo("America/Chicago")
     sched = AsyncIOScheduler()
     sched.add_job(sync_cameras_job, IntervalTrigger(minutes=interval), id="sync_cameras",
                   replace_existing=True, max_instances=1)
-    sched.add_job(auto_cleanup_job, CronTrigger(hour=3, minute=0, timezone=prop_tz), id="auto_cleanup",
+    sched.add_job(auto_cleanup_job, CronTrigger(hour=3, minute=0), id="auto_cleanup",
                   replace_existing=True, max_instances=1)
     sched.start()
     _scheduler = sched

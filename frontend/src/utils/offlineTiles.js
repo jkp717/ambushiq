@@ -131,6 +131,19 @@ async function deleteSavedArea(id) {
   return remaining;
 }
 
+/** Removes the saved-area *records* for a deleted region (called after a
+ * region is deleted). This cannot free the underlying shared tile blobs from
+ * IndexedDB — tiles aren't reference-counted per region, same as the
+ * overlapping-area sharing noted on deleteSavedArea above — so any tiles this
+ * region's areas shared with another region's (or an un-tagged, pre-migration)
+ * saved area are simply left in place. Not worth building reference counting
+ * for how this is used in practice. */
+function pruneSavedAreasForRegion(regionId) {
+  const remaining = listSavedAreas().filter((a) => a.regionId !== regionId);
+  try { localStorage.setItem(AREAS_KEY, JSON.stringify(remaining)); } catch {}
+  return remaining;
+}
+
 export {
   formatBytes,
   estimateTileCount,
@@ -139,5 +152,6 @@ export {
   listSavedAreas,
   saveAreaRecord,
   deleteSavedArea,
+  pruneSavedAreasForRegion,
   AVG_TILE_BYTES_FALLBACK,
 };

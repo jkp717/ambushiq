@@ -18,6 +18,7 @@ from app.cameras.models import Camera, CameraSighting
 from app.core.config import CAMERA_IMAGE_DIR
 from app.core.database import engine
 from app.core.security import decrypt_credentials
+from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 
 log = logging.getLogger(__name__)
@@ -28,13 +29,13 @@ def _sanitize_path_component(name: str) -> str:
     return safe or "unnamed"
 
 
-def get_camera_dir(brand: str, camera_name: str, base_dir: str | None = None) -> str:
+def get_camera_dir(brand: str, camera_name: str, region_id: int, base_dir: str | None = None) -> str:
     if not base_dir:
         settings = get_settings()
         base_dir = str(settings.get("camera_image_dir") or CAMERA_IMAGE_DIR)
     safe_brand = _sanitize_path_component(brand)
     safe_name = _sanitize_path_component(camera_name)
-    return os.path.join(base_dir, safe_brand, safe_name)
+    return os.path.join(base_dir, f"region_{region_id}", safe_brand, safe_name)
 
 
 def _to_utc_iso(ts_str: str, prop_tz_name: str) -> str:
@@ -123,6 +124,7 @@ async def _sync_one_camera(camera_id: int) -> dict:
             return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
         creds = decrypt_credentials(cam.credentials_json)
         brand, camera_name, stand_id, cid = cam.brand, cam.name, cam.stand_id, cam.id
+        region_id = cam.region_id
         cam_provider_ref = cam.provider_ref  # Spypoint cam ID for photo filtering
         last_sync = cam.last_sync_at
         # Deduplication: timestamps already recorded for this camera (incl. non-animal skips)
@@ -132,8 +134,10 @@ async def _sync_one_camera(camera_id: int) -> dict:
             ).all()
         )
 
-    # Resolve the property timezone once for taken_at normalization below.
-    prop_tz_name = str(get_settings().get("property_timezone") or "America/Chicago")
+    # Resolve the property timezone (now a per-region field) once for taken_at
+    # normalization below.
+    region = get_region_dict(region_id)
+    prop_tz_name = str(region.get("property_timezone") or "America/Chicago")
 
     # Parse last_sync_at into a timezone-aware datetime to send as `since` to the provider.
     # First sync (last_sync_at is None): use camera_backfill_days so we fetch recent history
@@ -193,8 +197,8 @@ async def _sync_one_camera(camera_id: int) -> dict:
         log.warning("cam %s (%s): health refresh failed: %s: %s",
                     camera_id, brand, type(exc).__name__, exc)
 
-    # User-defined directory structure: [User defined directory]/[Camera Brand]/[Camera Name]/
-    cam_dir = get_camera_dir(brand, camera_name)
+    # User-defined directory structure: [User defined directory]/region_{id}/[Camera Brand]/[Camera Name]/
+    cam_dir = get_camera_dir(brand, camera_name, region_id)
     os.makedirs(cam_dir, exist_ok=True)
     new = 0
     skipped_non_animal = 0

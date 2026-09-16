@@ -13,6 +13,7 @@ from app.core.database import Base
 class Corridor(Base):
     __tablename__ = "corridors"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    region_id: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     is_active: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     # usage frequency 1 (rarely used) – 10 (heavily used); scales proximity contribution

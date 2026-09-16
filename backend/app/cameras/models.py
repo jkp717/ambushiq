@@ -13,6 +13,7 @@ from app.core.database import Base
 class Camera(Base):
     __tablename__ = "cameras"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    region_id: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(120))
     brand: Mapped[str] = mapped_column(String(32))
     provider_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g. Spypoint cam ID

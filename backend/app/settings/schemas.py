@@ -1,4 +1,4 @@
-"""Pydantic validation schemas for app settings & home location."""
+"""Pydantic validation schemas for app settings."""
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -27,10 +27,7 @@ class SettingsIn(BaseModel):
     camera_sync_interval_minutes: float | None = None
     image_retention_days: float | None = None
     camera_backfill_days: float | None = None
-    rut_peak_month: float | None = None
-    rut_peak_day: float | None = None
     camera_image_dir: str | None = None
-    property_timezone: str | None = None
     thermal_wind_half_scale: float | None = None
     thermal_wind_exponent: float | None = None
     thermal_midday_discount: float | None = None
@@ -53,8 +50,3 @@ class SettingsIn(BaseModel):
     scout_weight_proximity: float | None = None
     scout_weight_camera: float | None = None
     scout_weight_unexplored: float | None = None
-
-
-class HomeIn(BaseModel):
-    lat: float
-    lon: float
