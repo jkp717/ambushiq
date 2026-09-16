@@ -324,7 +324,15 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     }
   }
 
-  if (!stands.length) {
+  // Don't block the map when the user is actively trying to place their
+  // first stand (or draw a zone/corridor before any stand exists) — this
+  // gate previously fired unconditionally, which meant clicking "Add first
+  // stand" from the Today page navigated here and immediately dead-ended,
+  // since drawMode was set but the map that would let you click-to-place
+  // never rendered. A brand-new region always starts at zero stands, so
+  // this is now a guaranteed dead-end on region creation rather than a rare
+  // edge case, hence catching it here rather than leaving it as pre-existing.
+  if (!stands.length && !drawMode) {
     return <div style={{ padding: 16 }}><Empty>Add a stand first to use the map.</Empty></div>;
   }
 
