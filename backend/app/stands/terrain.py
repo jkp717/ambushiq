@@ -257,15 +257,20 @@ def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
     }
 
 
-def compute_slope_aspect(dem_np):
+def compute_slope_aspect(dem_np, cell_m: float = 1.0):
     """Fill sinks + compute D-Infinity slope/aspect grids. Shared by analyze_terrain()
     and scouting/terrain_features.py so funnel detection can get full per-cell slope
     grids without duplicating this RichDEM setup."""
     rda = rd.rdarray(dem_np, no_data=-9999)
+    # Set an explicit geotransform (cell size = cell_m, origin arbitrary) so RichDEM
+    # doesn't fall back to its 1x1-cell default and print a "No geotransform defined"
+    # warning on every call — our own code always applies cell_m separately anyway,
+    # so this only silences the noise, it doesn't change any computed values.
+    rda.geotransform = [0, cell_m, 0, 0, 0, -cell_m]
     # Fill artificial sinks to prevent the D-infinity flow from getting trapped
-    rd.FillDepressions(rda, epsilon=True, in_place=True)
-    slope_rda = rd.TerrainAttribute(rda, attrib='slope_riserun')
-    aspect_rda = rd.TerrainAttribute(rda, attrib='aspect')
+    rd.fill_depressions(rda, epsilon=True, in_place=True)
+    slope_rda = rd.terrain_attribute(rda, attrib='slope_riserun')
+    aspect_rda = rd.terrain_attribute(rda, attrib='aspect')
     return rda, slope_rda, aspect_rda
 
 
@@ -276,10 +281,10 @@ def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_
 
     # Load 2D list into a numpy array and wrap it for RichDEM
     dem_np = np.array(dem, dtype=np.float32)
-    rda, slope_rda, aspect_rda = compute_slope_aspect(dem_np)
+    rda, slope_rda, aspect_rda = compute_slope_aspect(dem_np, cell_m)
 
     # Calculate D-Infinity Flow Accumulation (sinks already filled by compute_slope_aspect)
-    accum_rda = rd.FlowAccumulation(rda, method='Dinf')
+    accum_rda = rd.flow_accumulation(rda, method='Dinf')
 
     slope_pct = round((float(slope_rda[ctr, ctr]) / cell_m) * 100)
 
