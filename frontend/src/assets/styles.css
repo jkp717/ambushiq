@@ -354,11 +354,6 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 
 /* slider */
 .map-hour-slider { width: 100%; height: 8px; border-radius: 4px; }
-/* thermal-switch markers, overlaid just above the slider's own track */
-.map-slider-markers {
-  position: absolute; top: -9px; left: 0; right: 0; height: 9px;
-  pointer-events: none;
-}
 /* time tooltip shown above the handle while hovering/dragging the slider */
 .map-slider-tooltip {
   position: absolute; top: -30px;
@@ -392,8 +387,16 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 .map-slider-tick--major { height: 8px; background: var(--sub); }
 .map-slider-tick--minor { height: 4px; }
 .map-slider-ticks {
+  position: relative; /* positioning context for the thermal markers overlay below */
   display: flex; justify-content: space-between;
   font-size: 10.5px; color: var(--sub); margin-bottom: 6px;
+}
+/* thermal-switch markers — inline with the tick labels (was: floating above
+   the slider track). Absolutely positioned over the whole row so they don't
+   participate in the labels' own space-between flex layout. */
+.map-slider-markers {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
 }
 
 /* ── date picker popup ── */

@@ -423,12 +423,6 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                       onMouseLeave={() => setSliderHovering(false)}
                       onMouseDown={() => setSliderDragging(true)}
                       onTouchStart={() => setSliderDragging(true)} />
-                    <div className="map-slider-markers">
-                      <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
-                        title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
-                      <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
-                        title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
-                    </div>
                     {(sliderHovering || sliderDragging) && curHour && (() => {
                       const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
                       const thumbPct = maxSlot > 0 ? (Math.min(hourPos, maxSlot) / maxSlot) * 100 : 0;
@@ -451,6 +445,16 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                     ))}
                   </div>
                   <div className="map-slider-ticks">
+                    {/* Thermal-switch markers, now inline with the tick labels
+                        instead of floating above the slider — absolutely
+                        positioned over this row so they don't disturb the
+                        labels' own space-between layout. */}
+                    <div className="map-slider-markers">
+                      <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
+                        title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
+                      <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
+                        title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
+                    </div>
                     <span>{curDay.hours[0]?.label}</span>
                     <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
                     <span>{curDay.hours[maxHour]?.label}</span>
