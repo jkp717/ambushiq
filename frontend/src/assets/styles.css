@@ -333,17 +333,24 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   white-space: nowrap;
 }
 
-.map-play-btn {
-  font-weight: 600; font-size: 14px;
-  background: var(--surf) !important;
-  border-color: var(--bord2) !important;
-  min-width: 80px; justify-content: center; flex-shrink: 0;
-  margin-left: auto;
+/* Media-control row: skip-back / scrubber / skip-forward / play-pause */
+.map-scrub-row {
+  display: flex; align-items: flex-start; gap: 6px;
 }
-.map-play-btn.playing {
-  background: var(--navy) !important;
-  color: #fff !important; border-color: transparent !important;
+.map-scrub-track { flex: 1; min-width: 0; }
+/* Nudged down slightly so the icon roughly lines up with the slider's own
+   track rather than the vertical center of the whole (taller) column below
+   it, which also includes the tick marks and hour labels. */
+.map-step-btn { flex-shrink: 0; margin-top: 3px; }
+.map-play-circle {
+  flex-shrink: 0; width: 30px; height: 30px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: none; cursor: pointer;
+  background: var(--navy); color: #fff;
+  transition: background 0.12s;
 }
+.map-play-circle:hover { background: #0a3a6a; }
+.map-play-circle:disabled { background: var(--bord2) !important; cursor: default; }
 
 /* slider */
 .map-hour-slider { width: 100%; height: 8px; border-radius: 4px; }
