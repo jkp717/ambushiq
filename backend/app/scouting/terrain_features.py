@@ -79,7 +79,7 @@ def pinch_score_grid(slope_pct: np.ndarray, cell_m: float, steep_slope_pct: floa
 
 
 def funnel_score_grid(dem: np.ndarray, cell_m: float, settings: dict) -> dict:
-    _, slope_rda, _ = compute_slope_aspect(dem)
+    _, slope_rda, _ = compute_slope_aspect(dem, cell_m)
     slope_pct = np.array(slope_rda, dtype=np.float32) / cell_m * 100.0
     saddle = saddle_score_grid(dem, cell_m)
     pinch = pinch_score_grid(
