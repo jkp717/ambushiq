@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2 } from "lucide-react";
 import { api } from "../services/api.js";
+import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
 import Field from "../components/ui/Field.jsx";
@@ -12,6 +13,8 @@ function SettingsPage() {
   const [weatherProviders, setWeatherProviders] = useState([]);
   const [weatherKeyInput, setWeatherKeyInput] = useState("");
   const [weatherSecondaryKeyInput, setWeatherSecondaryKeyInput] = useState("");
+  const { canInstall, promptInstall, installed, isIOS } = useInstallPrompt();
+  const [showIOSHelp, setShowIOSHelp] = useState(false);
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn't load settings.")); }, []);
   useEffect(() => { api("/weather-providers").then((r) => setWeatherProviders(r.providers || [])).catch(() => {}); }, []);
 
@@ -317,6 +320,36 @@ function SettingsPage() {
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={resetScouting}>Reset defaults</button>
       </div>
+
+      {/* ── Install app ── */}
+      {!installed && (canInstall || isIOS) && (
+        <>
+          <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
+            <Download size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Install app
+          </div>
+          <p className="settings-desc">
+            Add AmbushIQ to your home screen for quicker, full-screen access — it opens like a
+            regular app, without the browser's address bar.
+          </p>
+          <div className="settings-section">
+            {canInstall ? (
+              <button className="btn btn-primary" onClick={promptInstall}><Download size={15} /> Install app</button>
+            ) : (
+              <>
+                <button className="btn btn-primary" onClick={() => setShowIOSHelp((v) => !v)}>
+                  <Share2 size={15} /> How to install on iPhone/iPad
+                </button>
+                {showIOSHelp && (
+                  <p className="settings-desc" style={{ marginTop: 10, marginBottom: 0 }}>
+                    Tap the Share icon <Share2 size={12} style={{ verticalAlign: "middle" }} /> in
+                    Safari's toolbar, then choose "Add to Home Screen".
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

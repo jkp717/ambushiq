@@ -1,19 +1,21 @@
 """
 Trail-camera providers for AmbushIQ (v2.15).
 
-Pluggable architecture: each brand implements CameraProvider. SpyPoint is a real,
-complete implementation against the app-backed cloud API (restapi.spypoint.com).
-The other five brands are STUBS with the full structure in place but no working
-endpoints yet — none of these vendors publishes a documented public API, so a real
-implementation requires capturing the mobile app's traffic (e.g. with mitmproxy)
-and filling in the endpoints/auth/response mapping in the marked TODO sections.
+Pluggable architecture: each brand implements CameraProvider. SpyPoint and Reveal
+are real implementations against their app-backed cloud APIs (restapi.spypoint.com
+and api.reveal.ishareit.net, respectively). The other four brands are STUBS with
+the full structure in place but no working endpoints yet — none of these vendors
+publishes a documented public API, so a real implementation requires capturing the
+mobile app's traffic (e.g. with mitmproxy) and filling in the endpoints/auth/
+response mapping in the marked TODO sections.
 
 Providers return a list of "photo" dicts:
     {"url": str, "taken_at": iso8601 str, "camera_ref": str}
 The caller downloads images, runs detection, and records sightings.
 
 NOTHING here is verified against a live account in the build sandbox (no network).
-Treat SpyPoint as best-effort-real and expect to adjust once run against a real login.
+Treat SpyPoint and Reveal as best-effort-real and expect to adjust once run against
+a real login.
 """
 from __future__ import annotations
 from typing import Optional
@@ -176,14 +178,140 @@ class SpyPointProvider(CameraProvider):
         return out
 
 
+# ─────────────────────────── Reveal (real) ───────────────────────────
+class RevealProvider(CameraProvider):
+    """
+    Tactacam Reveal's web app (account.revealcellcam.com) authenticates via AWS
+    Cognito (USER_PASSWORD_AUTH, called as a raw HTTPS request — not boto3) and
+    then talks to https://api.reveal.ishareit.net/v1. Flow (from community-
+    reverse-engineered behavior, specifically the open-source Home Assistant
+    integration github.com/SethCalkins/HomeAssistant-Tactacam — Tactacam
+    publishes no official API):
+      POST https://cognito-idp.us-east-1.amazonaws.com/
+           (X-Amz-Target: AWSCognitoIdentityProviderService.InitiateAuth)
+           {AuthFlow: USER_PASSWORD_AUTH, AuthParameters: {USERNAME, PASSWORD},
+            ClientId: <Reveal's public Cognito app client id>}
+        -> AuthenticationResult.AccessToken (bearer token, ~12h default expiry)
+      GET  /cameras                              -> response.cameras[{cameraId, settings{...}}]
+      GET  /photos?size=&page=&includeWeatherData=false -> response.photos[{photoUrl, photoDateUtc, cameraId}]
+    photoUrl is a direct, unauthenticated pre-signed S3 link (no further auth
+    needed to download it; expires in a matter of days, which is fine since we
+    download immediately during sync).
+    This is undocumented/unofficial and may violate Tactacam's ToS — same
+    caveat as SpyPoint above. NOT verified against a live account in this build
+    sandbox (no network); expect to adjust field names (camera name, the
+    photo->camera id key, page ordering) once run against a real login.
+    """
+    brand = "reveal"
+    credential_fields = ("username", "password")
+    implemented = True
+    COGNITO_URL = "https://cognito-idp.us-east-1.amazonaws.com/"
+    COGNITO_CLIENT_ID = "6r9tpojvgvkci5trla0ip14mon"
+    BASE = "https://api.reveal.ishareit.net/v1"
+
+    async def _login(self, client: httpx.AsyncClient) -> str:
+        r = await client.post(self.COGNITO_URL, headers={
+            "Content-Type": "application/x-amz-json-1.1",
+            "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+        }, json={
+            "AuthFlow": "USER_PASSWORD_AUTH",
+            "AuthParameters": {
+                "USERNAME": self.credentials.get("username"),
+                "PASSWORD": self.credentials.get("password"),
+            },
+            "ClientId": self.COGNITO_CLIENT_ID,
+        }, timeout=30)
+        if r.status_code != 200:
+            raise CameraError(f"Reveal login failed ({r.status_code})")
+        auth_result = (r.json() or {}).get("AuthenticationResult") or {}
+        tok = auth_result.get("AccessToken")
+        if not tok:
+            raise CameraError("Reveal login returned no access token")
+        return tok
+
+    async def verify(self) -> bool:
+        async with httpx.AsyncClient() as client:
+            await self._login(client)
+        return True
+
+    async def fetch_cameras(self) -> list[dict]:
+        """Return [{id, name, last_seen_at, photo_count, photo_limit}] for every
+        camera on this Reveal account. Field names below (settings.name,
+        lastReportDate, etc.) are best-effort from the reverse-engineered
+        integration's response shape — adjust once run against a real account,
+        same as every non-SpyPoint provider in this file."""
+        async with httpx.AsyncClient() as client:
+            token = await self._login(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            resp = await client.get(f"{self.BASE}/cameras", headers=headers, timeout=30)
+            resp.raise_for_status()
+            cams = ((resp.json() or {}).get("response") or {}).get("cameras", [])
+            log.info("Reveal: found %d camera(s) on account", len(cams))
+            out = []
+            for c in cams:
+                cam_id = c.get("cameraId")
+                if not cam_id:
+                    continue
+                settings = c.get("settings") or {}
+                out.append({
+                    "id": cam_id,
+                    "name": settings.get("name") or c.get("name") or cam_id,
+                    "last_seen_at": c.get("lastReportDate") or c.get("lastSeenAt"),
+                    "photo_count": c.get("photoCount"),
+                    "photo_limit": c.get("photoLimit"),
+                })
+            return out
+
+    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
+        """Return recent photos as [{url, taken_at, camera_ref}, ...].
+        Reveal's /photos endpoint (unlike SpyPoint's single date-ranged request)
+        only offers size/page paging with no documented date filter, so this
+        walks pages newest-first (the reverse-engineered integration's own
+        assumption — unverified) and stops once a page is entirely older than
+        `since`, or comes back empty."""
+        out: list[dict] = []
+        since_utc = since if (since is None or since.tzinfo) else since.replace(tzinfo=_dt.timezone.utc)
+        async with httpx.AsyncClient() as client:
+            log.info("Reveal: logging in as %s", self.credentials.get("username"))
+            token = await self._login(client)
+            log.info("Reveal: login OK — fetching photos")
+            headers = {"Authorization": f"Bearer {token}"}
+            page = 1
+            while True:
+                resp = await client.get(f"{self.BASE}/photos", headers=headers, timeout=30,
+                                         params={"size": 100, "page": page, "includeWeatherData": "false"})
+                resp.raise_for_status()
+                photos = ((resp.json() or {}).get("response") or {}).get("photos", [])
+                log.info("Reveal: page %d returned %d photo(s)", page, len(photos))
+                if not photos:
+                    break
+                if page == 1 and photos:
+                    log.info("Reveal: first raw photo keys=%s full=%s", list(photos[0].keys()), photos[0])
+                page_has_newer = False
+                for p in photos:
+                    taken = p.get("photoDateUtc")
+                    if since_utc and taken:
+                        try:
+                            taken_dt = _dt.datetime.fromisoformat(taken.replace("Z", "+00:00"))
+                        except ValueError:
+                            taken_dt = None
+                        if taken_dt and taken_dt <= since_utc:
+                            continue
+                    page_has_newer = True
+                    url = p.get("photoUrl")
+                    if not url:
+                        continue
+                    out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("cameraId"))})
+                if len(photos) < 100 or not page_has_newer:
+                    break
+                page += 1
+        log.info("Reveal: returning %d photo(s) to sync engine", len(out))
+        return out
+
+
 # ─────────────────────────── Stubs (structure only) ───────────────────────────
 # To implement: capture the brand app's API traffic, then fill _login/fetch below,
 # set implemented=True, and adjust credential_fields to what the brand needs.
-
-class RevealProvider(CameraProvider):
-    brand = "reveal"; credential_fields = ("username", "password"); implemented = False
-    # TODO: Tactacam Reveal cloud endpoints + auth + photo listing.
-
 
 class MoultrieProvider(CameraProvider):
     brand = "moultrie"; credential_fields = ("username", "password"); implemented = False
