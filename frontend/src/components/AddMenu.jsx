@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, MapPin, Wheat, Trees, Footprints, Target, Binoculars } from "lucide-react";
+import { MapPinPlusInside, MapPin, Wheat, Trees, Footprints, Target, Binoculars } from "lucide-react";
 
 function AddMenu({ drawMode, setDrawMode }) {
   const [open, setOpen] = useState(false);
@@ -22,7 +22,7 @@ function AddMenu({ drawMode, setDrawMode }) {
   ];
   return (
     <div style={{ position: "relative" }} ref={ref}>
-      <button className="btn btn-primary" onClick={() => setOpen((o) => !o)} disabled={!!drawMode}><Plus size={15} /> Add</button>
+      <button className="btn btn-primary" onClick={() => setOpen((o) => !o)} disabled={!!drawMode}><MapPinPlusInside size={15} /> Add</button>
       {open && (
         <div style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: "calc(100% + 4px)", background: "var(--bg)", border: "1px solid var(--bord2)", borderRadius: 10, padding: 6, zIndex: 3000, minWidth: 168, boxShadow: "0 6px 24px rgba(0,0,0,.18)" }}>
           {items.map(({ m, label, icon: Icon, color }) => (
