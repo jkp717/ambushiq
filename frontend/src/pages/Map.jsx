@@ -465,7 +465,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                   disabled={hourPos >= maxSlot} title="Forward 15 minutes">
                   <SkipForward size={16} />
                 </button>
-                <button className="map-play-circle" onClick={() => setPlaying((p) => !p)}
+                <button className="icon-btn map-nav-btn map-step-btn" onClick={() => setPlaying((p) => !p)}
                   disabled={!curDay} title={playing ? "Pause" : "Play"}>
                   {playing ? <Pause size={16} /> : <Play size={16} />}
                 </button>

@@ -342,15 +342,6 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
    track rather than the vertical center of the whole (taller) column below
    it, which also includes the tick marks and hour labels. */
 .map-step-btn { flex-shrink: 0; margin-top: 3px; }
-.map-play-circle {
-  flex-shrink: 0; width: 30px; height: 30px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 999px; border: none; cursor: pointer;
-  background: var(--navy); color: #fff;
-  transition: background 0.12s;
-}
-.map-play-circle:hover { background: #0a3a6a; }
-.map-play-circle:disabled { background: var(--bord2) !important; cursor: default; }
 
 /* slider */
 .map-hour-slider { width: 100%; height: 8px; border-radius: 4px; }
@@ -454,7 +445,7 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
 
 /* ── layer overlay — collapsible ── */
 .layer-overlay {
-  position: absolute; bottom: 10px; left: 10px; z-index: 500;
+  position: absolute; bottom: 20px; left: 10px; z-index: 500;
   display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
 }
 .layer-toggle-btn {
