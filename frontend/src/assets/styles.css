@@ -286,17 +286,27 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   overflow: hidden;
 }
 
-/* controls panel */
+/* controls panel — a grid so the transport buttons (back/fwd/play) can be
+   reassigned from "flanking the slider" (default) to "beside the date/time,
+   far right" on narrow phone-portrait screens, without duplicating markup.
+   See the phone-portrait override below for the alternate layout. */
 .map-ctrl-panel {
   flex-shrink: 0;
   background: var(--bg); border-bottom: 1px solid var(--bord);
   padding: 8px 12px 6px;
+  display: grid; align-items: start;
+  column-gap: 6px; row-gap: 8px;
+  grid-template-columns: auto 1fr auto auto;
+  grid-template-areas:
+    "top   top   top  top"
+    "back  track fwd  play";
 }
 
 /* Single compact row: date nav + time + weather + play */
 .map-ctrl-top {
+  grid-area: top;
   display: flex; align-items: center;
-  gap: 8px; margin-bottom: 8px; flex-wrap: nowrap;
+  gap: 8px; flex-wrap: nowrap;
 }
 
 /* Date nav */
@@ -333,14 +343,21 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   white-space: nowrap;
 }
 
-/* Media-control row: skip-back / scrubber / skip-forward / play-pause */
-.map-scrub-row {
-  display: flex; align-items: flex-start; gap: 6px;
-}
-.map-scrub-track { flex: 1; min-width: 0; }
+/* Media-control row: skip-back / scrubber / skip-forward / play-pause.
+   display:contents unwraps this row so its 4 children become direct grid
+   items of .map-ctrl-panel above, each placed by its own grid-area class
+   below — that's what lets the phone-portrait override move back/fwd/play
+   without them needing to stay DOM-adjacent to the track. */
+.map-scrub-row { display: contents; }
+.map-scrub-track { grid-area: track; min-width: 0; }
+.map-scrub-back { grid-area: back; }
+.map-scrub-fwd  { grid-area: fwd; }
+.map-scrub-play { grid-area: play; }
 /* Nudged down slightly so the icon roughly lines up with the slider's own
    track rather than the vertical center of the whole (taller) column below
-   it, which also includes the tick marks and hour labels. */
+   it, which also includes the tick marks and hour labels. Only applies in
+   the default layout — the phone-portrait override below resets it, since
+   there the buttons sit beside the date/time row instead. */
 .map-step-btn { flex-shrink: 0; margin-top: 3px; }
 
 /* slider */
@@ -477,6 +494,22 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   width: 220px;
   background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
   border-radius: 10px; padding: 7px 10px;
+}
+
+/* On narrow phone-portrait screens only (landscape and larger/tablet screens
+   keep the default layout above): move the transport buttons off the slider
+   row and up beside the date/time, right-aligned, with the slider dropping
+   to its own full-width row underneath. Same grid items, just reassigned to
+   different areas — no markup duplication needed. */
+@media (max-width: 480px) and (orientation: portrait) {
+  .map-ctrl-panel {
+    grid-template-columns: 1fr auto auto auto;
+    grid-template-areas:
+      "top  back fwd  play"
+      "track track track track";
+    align-items: center;
+  }
+  .map-step-btn { margin-top: 0; }
 }
 
 /* ── map-page nav dropdown in top bar ── */
