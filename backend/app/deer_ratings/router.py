@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import engine
 from app.deer_ratings import rating as deer_rating
 from app.dependencies import get_active_region_id, require_token
-from app.forecast.service import get_forecast, get_historical_baseline_f
+from app.forecast.service import get_forecast, get_historical_baseline_f, get_historical_day_weather
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 from app.stands.models import Stand
@@ -119,4 +119,17 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
         rating["days_out"] = days_out
         out.append(rating)
 
-    return {"ratings": out, "utc_offset_seconds": _utc_offset}
+    # "Yesterday" is never part of the forward-looking forecast window above, so
+    # today's card (the only one with no same-array predecessor) needs actual
+    # observed weather for the day before, to show a day-over-day delta.
+    previous_day = None
+    yesterday = _local_today - timedelta(days=1)
+    hist_wx = await get_historical_day_weather(lat, lon, yesterday)
+    if hist_wx:
+        prev_rating = deer_rating.rate_day(yesterday, hist_wx, rate_weights,
+                                            rut_peak_month=int(region["rut_peak_month"]),
+                                            rut_peak_day=int(region["rut_peak_day"]))
+        prev_rating["day"] = yesterday.isoformat()
+        previous_day = prev_rating
+
+    return {"ratings": out, "utc_offset_seconds": _utc_offset, "previous_day": previous_day}

@@ -12,6 +12,10 @@ import DayRankCard from "../components/DayRankCard.jsx";
 function TodayPage({ stands, onGoDraw }) {
   const [days, setDays] = useState([]);
   const [deerRatings, setDeerRatings] = useState(null);
+  // "Yesterday" (from actual observed weather) -- only used for the delta on
+  // today's card, since today has no same-array predecessor in `deerRatings`
+  // (the forward forecast window never looks backward).
+  const [previousDay, setPreviousDay] = useState(null);
   const [selectedDay, setSelectedDay] = useState(null);
   const [dayRanked, setDayRanked] = useState(null);
   const [useProx, setUseProx] = useState({ corridor: true, food: true, bedding: true });
@@ -22,6 +26,7 @@ function TodayPage({ stands, onGoDraw }) {
     if (!stands.length) return;
     api("/deer-ratings").then((j) => {
       setDeerRatings(j.ratings);
+      setPreviousDay(j.previous_day ?? null);
       // Use the property's UTC offset so "today" matches the local calendar date
       // on the property rather than the UTC date in the browser or on the server.
       const ofs = j.utc_offset_seconds ?? 0;
@@ -61,6 +66,13 @@ function TodayPage({ stands, onGoDraw }) {
 
   const selectedRating = deerRatings?.find((r) => r.day === selectedDay);
   const loadableDays = days.map((d) => d.day);
+  // Prior-day comparison for the detail card's delta indicators: any day but
+  // the first uses the previous entry in the same 14-day array; the first
+  // (today) has no such predecessor, so it falls back to `previousDay`
+  // (yesterday, rated from actual observed weather -- see the effect above).
+  const selectedIndex = deerRatings?.findIndex((r) => r.day === selectedDay) ?? -1;
+  const prevRating = selectedIndex > 0 ? deerRatings[selectedIndex - 1]
+    : selectedIndex === 0 ? previousDay : null;
 
   return (
     <div className="today-page">
@@ -82,14 +94,14 @@ function TodayPage({ stands, onGoDraw }) {
 
       {/* Expanded day detail */}
       {selectedRating && curDay && (
-        <DayDetailPanel rating={selectedRating} day={curDay}
+        <DayDetailPanel rating={selectedRating} prevRating={prevRating} day={curDay}
           dayRanked={dayRanked} useProx={useProx} setUseProx={setUseProx} />
       )}
 
       {selectedRating && !curDay && selectedRating.confidence === "low" && (
         <div className="day-detail">
           <Banner><AlertTriangle size={14} /> This day is beyond the detailed forecast window — rut phase is reliable but stand rankings aren't available.</Banner>
-          <DeerRating rating={selectedRating} />
+          <DeerRating rating={selectedRating} prevRating={prevRating} />
         </div>
       )}
     </div>
@@ -179,7 +191,7 @@ function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 
 }
 
 /* ── Expanded day detail ── */
-function DayDetailPanel({ rating, day, dayRanked, useProx, setUseProx }) {
+function DayDetailPanel({ rating, prevRating, day, dayRanked, useProx, setUseProx }) {
   return (
     <div className="day-detail">
       <div className="day-detail-header">
@@ -196,7 +208,7 @@ function DayDetailPanel({ rating, day, dayRanked, useProx, setUseProx }) {
         <div className="day-low-note"><AlertTriangle size={13} /> 8+ days out — wind-based rankings are directional only.</div>
       )}
 
-      <DeerRating rating={rating} />
+      <DeerRating rating={rating} prevRating={prevRating} />
 
       {dayRanked && dayRanked.ranked.length > 0 && (
         <div className="best-stands">

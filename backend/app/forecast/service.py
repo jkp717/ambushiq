@@ -323,6 +323,88 @@ async def get_historical_baseline_f(lat: float, lon: float, end_date: date, days
     return baseline
 
 
+async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optional[dict]:
+    """Actual (observed) daytime-averaged weather for a single past date, from
+    Open-Meteo's historical archive — used to rate "yesterday" for the
+    day-over-day delta on today's rating card. The forward forecast window
+    used for every other rated day never looks backward, so yesterday is
+    never present in that array and has to be fetched separately here.
+
+    Mirrors deer_ratings/router.py's own daytime-window averaging (sunrise..
+    sunset, same field names) so the resulting factors are computed exactly
+    the same way as every forecast-based day, making the two comparable.
+
+    Best-effort: returns None on any failure (most commonly the archive not
+    having ingested the last day or two yet) so the frontend just omits the
+    delta rather than showing something misleading.
+    """
+    key = f"hday:{lat:.3f},{lon:.3f}:{d.isoformat()}"
+    now = time.time()
+    if key in _hist_cache and now - _hist_cache[key][0] < HIST_TTL:
+        return _hist_cache[key][1]
+
+    HPA_TO_INHG = 0.02953  # matches app/deer_ratings/rating.py's own constant
+    url = (
+        "https://archive-api.open-meteo.com/v1/archive"
+        f"?latitude={lat}&longitude={lon}&start_date={d.isoformat()}&end_date={d.isoformat()}"
+        "&hourly=temperature_2m,dew_point_2m,precipitation,wind_speed_10m,surface_pressure"
+        "&daily=sunrise,sunset&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto"
+    )
+    result: Optional[dict] = None
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, timeout=15)
+            r.raise_for_status()
+            j = r.json()
+        hh = j.get("hourly") or {}
+        times = hh.get("time") or []
+        daily = j.get("daily") or {}
+        sr_list, ss_list = daily.get("sunrise") or [], daily.get("sunset") or []
+        sr_h, ss_h = 6.5, 19.0
+        if sr_list and ss_list:
+            sr, ss = datetime.fromisoformat(sr_list[0]), datetime.fromisoformat(ss_list[0])
+            sr_h, ss_h = sr.hour + sr.minute / 60, ss.hour + ss.minute / 60
+        day_idxs = [i for i, t in enumerate(times) if sr_h <= datetime.fromisoformat(t).hour <= ss_h] or list(range(len(times)))
+
+        def davg(field):
+            arr = hh.get(field) or []
+            vals = [arr[i] for i in day_idxs if i < len(arr) and arr[i] is not None]
+            return sum(vals) / len(vals) if vals else None
+
+        temp_arr = hh.get("temperature_2m") or []
+        highs = [temp_arr[i] for i in day_idxs if i < len(temp_arr) and temp_arr[i] is not None]
+        high_f = max(highs) if highs else None
+        wind_mph = davg("wind_speed_10m")
+        dew_f = davg("dew_point_2m")
+        precip_arr = hh.get("precipitation") or []
+        rain_vals = [precip_arr[i] for i in day_idxs if i < len(precip_arr) and precip_arr[i] is not None]
+        rain_mm = sum(rain_vals) if rain_vals else None
+        p_arr = hh.get("surface_pressure") or []
+        p_vals = [p_arr[i] for i in day_idxs if i < len(p_arr) and p_arr[i] is not None]
+        p_inhg = (sum(p_vals) / len(p_vals) * HPA_TO_INHG) if p_vals else None
+        p_trend = None
+        if len(p_vals) >= 2:
+            span = max(1, len(p_vals) - 1)
+            p_trend = (p_vals[-1] - p_vals[0]) * HPA_TO_INHG / span * 3
+
+        baseline_f = await get_historical_baseline_f(lat, lon, d - timedelta(days=1))
+
+        result = {
+            "pressure_inhg": round(p_inhg, 2) if p_inhg else None,
+            "pressure_trend_inhg": round(p_trend, 3) if p_trend is not None else None,
+            "wind_mph": round(wind_mph, 1) if wind_mph is not None else None,
+            "rain_mm": round(rain_mm, 1) if rain_mm is not None else None,
+            "day_high_f": round(high_f) if high_f is not None else None,
+            "baseline_f": round(baseline_f) if baseline_f is not None else None,
+            "dew_point_f": round(dew_f) if dew_f is not None else None,
+        }
+    except Exception:
+        result = None
+
+    _hist_cache[key] = (now, result)
+    return result
+
+
 def build_sits(forecast: dict) -> list[dict]:
     times = forecast["hourly"]["time"]
     sun = forecast["daily"]
