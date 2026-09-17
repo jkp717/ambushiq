@@ -208,15 +208,25 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
     def _lbl(v):
         return "strong" if v >= 0.75 else "moderate" if v >= 0.5 else "weak"
 
+    def _supp_lbl(v):
+        """v = amount of suppression (0 = dry/no effect, up to ~0.75 = heavy rain).
+        Rain's own factor is a favorability score (1.0 = dry = no suppression), so this
+        takes 1-rf rather than reusing _lbl directly on rf — labeling rf itself would
+        call a dry day (rf=1.0) "strong suppression", which is backwards."""
+        if v <= 0.05: return "no"
+        if v >= 0.6: return "strong"
+        if v >= 0.3: return "moderate"
+        return "slight"
+
     breakdown = [
         {"factor": "Rut / season", "value": round(rut, 2),
-         "impact": f"{phase} — {_lbl(rut)} seasonal drive", "weight": "multiplier"},
+         "impact": f"{phase}, {_lbl(rut)} seasonal drive", "weight": "multiplier"},
         {"factor": "Barometric pressure", "value": round(pf, 2),
          "impact": f"{_lbl(pf)} ({round(raw_p, 2) if raw_p else 'N/A'}\" )", "weight": round(w['pressure'], 2)},
         {"factor": "Wind", "value": round(wf, 2),
          "impact": f"{_lbl(wf)} ({wx.get('wind_mph')} mph)", "weight": round(w['wind'], 2)},
         {"factor": "Rain", "value": round(rf, 2),
-         "impact": f"{_lbl(rf)} suppression ({wx.get('rain_mm')} mm)", "weight": round(w['rain'], 2)},
+         "impact": f"{_supp_lbl(1 - rf)} suppression ({wx.get('rain_mm')} mm)", "weight": round(w['rain'], 2)},
         {"factor": "Temperature shift", "value": round(tf, 2),
          "impact": f"{_lbl(tf)} daytime shift ({wx.get('day_high_f')}°F vs {wx.get('baseline_f')}°F baseline)",
          "weight": round(w['temp'], 2)},

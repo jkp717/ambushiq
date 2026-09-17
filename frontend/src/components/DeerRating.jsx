@@ -30,15 +30,15 @@ function DeerRating({ rating }) {
       {open && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bord)" }}>
           {bar("Rut intensity", rating.rut?.intensity,
-            "How strong seasonal breeding drive is right now — higher means bucks cruise more, including in daylight. 85+ = peak pre-rut seeking, the best daylight movement of the year. 15 = off-season lull.")}
+            "How strong seasonal breeding drive is right now. Higher means bucks cruise more, including in daylight. 85+ = peak pre-rut seeking, the best daylight movement of the year. 15 = off-season lull.")}
           {bar("Barometric", fac?.pressure,
             "Steady high pressure (~30.0–30.4in) or a fast-moving front pushes deer to move in daylight. 80+ = ideal pressure or a sharp swing. 30 = flat, low pressure that favors night movement.")}
           {bar("Wind", fac?.wind,
             "Moderate wind (5–15mph) helps deer scent danger and move confidently; dead calm or gusty wind suppresses it. 90+ = a ~9mph breeze, the sweet spot. 35 = wind above 25mph.")}
           {bar("Rain (1=dry)", fac?.rain,
-            "Heavy rain is one of the strongest movement suppressors. 100 = dry. 55 = moderate rain (2.5–7.5mm). 25 = heavy rain (7.5mm+) — high wind blunts the effect slightly.")}
+            "Heavy rain is one of the strongest movement suppressors. 100 = dry. 55 = moderate rain (2.5–7.5mm). 25 = heavy rain (7.5mm+); high wind blunts the effect slightly.")}
           {bar("Temp shift", fac?.temp_shift,
-            "Deer don't move less in the cold, they move earlier — a colder day than recent baseline shifts activity into daylight; a warm spell shifts it to night. 100 = a sharp cool front (15°F+ below baseline). 25 = a big warm-up. High dew points lower it further.")}
+            "Deer don't move less in the cold, they move earlier: a colder day than recent baseline shifts activity into daylight; a warm spell shifts it to night. 100 = a sharp cool front (15°F+ below baseline). 25 = a big warm-up. High dew points lower it further.")}
           <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8, lineHeight: 1.5 }}>
             {rating.inputs?.pressure_inhg != null && <>{rating.inputs.pressure_inhg}″ · </>}
             {rating.inputs?.wind_mph      != null && <>{rating.inputs.wind_mph} mph · </>}
@@ -50,19 +50,25 @@ function DeerRating({ rating }) {
             if (!bd || bd.length < 2) return null;
             const rutEntry = bd[0];
             const weatherFactors = bd.slice(1);
+            // Every factor is scaled 0-1 with 1.0 = ideal, so "how much is this factor
+            // costing today's score" is its deficit from 1.0, weighted by importance —
+            // not distance from an arbitrary 0.5 midpoint, which used to make a dry
+            // rain reading (favorability 1.0, as far from 0.5 as possible) look like
+            // the biggest driver on nearly every rain-free day even though it wasn't
+            // suppressing anything.
             const top = weatherFactors.reduce((best, f) => {
-              const s = Math.abs((f.value || 0) - 0.5) * (typeof f.weight === "number" ? f.weight : 0);
-              const b = Math.abs((best.value || 0) - 0.5) * (typeof best.weight === "number" ? best.weight : 0);
+              const s = (1 - (f.value ?? 1)) * (typeof f.weight === "number" ? f.weight : 0);
+              const b = (1 - (best.value ?? 1)) * (typeof best.weight === "number" ? best.weight : 0);
               return s > b ? f : best;
             });
             return (
               <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 6, lineHeight: 1.5, borderTop: "1px solid var(--bord)", paddingTop: 6 }}>
                 <span style={{ fontWeight: 600, color: "var(--txt)" }}>Why this score: </span>
-                {rutEntry.impact}. Primary weather factor: {top.factor.toLowerCase()} — {top.impact}.
+                {rutEntry.impact}. Primary weather factor: {top.factor.toLowerCase()}, {top.impact}.
               </div>
             );
           })()}
-          <div style={{ fontSize: 10.5, color: "var(--sub)", marginTop: 6, fontStyle: "italic" }}>Moon phase intentionally excluded — MSU research found no significant effect on buck activity.</div>
+          <div style={{ fontSize: 10.5, color: "var(--sub)", marginTop: 6, fontStyle: "italic" }}>Moon phase intentionally excluded: MSU research found no significant effect on buck activity.</div>
         </div>
       )}
     </div>
