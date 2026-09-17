@@ -400,7 +400,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               // spanning the full panel width on their own) so their hPct()-based
               // percentage positions keep lining up under the now-narrower slider.
               <div className="map-scrub-row">
-                <button className="icon-btn map-nav-btn map-step-btn"
+                <button className="icon-btn map-nav-btn map-step-btn map-scrub-back"
                   onClick={() => { setPlaying(false); setHourPos((p) => Math.max(0, p - 1)); }}
                   disabled={hourPos <= 0} title="Back 15 minutes">
                   <SkipBack size={16} />
@@ -460,12 +460,12 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                     <span>{curDay.hours[maxHour]?.label}</span>
                   </div>
                 </div>
-                <button className="icon-btn map-nav-btn map-step-btn"
+                <button className="icon-btn map-nav-btn map-step-btn map-scrub-fwd"
                   onClick={() => { setPlaying(false); setHourPos((p) => Math.min(maxSlot, p + 1)); }}
                   disabled={hourPos >= maxSlot} title="Forward 15 minutes">
                   <SkipForward size={16} />
                 </button>
-                <button className="icon-btn map-nav-btn map-step-btn" onClick={() => setPlaying((p) => !p)}
+                <button className="icon-btn map-nav-btn map-step-btn map-scrub-play" onClick={() => setPlaying((p) => !p)}
                   disabled={!curDay} title={playing ? "Pause" : "Play"}>
                   {playing ? <Pause size={16} /> : <Play size={16} />}
                 </button>
