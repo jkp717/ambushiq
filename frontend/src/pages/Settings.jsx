@@ -32,7 +32,7 @@ function SettingsPage() {
     try { const r = await api("/settings", { method: "PUT", body: JSON.stringify({ [field]: "" }) }); setS(r); }
     catch { setErr("Couldn't clear key."); }
   }
-  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80 }); }
+  function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80, scent_gate_floor: 0.4, rut_weight_strength: 1.0 }); }
   function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
   function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3 }); }
   function resetScouting() {
@@ -136,6 +136,19 @@ function SettingsPage() {
           <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`] ?? 100} display={`${Math.round(s[`falloff_${key}`] ?? 100)} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
         </div>
       ))}
+      <div className="settings-section">
+        <div className="settings-section-hd"><strong>Scent &amp; season</strong></div>
+        <SliderRow label="Bad-scent score kept" min={0} max={1} step={0.05}
+          value={s.scent_gate_floor ?? 0.4}
+          display={`${Math.round((s.scent_gate_floor ?? 0.4) * 100)}%`}
+          onChange={(v) => setS({ ...s, scent_gate_floor: v })}
+          info="Share of a stand's score it keeps when scent blows straight at the expected deer approach. 0% = a hard gate (bad scent zeroes the stand); 100% = scent direction is ignored." />
+        <SliderRow label="Seasonal weighting" min={0} max={1} step={0.05}
+          value={s.rut_weight_strength ?? 1.0}
+          display={`${Math.round((s.rut_weight_strength ?? 1.0) * 100)}%`}
+          onChange={(v) => setS({ ...s, rut_weight_strength: v })}
+          info="How strongly the rut phase re-weights the bonuses above — e.g. scrapes and rubs count more pre-rut, food counts more after the rut. 0% = the same weights all season." />
+      </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={reset}>Reset defaults</button>

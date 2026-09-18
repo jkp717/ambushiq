@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -10,11 +11,16 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.cameras.models import Camera
+from app.cameras.models import Camera, CameraSighting
 from app.core.database import engine
 from app.core.security import decrypt_settings_key
-from app.forecast.providers import get_weather_provider
-from app.settings.service import get_settings
+from app.corridors.models import Corridor
+from app.deer_ratings.rating import phase_proximity_multipliers, rut_intensity
+from app.deer_sign.models import DeerSign
+from app.forecast import scoring
+from app.forecast.providers import _sun_times_utc, get_weather_provider
+from app.settings.service import _thermal_params, get_settings
+from app.zones.models import Zone
 
 
 def _camera_status_by_stand(region_id: int) -> dict[int, dict]:
@@ -103,11 +109,48 @@ def _point_to_segment_m(plat, plon, alat, alon, blat, blon) -> float:
     return (cx * cx + cy * cy) ** 0.5
 
 
+SIGN_HALF_LIFE_DAYS = {"scrape": 21.0, "rub": 60.0}   # scrapes go cold fast; rubs persist
+SIGN_FRESHNESS_FLOOR = 0.25
+
+
+def _soft_cap(x: float) -> float:
+    """Diminishing returns for stacked features of one type: linear up to 1.0 (one
+    ideal feature counts fully, exactly as before), then a smooth saturation toward
+    1.5 — so twelve rubs are worth ~1.5 rubs, not twelve, and can't drown out
+    wind/thermal conditions."""
+    return x if x <= 1.0 else 1.0 + 0.5 * (1.0 - math.exp(-2.0 * (x - 1.0)))
+
+
+def _sign_freshness(sg: dict, now: datetime) -> float:
+    """Decay for a logged rub/scrape by how long ago it was recorded (created_at is when
+    the user logged it — the best available proxy for when the deer made it). Missing or
+    unparsable dates count as fresh."""
+    raw = sg.get("created_at")
+    if not raw:
+        return 1.0
+    try:
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 1.0
+    age_days = max(0.0, (now - t).total_seconds() / 86400)
+    half_life = SIGN_HALF_LIFE_DAYS.get(sg.get("kind"), 45.0)
+    return max(SIGN_FRESHNESS_FLOOR, 0.5 ** (age_days / half_life))
+
+
 def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
-                    sign: list | None = None) -> dict:
-    """Stacking, bonus-only proximity boost. Each feature contributes
-    max(0, 1 - dist/falloff); summed per type and scaled by that type's weight."""
+                    sign: list | None = None, multipliers: dict | None = None,
+                    now: datetime | None = None) -> dict:
+    """Bonus-only proximity boost. Each feature contributes max(0, 1 - dist/falloff);
+    contributions are summed per type with diminishing returns (_soft_cap) and scaled
+    by that type's weight, so the total is bounded (≤ 1.5× the sum of the weights).
+
+    `multipliers` re-weights each type for the season (see
+    deer_ratings.rating.phase_proximity_multipliers); rubs/scrapes decay with age."""
     slat, slon = stand["lat"], stand["lon"]
+    mult = multipliers or {}
+    now = now or datetime.now(timezone.utc)
 
     def zone_factor(kind, falloff):
         total = 0.0
@@ -153,14 +196,14 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
             if sg.get("kind") != kind or not sg.get("is_active", True):
                 continue
             d = _haversine_m(slat, slon, sg["lat"], sg["lon"])
-            total += max(0.0, 1 - d / falloff) if falloff > 0 else 0
+            total += (max(0.0, 1 - d / falloff) if falloff > 0 else 0) * _sign_freshness(sg, now)
         return total
 
-    b_cor    = corridor_factor() * settings["weight_corridor"]
-    b_food   = zone_factor("food",    settings["falloff_food"])    * settings["weight_food"]
-    b_bed    = zone_factor("bedding", settings["falloff_bedding"]) * settings["weight_bedding"]
-    b_scrape = sign_factor("scrape",  settings.get("falloff_scrape", 100)) * settings.get("weight_scrape", 0.12)
-    b_rub    = sign_factor("rub",     settings.get("falloff_rub",    80))  * settings.get("weight_rub",    0.10)
+    b_cor    = _soft_cap(corridor_factor()) * settings["weight_corridor"] * mult.get("corridor", 1.0)
+    b_food   = _soft_cap(zone_factor("food",    settings["falloff_food"]))    * settings["weight_food"]    * mult.get("food", 1.0)
+    b_bed    = _soft_cap(zone_factor("bedding", settings["falloff_bedding"])) * settings["weight_bedding"] * mult.get("bedding", 1.0)
+    b_scrape = _soft_cap(sign_factor("scrape",  settings.get("falloff_scrape", 100))) * settings.get("weight_scrape", 0.12) * mult.get("scrape", 1.0)
+    b_rub    = _soft_cap(sign_factor("rub",     settings.get("falloff_rub",    80)))  * settings.get("weight_rub",    0.10) * mult.get("rub", 1.0)
     return {"corridor": b_cor, "food": b_food, "bedding": b_bed,
             "scrape": b_scrape, "rub": b_rub,
             "total": b_cor + b_food + b_bed + b_scrape + b_rub}
@@ -518,4 +561,157 @@ def build_sits(forecast: dict) -> list[dict]:
             if idxs:
                 sits.append({"label": f"{label} — {tag}", "idxs": idxs, "sunrise_h": sr_h, "sunset_h": ss_h})
     return sits
+
+
+# ---------- unified stand scoring context ----------
+SUN_MARGIN = timedelta(minutes=30)
+
+
+@dataclass
+class ScoringContext:
+    """Everything scoring needs besides the stand and the hour, loaded once per request.
+
+    Every ranking endpoint builds one of these and calls `score()`, which funnels into
+    scoring.score_with_breakdown — so the same stand at the same hour gets the same
+    number on the map, in sit rankings and in the day view."""
+    settings: dict
+    thermal_params: dict
+    zones: list
+    corridors: list
+    sign: list
+    sightings_by_stand: dict
+    camera_state: dict
+    camera_scoring_on: bool
+    max_boost: float
+    max_penalty: float
+    lookback: float
+    saturation: float
+    utc_offset: int
+    tz_name: str
+    scent_gate_floor: float
+    rut_peak: tuple
+    rut_strength: float
+    _prox: dict = field(default_factory=dict)
+    _daylight: dict = field(default_factory=dict)
+    _sun: dict = field(default_factory=dict)
+
+    def season(self, day: Optional[str]) -> tuple[Optional[dict], Optional[str]]:
+        """(proximity multipliers, rut phase) for a forecast date, or (None, None)
+        when season weighting is off or no date is known."""
+        if self.rut_strength <= 0 or not day:
+            return None, None
+        _, phase = rut_intensity(date.fromisoformat(day[:10]), *self.rut_peak)
+        return phase_proximity_multipliers(phase, self.rut_strength), phase
+
+    def proximity_for(self, stand: dict, day: Optional[str]) -> dict:
+        key = (stand.get("id"), day[:10] if day else None)
+        if key not in self._prox:
+            mult, _ = self.season(day)
+            self._prox[key] = proximity_bonus(stand, self.zones, self.corridors, self.settings,
+                                              sign=self.sign, multipliers=mult)
+        return self._prox[key]
+
+    def _sun_utc(self, stand: dict, local_date: date):
+        key = (stand["lat"], stand["lon"], local_date)
+        if key not in self._sun:
+            self._sun[key] = _sun_times_utc(stand["lat"], stand["lon"], local_date, self.tz_name)
+        return self._sun[key]
+
+    def daylight_sightings(self, stand: dict) -> list[dict]:
+        """This stand's camera sightings taken between sunrise and sunset (± 30 min) of
+        their own local date — a photo at 6:30 PM in December was almost certainly
+        taken in the dark and says nothing about daylight deer movement."""
+        sid = stand.get("id")
+        if sid not in self._daylight:
+            kept = []
+            for sg in self.sightings_by_stand.get(sid, []):
+                try:
+                    t = datetime.fromisoformat(str(sg["timestamp"]).replace("Z", "+00:00"))
+                except (KeyError, ValueError):
+                    continue
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                local_date = (t + timedelta(seconds=self.utc_offset)).date()
+                sr, ss = self._sun_utc(stand, local_date)
+                if sr and ss and not (sr - SUN_MARGIN <= t <= ss + SUN_MARGIN):
+                    continue
+                kept.append(sg)
+            self._daylight[sid] = kept
+        return self._daylight[sid]
+
+    def score(self, stand: dict, hour: dict, period: Optional[str] = None,
+              windows: Optional[dict] = None) -> dict:
+        """Full score for one stand at one forecast hour. `hour["date"]` (ISO) selects the
+        season weighting; `period` + `windows` select the camera evidence window."""
+        day = hour.get("date")
+        prox = dict(self.proximity_for(stand, day))
+        _, phase = self.season(day)
+        if phase:
+            prox["season_phase"] = phase
+        cam = self.camera_state.get(stand.get("id"))
+        return scoring.score_with_breakdown(
+            stand, hour, period=period if self.camera_scoring_on else None,
+            sightings=self.daylight_sightings(stand) if cam else [],
+            max_boost_pct=self.max_boost, max_penalty_pct=self.max_penalty,
+            lookback_hours=self.lookback, has_camera=cam is not None,
+            camera_ready=cam["ready"] if cam else True,
+            camera_healthy=cam["healthy"] if cam else True,
+            unhealthy_reason=cam["reason"] if cam else None,
+            proximity=prox, utc_offset_seconds=self.utc_offset,
+            thermal_params=self.thermal_params, camera_boost_saturation=self.saturation,
+            scent_gate_floor=self.scent_gate_floor, windows=windows)
+
+
+def build_scoring_context(region_id: int, region: dict, settings: dict, utc_offset: int, *,
+                          camera_scoring_on: bool, toggles: Optional[dict] = None) -> ScoringContext:
+    """Load zones/corridors/sign/camera evidence for a region once. `toggles`
+    ({"corridor": bool, "food": bool, "bedding": bool}) zeroes those proximity weights;
+    `camera_scoring_on` is whether species classification is actually running (in
+    fallback mode species is unknown, so neither boost nor penalty can be evaluated)."""
+    settings = dict(settings)
+    for kind in ("corridor", "food", "bedding"):
+        if toggles and not toggles.get(kind, True):
+            settings[f"weight_{kind}"] = 0.0
+
+    lookback = float(settings.get("camera_lookback_hours", 72.0) or 72.0)
+    health_max_age = float(settings.get("camera_health_max_age_hours", 48.0) or 48.0)
+    max_boost = float(settings.get("max_camera_boost_pct", 0.0) or 0.0)
+    max_penalty = float(settings.get("max_camera_penalty_pct", 0.0) or 0.0)
+    if not camera_scoring_on:
+        max_boost = max_penalty = 0.0
+
+    camera_status = _camera_status_by_stand(region_id)
+    camera_state = {}
+    for sid, info in camera_status.items():
+        health = _camera_health(info["last_seen_at"], info["photo_count"], info["photo_limit"], health_max_age)
+        camera_state[sid] = {"ready": _camera_ready(info["created_at"], lookback),
+                             "healthy": health["healthy"], "reason": health["reason"]}
+
+    sightings_by_stand: dict[int, list] = {}
+    with Session(engine) as s:
+        zones = [z.to_dict() for z in s.scalars(
+            select(Zone).where(Zone.is_active == 1, Zone.region_id == region_id)).all()]
+        corridors = [c.to_dict() for c in s.scalars(
+            select(Corridor).where(Corridor.is_active == 1, Corridor.region_id == region_id)).all()]
+        sign = [r.to_dict() for r in s.scalars(
+            select(DeerSign).where(DeerSign.is_active == 1, DeerSign.region_id == region_id)).all()]
+        if camera_scoring_on and camera_status:
+            for row in s.scalars(select(CameraSighting).where(
+                    CameraSighting.stand_id.in_(list(camera_status)))).all():
+                sightings_by_stand.setdefault(row.stand_id, []).append(
+                    {"timestamp": row.timestamp, "confidence_score": row.confidence_score,
+                     "species": row.species})
+
+    return ScoringContext(
+        settings=settings, thermal_params=_thermal_params(settings),
+        zones=zones, corridors=corridors, sign=sign,
+        sightings_by_stand=sightings_by_stand, camera_state=camera_state,
+        camera_scoring_on=camera_scoring_on, max_boost=max_boost, max_penalty=max_penalty,
+        lookback=lookback,
+        saturation=float(settings.get("camera_boost_saturation", 0.0) or scoring.CAMERA_BOOST_SATURATION_DEFAULT),
+        utc_offset=utc_offset, tz_name=region.get("property_timezone") or "America/Chicago",
+        scent_gate_floor=float(settings.get("scent_gate_floor", scoring.SCENT_GATE_FLOOR_DEFAULT)),
+        rut_peak=(int(region["rut_peak_month"]), int(region["rut_peak_day"])),
+        rut_strength=float(settings.get("rut_weight_strength", 1.0)),
+    )
 

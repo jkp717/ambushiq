@@ -174,16 +174,16 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
     steadiness = max(0.0, steadiness)
 
     # "conditions" score: wind steadiness + thermal predictability (0..1).
-    # Scent direction is NOT included here — it is applied as a hard multiplicative
-    # gate in score_with_breakdown so that bad scent can never be rescued by
-    # proximity bonuses or trail-camera data.
+    # Scent direction is NOT included here — score_with_breakdown applies it afterwards as
+    # a multiplicative (soft, configurable) gate over conditions + proximity + camera.
     # Thermal predictability only counts when the drainage direction is known, the phase
     # is coherent, and ambient wind hasn't washed it out (coherence scales the credit).
     predictable = known and therm["phase"] != "neutral"
     thermal_credit = 0.1 + 0.2 * min(1.0, coherence) if predictable else 0.1
     conditions = steadiness * 0.7 + thermal_credit
 
-    # "total" = conditions × scent — used for per-hour map display scores only.
+    # "total" = conditions × scent (hard gate, no proximity/camera) — a quick base score for
+    # callers that don't need the full score_with_breakdown pipeline.
     total = conditions * scent_score
 
     return {
@@ -204,17 +204,27 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
 
 
 # ─────────────────────────── v2.15: camera boost + breakdowns ───────────────────────────
-# Hunt-period hour windows (local hour-of-day) used to match daylight sightings.
-PERIOD_WINDOWS = {
-    "morning": (5, 10),   # 5–10 AM
-    "midday": (10, 15),   # 10 AM–3 PM
-    "evening": (15, 20),  # 3–8 PM
-}
+def period_windows(sunrise_h: float, sunset_h: float) -> dict[str, tuple[int, int]]:
+    """Inclusive local-hour windows for the three hunt periods, anchored to the day's
+    sunrise/sunset. Midday spans whatever is left between morning and evening so no
+    hour is stranded outside all three; on a very short day its range can be empty
+    (lo > hi), which is correct. One definition shared by the day ranking, the map,
+    and trail-camera period matching so they can never disagree."""
+    morning_end = int(sunrise_h + 3)
+    evening_start = int(sunset_h - 3)
+    return {
+        "morning": (int(sunrise_h - 1), morning_end),
+        "midday": (morning_end + 1, evening_start - 1),
+        "evening": (evening_start, int(sunset_h)),
+    }
 
 
-def period_for_hour(hour_of_day: int) -> str | None:
-    for p, (lo, hi) in PERIOD_WINDOWS.items():
-        if lo <= hour_of_day < hi:
+DEFAULT_PERIOD_WINDOWS = period_windows(6.5, 19.0)
+
+
+def period_for_hour(hour_of_day: int, windows: dict | None = None) -> str | None:
+    for p, (lo, hi) in (windows or DEFAULT_PERIOD_WINDOWS).items():
+        if lo <= hour_of_day <= hi:
             return p
     return None
 
@@ -237,13 +247,18 @@ def _is_deer_sighting(s: dict) -> bool:
 # boost reaches its cap. Exposed as the "camera_boost_saturation" setting.
 CAMERA_BOOST_SATURATION_DEFAULT = 3.0
 
+# Share of a stand's score kept when scent blows straight at the expected deer approach.
+# Exposed as the "scent_gate_floor" setting.
+SCENT_GATE_FLOOR_DEFAULT = 0.4
+
 
 def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
                  utc_offset_seconds: int = 0, has_camera: bool = False,
                  max_penalty_pct: float = 0.0, lookback_hours: float = 72.0,
                  camera_ready: bool = True, camera_healthy: bool = True,
                  unhealthy_reason: str | None = None,
-                 saturation: float = CAMERA_BOOST_SATURATION_DEFAULT) -> dict:
+                 saturation: float = CAMERA_BOOST_SATURATION_DEFAULT,
+                 windows: dict | None = None) -> dict:
     """
     Given a stand's recent camera sightings (each a dict with 'timestamp' ISO,
     'confidence_score', and optionally 'species'), return a multiplier and a
@@ -273,9 +288,11 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
       since being assigned): neutral — not enough time has passed yet for an
       absence of photos to mean anything.
 
-    A "qualifying" sighting is a DAYLIGHT sighting within the last
-    `lookback_hours` whose LOCAL hour-of-day falls in the current hunt period
-    AND whose species is confirmed white-tailed deer.
+    A "qualifying" sighting is within the last `lookback_hours`, has a LOCAL
+    hour-of-day inside the current hunt period (`windows`, the same sunrise/sunset-
+    anchored windows the day ranking uses), and is confirmed white-tailed deer.
+    The daylight requirement is enforced by the caller (forecast.service filters
+    sightings to those taken between sunrise and sunset of their own date).
 
     utc_offset_seconds is taken from the Open-Meteo forecast for the property's
     location and is used to convert the stored UTC timestamps to local time before
@@ -306,7 +323,7 @@ def camera_boost(period: str, sightings: list[dict], max_boost_pct: float,
         # Convert UTC → local time using the property's UTC offset before period
         # matching. timedelta handles sub-hour offsets (e.g. India UTC+5:30) correctly.
         local_dt = t + _dt.timedelta(seconds=utc_offset_seconds)
-        if period_for_hour(local_dt.hour) != period:
+        if period_for_hour(local_dt.hour, windows) != period:
             continue
         qualifying.append(s)
 
@@ -355,8 +372,20 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          proximity: dict | None = None,
                          utc_offset_seconds: int = 0,
                          thermal_params: dict | None = None,
-                         camera_boost_saturation: float = CAMERA_BOOST_SATURATION_DEFAULT) -> dict:
+                         camera_boost_saturation: float = CAMERA_BOOST_SATURATION_DEFAULT,
+                         scent_gate_floor: float = SCENT_GATE_FLOOR_DEFAULT,
+                         windows: dict | None = None) -> dict:
+    """The one stand-scoring function every ranking endpoint uses, so a stand's score
+    for a given hour is identical on the map, in sit rankings and in the day view:
 
+        final = (conditions + proximity) × camera × (floor + (1 − floor) × scent)
+
+    conditions  wind steadiness + thermal predictability (0..1)
+    proximity   bounded, season-weighted corridor/food/bedding/sign bonus
+    camera      trail-camera boost/penalty multiplier for this hunt period
+    scent gate  SOFT: bad scent scales the score down to `scent_gate_floor` of its
+                value (default 0.4) but never zeroes it; set the floor to 0 for a hard gate.
+    """
     base = score_stand_hour(stand, hour, thermal_params)
     breakdown = []
 
@@ -384,8 +413,10 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
     prox_total = float(proximity.get("total") or 0.0) if proximity else 0.0
     if prox_total > 0:
         total += prox_total
+        season = proximity.get("season_phase")
         breakdown.append({"factor": "Infrastructure proximity", "value": round(prox_total, 3),
-                          "text": f"+{round(prox_total*100)} from nearby corridor/food/bedding"})
+                          "text": f"+{round(prox_total*100)} from nearby corridor/food/bedding/sign"
+                                  + (f", weighted for {season}" if season else "")})
 
     cam = {"multiplier": 1.0, "boost_pct": 0.0, "count": 0, "status": "none", "text": "camera scoring off"}
     if period and (max_boost_pct or max_penalty_pct):
@@ -393,16 +424,15 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                             has_camera=has_camera, max_penalty_pct=max_penalty_pct,
                             lookback_hours=lookback_hours, camera_ready=camera_ready,
                             camera_healthy=camera_healthy, unhealthy_reason=unhealthy_reason,
-                            saturation=camera_boost_saturation)
+                            saturation=camera_boost_saturation, windows=windows)
         total *= cam["multiplier"]
         if cam["status"] != "none":
             breakdown.append({"factor": "Trail-camera", "value": cam["boost_pct"] / 100.0,
                               "text": cam["text"]})
 
-    # Softened scent gate: retains up to 40% of the score even if blowing directly at expected approach
-    # TODO: Make this % user configurable
-    scent_multiplier = 0.4 + 0.6 * base["scent_score"]
-    
+    floor = max(0.0, min(1.0, float(scent_gate_floor)))
+    scent_multiplier = floor + (1.0 - floor) * base["scent_score"]
+
     if stand.get("deer_approach_deg") is not None:
         if base["scent_score"] > 0.6:
             stxt = "scent carries away from expected deer approach"

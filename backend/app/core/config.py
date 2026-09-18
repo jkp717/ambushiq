@@ -34,6 +34,12 @@ DEFAULT_SETTINGS = {
     "weight_bedding": 0.10, "falloff_bedding": 250,
     "weight_scrape": 0.12, "falloff_scrape": 100,
     "weight_rub":    0.10, "falloff_rub":    80,
+    # share of a stand's score kept when scent blows straight at the expected deer
+    # approach (0 = hard gate, 1 = scent ignored) — see scoring.score_with_breakdown
+    "scent_gate_floor": 0.4,
+    # how strongly the rut phase re-weights corridor/food/bedding/sign proximity
+    # (0 = ignore season, 1 = full table in deer_ratings.rating.PHASE_PROXIMITY_MULT)
+    "rut_weight_strength": 1.0,
     # deer day-rating weather factor weights (relative; normalized at use)
     "rate_w_pressure": 0.32, "rate_w_wind": 0.20, "rate_w_rain": 0.28, "rate_w_temp": 0.20,
     # thermal coherence model (scoring.thermal_coherence) — how much of a thermal's

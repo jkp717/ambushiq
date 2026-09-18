@@ -15,6 +15,8 @@ class SettingsIn(BaseModel):
     falloff_scrape: float | None = None
     weight_rub: float | None = None
     falloff_rub: float | None = None
+    scent_gate_floor: float | None = None
+    rut_weight_strength: float | None = None
     rate_w_pressure: float | None = None
     rate_w_wind: float | None = None
     rate_w_rain: float | None = None

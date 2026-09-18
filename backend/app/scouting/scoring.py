@@ -10,22 +10,25 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+from app.forecast.scoring import _is_deer_sighting
 from app.forecast.service import _haversine_m, _point_to_segment_m, proximity_bonus
 
 # Internal normalization constants — not user-exposed settings, since these are
 # reference scales for combining already-exposed factors, not independent knobs.
 W_SADDLE_VS_EDGE = 0.6          # terrain_raw = 0.6*funnel + 0.4*edge
-PROXIMITY_NORM_CAP = 0.6        # proximity_bonus().total rarely exceeds this
 CAMERA_CONFIRM_RADIUS_M = 200.0
 CAMERA_CONFIRM_LOOKBACK_HOURS = 24 * 14.0  # 2 weeks — broader than a single hunt period
 UNEXPLORED_FULL_CREDIT_M = 400.0
 
-DEER_SPECIES = "white-tailed deer"
+_PROXIMITY_WEIGHT_DEFAULTS = {"weight_corridor": 0.15, "weight_food": 0.15, "weight_bedding": 0.10,
+                              "weight_scrape": 0.12, "weight_rub": 0.10}
 
 
-def _is_deer_sighting(sg: dict) -> bool:
-    species = (sg.get("species") or "").strip().lower()
-    return species == DEER_SPECIES
+def proximity_norm_cap(settings: dict) -> float:
+    """Reference scale for normalizing proximity_bonus().total to 0..1: the sum of the
+    configured per-type weights — what a stand sitting on one ideal feature of every
+    type would score. Tracks the user's tuning instead of assuming the default weights."""
+    return max(1e-9, sum(float(settings.get(k, d)) for k, d in _PROXIMITY_WEIGHT_DEFAULTS.items()))
 
 
 def camera_confirmation_bonus(lat: float, lon: float, camera_sightings: list[dict]) -> float:
@@ -50,7 +53,8 @@ def camera_confirmation_bonus(lat: float, lon: float, camera_sightings: list[dic
         d = _haversine_m(lat, lon, sg["lat"], sg["lon"])
         if d > CAMERA_CONFIRM_RADIUS_M:
             continue
-        conf = max(0.1, min(1.0, sg.get("confidence_score") or 0.5))
+        raw_conf = sg.get("confidence_score")
+        conf = max(0.1, min(1.0, 0.5 if raw_conf is None else float(raw_conf)))
         dist_weight = max(0.0, 1 - d / CAMERA_CONFIRM_RADIUS_M)
         accum += conf * dist_weight
     saturation = 3.0
@@ -148,6 +152,7 @@ def score_grid(lats, lons, funnel_grid, edge_grid, zones: list[dict], corridors:
     w_u = float(settings.get("scout_weight_unexplored", 0.10))
     weight_sum = max(1e-9, w_t + w_p + w_c + w_u)
     min_score = float(settings.get("scout_min_candidate_score", 40.0))
+    prox_cap = proximity_norm_cap(settings)
 
     candidates = []
     for r in range(n):
@@ -158,7 +163,7 @@ def score_grid(lats, lons, funnel_grid, edge_grid, zones: list[dict], corridors:
             terrain_raw = W_SADDLE_VS_EDGE * funnel_val + (1 - W_SADDLE_VS_EDGE) * edge_val
 
             prox_total = proximity_bonus({"lat": lat, "lon": lon}, zones, corridors, settings, sign)["total"]
-            prox_norm = min(1.0, prox_total / PROXIMITY_NORM_CAP)
+            prox_norm = min(1.0, prox_total / prox_cap)
 
             camera_val = camera_confirmation_bonus(lat, lon, camera_sightings)
             unexplored_val = unexplored_bonus(lat, lon, known_points)

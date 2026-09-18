@@ -166,6 +166,30 @@ def temp_shift_factor(day_high_f: float | None, baseline_f: float | None, dew_po
     return base_f
 
 
+# How much each kind of terrain feature matters to a stand's score in each rut phase
+# (multipliers on the user's configured proximity weights). Whitetail behavior: early
+# season is bed-to-food patterning; pre-rut/seeking bucks work scrapes, rubs and travel
+# corridors; the chase leans on corridors and doe bedding; lockdown pushes bucks to
+# bedding-area edges; post-rut is recovery on food. Proposed values — tune freely.
+_NEUTRAL_MULT = {"corridor": 1.0, "food": 1.0, "bedding": 1.0, "scrape": 1.0, "rub": 1.0}
+PHASE_PROXIMITY_MULT = {
+    "pre-season":                     {"corridor": 1.00, "food": 1.30, "bedding": 1.20, "scrape": 0.60, "rub": 0.80},
+    "early season / seeking":         {"corridor": 1.15, "food": 1.05, "bedding": 1.00, "scrape": 1.25, "rub": 1.20},
+    "rut (chasing / peak daylight)":  {"corridor": 1.30, "food": 0.85, "bedding": 1.10, "scrape": 1.10, "rub": 0.90},
+    "breeding peak / lockdown":       {"corridor": 1.00, "food": 0.80, "bedding": 1.40, "scrape": 0.70, "rub": 0.70},
+    "post-rut":                       {"corridor": 0.90, "food": 1.40, "bedding": 1.10, "scrape": 0.40, "rub": 0.50},
+    "off-season":                     _NEUTRAL_MULT,
+}
+
+
+def phase_proximity_multipliers(phase: str, strength: float = 1.0) -> dict:
+    """Per-feature-type proximity multipliers for a rut phase, blended toward 1.0 by
+    `strength` (0 = ignore season entirely, 1 = the full table)."""
+    strength = max(0.0, min(1.0, float(strength)))
+    table = PHASE_PROXIMITY_MULT.get(phase, _NEUTRAL_MULT)
+    return {k: 1.0 + strength * (v - 1.0) for k, v in table.items()}
+
+
 def rating_from_score(score: float) -> int:
     """0.2-wide bins — [0,.2)=1 … [.8,1]=5 — instead of round(), which is banker's
     rounding in Python and rated 0.375 and 0.625 both as 3."""
