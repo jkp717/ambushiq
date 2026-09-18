@@ -54,7 +54,10 @@ def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None) -> dict:
     if -1 <= a <= 2:
         return {"phase": "sinking", "uphill": False,
                 "weight": min(1.0, 0.85 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
-    if -1 <= b <= 3:
+    # Pre-sunset drainage only takes over once the sun has actually stopped heating the
+    # slope; on a bright late afternoon (sf > 0.25) upslope flow is still running, so
+    # fall through to the "rising" branch instead of reporting a 180°-wrong direction.
+    if -1 <= b <= 3 and sf <= 0.25:
         return {"phase": "sinking", "uphill": False,
                 "weight": min(1.0, 0.90 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
     if time_h < sr_h - 1 or time_h > ss_h + 1:
@@ -78,7 +81,12 @@ DEFAULT_THERMAL_PARAMS = {
     "wind_half_scale": 7.0,   # mph at which wind has cut thermal coherence roughly in half
     "wind_exponent": 1.8,     # how sharply coherence falls off past the half-scale point
     "midday_discount": 0.3,   # extra coherence knocked off "rising" phase even at calm wind
+    "thermal_gain": 1.3,      # calm-air boost so a clean dawn/dusk thermal can out-vote light wind
+    "coherence_floor": 0.05,  # coherence never drops below this, even in a gale
 }
+
+# Hard ceiling on the blended thermal weight so a tuned-up gain can never swamp the wind vector
+TW_MAX = 1.5
 
 
 def thermal_coherence(wind_speed: float, phase: str, solar_frac: float,
@@ -90,30 +98,45 @@ def thermal_coherence(wind_speed: float, phase: str, solar_frac: float,
     if phase == "rising":
         discount = max(0.0, min(1.0, float(p["midday_discount"])))
         wind_gate *= (1.0 - discount * solar_frac)
-    return max(0.05, wind_gate * 1.3)
+    return max(float(p["coherence_floor"]), wind_gate * float(p["thermal_gain"]))
+
+
+def _terrain_vectors(stand: dict) -> tuple[float, float, float | None, bool]:
+    """(downhill_deg, drainage_deg, channel_strength, known) for a stand.
+
+    `known` is False when nothing reliable says which way air drains — terrain not
+    analysed yet and no manual downhill bearing, or flat ground — so callers give
+    the thermal vector zero weight instead of inventing a due-north drainage."""
+    t = stand.get("terrain")
+    if t:
+        if t.get("flat"):
+            return 0.0, 0.0, None, False
+        return t["downhill_deg"], t["drainage_deg"], t.get("channel_strength"), True
+    manual = stand.get("downhill_deg")
+    if manual is not None:
+        return manual, manual, None, True
+    return 0.0, 0.0, None, False
 
 
 def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = None) -> dict:
     """Return separate wind and thermal directions (blowing-TO, degrees) plus the
     blended scent direction and score — for map indicators that show wind and
     thermals as distinct arrows."""
-    t = stand.get("terrain")
-    downhill = t["downhill_deg"] if t else (stand.get("downhill_deg") or 0)
-    drainage = t["drainage_deg"] if t else downhill
-    therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"],
-                          hour.get("temp_swing"))
-    thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
     wind_to = (hour["wind_dir"] + 180) % 360
 
     sc = score_stand_hour(stand, hour, thermal_params)
+    # The thermal arrow is only meaningful when the drainage direction is known and the
+    # phase actually has a coherent flow; in "neutral" hours the direction is noise.
+    show_thermal = sc["thermal_known"] and sc["thermal_phase"] != "neutral"
     return {
         "wind_to_deg": round(wind_to),
         "wind_from_deg": round(hour["wind_dir"]),
         "wind_speed": round(hour["wind_speed"], 1),
         "gust": round(hour["gust"], 1),
-        "thermal_to_deg": round(thermal_to),
-        "thermal_phase": therm["phase"],
-        "thermal_uphill": therm["uphill"],
+        "thermal_to_deg": sc["thermal_to_deg"] if show_thermal else None,
+        "thermal_strength": round(min(1.0, sc["tw"]), 2) if show_thermal else 0.0,
+        "thermal_phase": sc["thermal_phase"],
+        "thermal_uphill": sc["thermal_uphill"],
         "scent_to_deg": sc["scent_to_deg"],
         "scent_score": sc["scent_score"],
         "total": sc["total"],
@@ -121,17 +144,20 @@ def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = No
 
 
 def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None) -> dict:
-    t = stand.get("terrain")
-    downhill = t["downhill_deg"] if t else (stand.get("downhill_deg") or 0)
-    drainage = t["drainage_deg"] if t else downhill
+    downhill, drainage, channel, known = _terrain_vectors(stand)
     therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"],
                           hour.get("temp_swing"))
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
 
     ww = max(0.2, min(1.0, hour["wind_speed"] / 12))
-    tw = therm["weight"] * thermal_coherence(hour["wind_speed"], therm["phase"], therm["solar_frac"], thermal_params)
-    if t and not therm["uphill"]:
-        tw *= 0.8 + 0.5 * t["channel_strength"]
+    coherence = thermal_coherence(hour["wind_speed"], therm["phase"], therm["solar_frac"], thermal_params)
+    if known:
+        tw = therm["weight"] * coherence
+        if channel is not None and not therm["uphill"]:
+            tw *= 0.8 + 0.5 * channel
+        tw = min(TW_MAX, tw)
+    else:
+        tw = 0.0  # no reliable drainage direction → the scent vector is just the wind
 
     scent_to = blend_scent_dir(hour["wind_dir"], ww, thermal_to, tw)
 
@@ -151,7 +177,11 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
     # Scent direction is NOT included here — it is applied as a hard multiplicative
     # gate in score_with_breakdown so that bad scent can never be rescued by
     # proximity bonuses or trail-camera data.
-    conditions = steadiness * 0.7 + (0.3 if therm["phase"] != "neutral" else 0.1)
+    # Thermal predictability only counts when the drainage direction is known, the phase
+    # is coherent, and ambient wind hasn't washed it out (coherence scales the credit).
+    predictable = known and therm["phase"] != "neutral"
+    thermal_credit = 0.1 + 0.2 * min(1.0, coherence) if predictable else 0.1
+    conditions = steadiness * 0.7 + thermal_credit
 
     # "total" = conditions × scent — used for per-hour map display scores only.
     total = conditions * scent_score
@@ -163,7 +193,12 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
         "steadiness": round(steadiness, 2),
         "scent_to_deg": round(scent_to),
         "thermal_phase": therm["phase"],
-        "drainage_deg": round(drainage),
+        "thermal_known": known,
+        "thermal_uphill": therm["uphill"],
+        "thermal_to_deg": round(thermal_to) if known else None,
+        "drainage_deg": round(drainage) if known else None,
+        "tw": round(tw, 3),
+        "ww": round(ww, 3),
         "swing_factor": round(therm["swing_factor"], 2),
     }
 
@@ -327,8 +362,12 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
 
     breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],
                       "text": f"speed {hour['wind_speed']} mph, gust steadiness {base['steadiness']:.2f}"})
-    breakdown.append({"factor": "Terrain / thermals", "value": 1.0 if base["thermal_phase"] != "neutral" else 0.3,
-                      "text": f"thermals {base['thermal_phase']}, drainage {base['drainage_deg']}°"})
+    if base["thermal_known"]:
+        breakdown.append({"factor": "Terrain / thermals", "value": 1.0 if base["thermal_phase"] != "neutral" else 0.3,
+                          "text": f"thermals {base['thermal_phase']}, drainage {base['drainage_deg']}°"})
+    else:
+        breakdown.append({"factor": "Terrain / thermals", "value": 0.0,
+                          "text": "no usable terrain analysis for this stand — thermals ignored, scent follows the wind"})
 
     temp_swing = hour.get("temp_swing")
     if temp_swing is not None and temp_swing > 12:
@@ -386,6 +425,7 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         "camera": cam,
         "breakdown": breakdown,
         "scent_to_deg": base["scent_to_deg"],
-        "thermal_phase": base["thermal_phase"],
+        "thermal_phase": base["thermal_phase"] if base["thermal_known"] else "unknown",
+        "drainage_deg": base["drainage_deg"],
         "scent_score": base["scent_score"],
     }

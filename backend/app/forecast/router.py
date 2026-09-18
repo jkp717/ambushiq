@@ -254,7 +254,6 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
               "scent_to_deg": it["vectors"]["scent_to_deg"],
               "scent_score": it["vectors"]["scent_score"],
               "thermal_phase": it["vectors"]["thermal_phase"],
-              "drainage_deg": it["vectors"]["thermal_to_deg"],
           }}} for it in items],
         key=lambda x: x["avg"], reverse=True,
     )

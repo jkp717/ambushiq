@@ -24,6 +24,10 @@ const COLORS = {
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
 function standIcon(vectors, rank) {
   const size = 78, c = size / 2;
+  // Arrow length tracks magnitude so stands with very different conditions don't look identical:
+  // wind by speed (mph), thermal by its blended weight (0..1).
+  const windLen = Math.max(16, Math.min(34, 14 + (vectors.wind_speed ?? 6) * 1.5));
+  const thermalLen = 12 + 22 * Math.max(0, Math.min(1, vectors.thermal_strength ?? 0.5));
   const arrow = (deg, color, dash, len, w) => {
     if (deg == null) return "";
     const rad = ((deg - 90) * Math.PI) / 180;
@@ -60,8 +64,8 @@ function standIcon(vectors, rank) {
   const html = `<div style="position:relative;width:${dotPx}px;height:${dotPx}px;overflow:visible">
     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"
       style="overflow:visible;position:absolute;left:${svgOff}px;top:${svgOff}px;pointer-events:none">
-      ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, 30, 3) : ""}
-      ${vectors.thermal_to_deg != null ? arrow(vectors.thermal_to_deg, COLORS.thermal, true, 24, 2.5) : ""}
+      ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, windLen, 3) : ""}
+      ${vectors.thermal_to_deg != null ? arrow(vectors.thermal_to_deg, COLORS.thermal, true, thermalLen, 2.5) : ""}
       ${deerArrow}
       ${ring}
       <circle cx="${c}" cy="${c}" r="5.5" fill="${COLORS.stand}" stroke="#fff" stroke-width="1.5"/>
@@ -426,6 +430,8 @@ const HuntMap = forwardRef(function HuntMap({
       const vectors = {
         wind_to_deg: sl.wind ? v.wind_to_deg : null,
         thermal_to_deg: sl.thermal ? v.thermal_to_deg : null,
+        wind_speed: v.wind_speed,
+        thermal_strength: v.thermal_strength,
         deer_approach_deg: sl.deer ? s.deer_approach_deg : null,
       };
       const rank = rankIndex[s.id] ?? 99;
