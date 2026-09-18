@@ -171,19 +171,77 @@ _fc_cache: dict[str, tuple[float, dict]] = {}
 FC_TTL = 1800  # 30 min
 
 
-def _temp_swing_by_day(hourly: dict) -> dict[str, float]:
-    """Return {YYYY-MM-DD: daily_high - daily_low (°C)} for every day in the
-    forecast hourly block.  Used to scale thermal-drainage weights — a larger
-    day/night temperature gradient produces denser cold air and stronger
-    katabatic flow, which matters for scent prediction during morning and
-    evening sits."""
-    buckets: dict[str, list[float]] = {}
-    temps = hourly.get("temperature_2m", [])
-    times = hourly.get("time", [])
-    for i, tstr in enumerate(times):
-        if i < len(temps) and temps[i] is not None:
-            buckets.setdefault(tstr[:10], []).append(float(temps[i]))
-    return {d: max(v) - min(v) for d, v in buckets.items() if v}
+def _temp_swing_rolling(hourly: dict, half_window: int = 12, min_points: int = 12) -> list[Optional[float]]:
+    """Per-forecast-hour temperature swing (°C): max − min over the surrounding
+    24 h window. Used to scale thermal-drainage weights — a larger day/night
+    gradient means denser cold air and stronger katabatic flow.
+
+    A rolling window (rather than the calendar day) lets an evening hour see the
+    night that is actually about to follow it. Returns None where fewer than
+    `min_points` readings exist so callers fall back to a neutral swing factor
+    instead of treating "no data" as "no swing"."""
+    temps = hourly.get("temperature_2m") or []
+    n = len(temps)
+    out: list[Optional[float]] = []
+    for i in range(n):
+        vals = [float(t) for t in temps[max(0, i - half_window):min(n, i + half_window + 1)] if t is not None]
+        out.append(max(vals) - min(vals) if len(vals) >= min_points else None)
+    return out
+
+
+def format_day_label(dt: datetime) -> str:
+    """'Sat Nov 8' — avoids strftime's '%-d', which raises ValueError on Windows."""
+    return f"{dt.strftime('%a %b')} {dt.day}"
+
+
+def format_hour_label(dt: datetime, lower: bool = True) -> str:
+    """'7 am' / '7 AM' — avoids strftime's '%-I', which raises ValueError on Windows."""
+    s = dt.strftime("%I %p").lstrip("0")
+    return s.lower() if lower else s
+
+
+def msl_from_station(p_hpa: Optional[float], elevation_m: Optional[float]) -> Optional[float]:
+    """Reduce station-level pressure to sea level (standard-atmosphere barometric formula)."""
+    if p_hpa is None or elevation_m is None:
+        return None
+    return p_hpa * (1 - 0.0065 * elevation_m / 288.15) ** -5.255
+
+
+def pressure_msl_series(hourly: dict, elevation_m: Optional[float] = None) -> list[Optional[float]]:
+    """Sea-level pressure (hPa) per forecast hour. The deer-rating pressure sweet spot
+    (30.0-30.4 inHg) is a sea-level range, so station pressure must never be fed to it
+    directly. Prefers the provider's own sea-level series; otherwise reduces station
+    pressure using the forecast elevation; otherwise None (factor goes neutral)."""
+    msl = hourly.get("pressure_msl") or []
+    surf = hourly.get("surface_pressure") or []
+    out: list[Optional[float]] = []
+    for i in range(len(hourly.get("time", []))):
+        v = msl[i] if i < len(msl) else None
+        if v is None:
+            v = msl_from_station(surf[i] if i < len(surf) else None, elevation_m)
+        out.append(v)
+    return out
+
+
+def _fill_gaps(vals: list, default: Optional[float], interpolate: bool = False) -> None:
+    """In-place gap fill: interior None runs are forward-filled (or linearly
+    interpolated), leading gaps take the first valid value, and a series with no
+    valid value at all becomes `default`."""
+    valid = [i for i, v in enumerate(vals) if v is not None]
+    if not valid:
+        if default is not None:
+            for i in range(len(vals)):
+                vals[i] = default
+        return
+    for i in range(valid[0]):
+        vals[i] = vals[valid[0]]
+    for a, b in zip(valid, valid[1:] + [None]):
+        end = len(vals) if b is None else b
+        for i in range(a + 1, end):
+            if interpolate and b is not None:
+                vals[i] = vals[a] + (vals[b] - vals[a]) * (i - a) / (b - a)
+            else:
+                vals[i] = vals[a]
 
 
 _HARD_REQUIRED_HOURLY_FIELDS = ("wind_direction_10m", "wind_speed_10m", "wind_gusts_10m",
@@ -214,6 +272,12 @@ def _apply_safety_defaults(forecast: dict) -> None:
     daylight-triangle estimate (scaled down by cloud cover when known)."""
     hourly, daily = forecast["hourly"], forecast["daily"]
     times = hourly.get("time", [])
+    # Wind speed/direction feed direct arithmetic in scoring (a single None → TypeError
+    # → HTTP 500), so gaps are carried over from the neighboring hours; temperature
+    # gaps are interpolated. Both are only fallbacks for occasional provider holes.
+    _fill_gaps(hourly.setdefault("wind_speed_10m", []), 0.0)
+    _fill_gaps(hourly.setdefault("wind_direction_10m", []), 0.0)
+    _fill_gaps(hourly.setdefault("temperature_2m", []), None, interpolate=True)
     gust, wind = hourly.get("wind_gusts_10m") or [], hourly.get("wind_speed_10m") or []
     for i in range(len(gust)):
         if gust[i] is None:
@@ -347,7 +411,7 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     url = (
         "https://archive-api.open-meteo.com/v1/archive"
         f"?latitude={lat}&longitude={lon}&start_date={d.isoformat()}&end_date={d.isoformat()}"
-        "&hourly=temperature_2m,dew_point_2m,precipitation,wind_speed_10m,surface_pressure"
+        "&hourly=temperature_2m,dew_point_2m,precipitation,wind_speed_10m,pressure_msl"
         "&daily=sunrise,sunset&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto"
     )
     result: Optional[dict] = None
@@ -379,7 +443,7 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
         precip_arr = hh.get("precipitation") or []
         rain_vals = [precip_arr[i] for i in day_idxs if i < len(precip_arr) and precip_arr[i] is not None]
         rain_mm = sum(rain_vals) if rain_vals else None
-        p_arr = hh.get("surface_pressure") or []
+        p_arr = hh.get("pressure_msl") or []
         p_vals = [p_arr[i] for i in day_idxs if i < len(p_arr) and p_arr[i] is not None]
         p_inhg = (sum(p_vals) / len(p_vals) * HPA_TO_INHG) if p_vals else None
         p_trend = None
@@ -415,7 +479,7 @@ def build_sits(forecast: dict) -> list[dict]:
         sr_h = sr.hour + sr.minute / 60
         ss_h = ss.hour + ss.minute / 60
         day_str = sun["sunrise"][day_i][:10]
-        label = datetime.fromisoformat(day_str + "T12:00").strftime("%a %b %-d")
+        label = format_day_label(datetime.fromisoformat(day_str + "T12:00"))
         for tag, frm, to in (("morning", sr_h - 1, sr_h + 3), ("evening", ss_h - 3, ss_h + 0.5)):
             idxs = []
             lo, hi = math.floor(frm), math.ceil(to)

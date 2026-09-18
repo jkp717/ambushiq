@@ -20,8 +20,10 @@ from app.forecast.service import (
     _camera_health,
     _camera_ready,
     _camera_status_by_stand,
-    _temp_swing_by_day,
+    _temp_swing_rolling,
     build_sits,
+    format_day_label,
+    format_hour_label,
     get_forecast,
     proximity_bonus,
 )
@@ -66,7 +68,7 @@ async def rank_sit(body: SitRankIn, region_id: int = Depends(get_active_region_i
         lat, lon = first.lat, first.lon
     fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
     h = fc["hourly"]
-    temp_swing_by_day = _temp_swing_by_day(h)
+    temp_swing = _temp_swing_rolling(h)
     mid = (body.sunrise_h + body.sunset_h) / 2
     tp = _thermal_params(get_settings())
     results = []
@@ -78,7 +80,7 @@ async def rank_sit(body: SitRankIn, region_id: int = Depends(get_active_region_i
                 "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
                 "time_h": datetime.fromisoformat(h["time"][i]).hour,
                 "sunrise_h": body.sunrise_h, "sunset_h": body.sunset_h,
-                "temp_swing": temp_swing_by_day.get(h["time"][i][:10], 0.0),
+                "temp_swing": temp_swing[i],
             }
             sc = scoring.score_stand_hour(st, hour, tp)
             agg += sc["total"]
@@ -139,12 +141,12 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
     for idx, tstr in enumerate(times):
         day = tstr[:10]
         days.setdefault(day, {"day": day,
-                              "label": datetime.fromisoformat(day + "T12:00").strftime("%a %b %-d"),
+                              "label": format_day_label(datetime.fromisoformat(day + "T12:00")),
                               **sun_by_day.get(day, {"sunrise_h": 6.5, "sunset_h": 19, "sunrise": "", "sunset": ""}),
                               "hours": []})
         dt = datetime.fromisoformat(tstr)
         days[day]["hours"].append({"index": idx, "hour": dt.hour,
-                                   "label": dt.strftime("%-I %p").lower()})
+                                   "label": format_hour_label(dt)})
     from datetime import date as _date
     # Derive the property's local "today" from the forecast's UTC offset so that
     # confidence flags stay correct during the UTC-to-local-midnight gap (up to 8h
@@ -176,7 +178,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
         lat, lon = first.lat, first.lon
     fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
-    temp_swing_by_day = _temp_swing_by_day(h)
+    temp_swing = _temp_swing_rolling(h)
     i = body.time_index
     if i < 0 or i >= len(h["time"]):
         raise HTTPException(400, "time_index out of range")
@@ -194,7 +196,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
         "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
         "time_h": datetime.fromisoformat(h["time"][i]).hour,
         "sunrise_h": sr_h, "sunset_h": ss_h,
-        "temp_swing": temp_swing_by_day.get(day, 0.0),
+        "temp_swing": temp_swing[i],
     }
 
     settings = get_settings()
@@ -258,7 +260,8 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     )
     return {
         "time": {"index": i, "iso": h["time"][i],
-                 "label": datetime.fromisoformat(h["time"][i]).strftime("%a %b %-d, %-I %p"),
+                 "label": (lambda d: f"{format_day_label(d)}, {format_hour_label(d, lower=False)}")(
+                     datetime.fromisoformat(h["time"][i])),
                  "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i],
                  "wind_speed": h["wind_speed_10m"][i], "wind_dir": h["wind_direction_10m"][i]},
         "stands": items,
@@ -281,7 +284,7 @@ async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region
         lat, lon = first.lat, first.lon
     fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
-    temp_swing_by_day = _temp_swing_by_day(h)
+    temp_swing = _temp_swing_rolling(h)
     sun = fc["daily"]
     day = body.day
     sr_h, ss_h = 6.5, 19.0
@@ -363,7 +366,7 @@ async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region
                 "wind_dir": h["wind_direction_10m"][i], "wind_speed": h["wind_speed_10m"][i],
                 "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
                 "time_h": hh, "sunrise_h": sr_h, "sunset_h": ss_h,
-                "temp_swing": temp_swing_by_day.get(day, 0.0),
+                "temp_swing": temp_swing[i],
             }
             det = scoring.score_with_breakdown(
                 stand, hour, period=period_name, sightings=sightings,
@@ -420,5 +423,5 @@ async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region
         row["wins"] = [p for p in periods if wins[p] == row["stand"]["id"]]
 
     rows.sort(key=lambda r: r["best_score"], reverse=True)
-    day_label = datetime.fromisoformat(day + "T12:00").strftime("%a %b %-d")
+    day_label = format_day_label(datetime.fromisoformat(day + "T12:00"))
     return {"day": day, "day_label": day_label, "winners": wins, "ranked": rows}

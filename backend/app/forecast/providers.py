@@ -12,8 +12,9 @@ WeatherProvider.fetch() and normalizes its response to one shared shape:
         "shortwave_radiation": [...],   # W/m^2, or None where unavailable
         "temperature_2m": [...],        # Celsius
         "cloud_cover": [...],           # percent, or None where unavailable
-        "surface_pressure": [...],      # hPa, or None where unavailable
-        "precipitation": [...],         # mm, or None where unavailable
+        "surface_pressure": [...],      # hPa station-level, or None where unavailable
+        "pressure_msl": [...],          # hPa reduced to sea level, or None where unavailable
+        "precipitation": [...],         # mm per hour, or None where unavailable
         "dew_point_2m": [...],          # Celsius, or None where unavailable
       },
       "daily": {"sunrise": [...], "sunset": [...]},  # local-naive ISO datetimes, one per day
@@ -68,8 +69,11 @@ def _empty_hourly() -> dict:
     return {
         "time": [], "wind_direction_10m": [], "wind_speed_10m": [], "wind_gusts_10m": [],
         "shortwave_radiation": [], "temperature_2m": [], "cloud_cover": [],
-        "surface_pressure": [], "precipitation": [], "dew_point_2m": [],
+        "surface_pressure": [], "pressure_msl": [], "precipitation": [], "dew_point_2m": [],
     }
+
+
+HPA_PER_INHG = 33.8639
 
 
 def _sun_times_utc(lat: float, lon: float, d: date, tz_name: str) -> tuple[Optional[datetime], Optional[datetime]]:
@@ -157,7 +161,7 @@ class OpenMeteoProvider(WeatherProvider):
         url = (
             f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
             "&hourly=wind_direction_10m,wind_speed_10m,wind_gusts_10m,shortwave_radiation,"
-            "temperature_2m,cloud_cover,surface_pressure,precipitation,dew_point_2m"
+            "temperature_2m,cloud_cover,surface_pressure,pressure_msl,precipitation,dew_point_2m"
             f"&daily=sunrise,sunset&wind_speed_unit=mph&timezone=auto&forecast_days={days}"
         )
         async with httpx.AsyncClient() as client:
@@ -192,29 +196,9 @@ class NWSProvider(WeatherProvider):
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         target_hours = [now + timedelta(hours=i) for i in range(want_hours)]
 
-        def series(key: str, convert=lambda v: v) -> list:
+        def series(key: str, convert=lambda v: v, per_hour: bool = False) -> list:
             raw = (gp.get(key) or {}).get("values", [])
-            spans = []
-            for entry in raw:
-                vt = entry.get("validTime", "")
-                if "/" not in vt:
-                    continue
-                start_s, dur_s = vt.split("/", 1)
-                try:
-                    start = datetime.fromisoformat(start_s)
-                except ValueError:
-                    continue
-                hours = _parse_iso_duration_hours(dur_s)
-                spans.append((start, start + timedelta(hours=hours), entry.get("value")))
-            out = []
-            for h in target_hours:
-                val = None
-                for start, end, v in spans:
-                    if start <= h < end:
-                        val = v
-                        break
-                out.append(convert(val) if val is not None else None)
-            return out
+            return _nws_expand_series(raw, target_hours, convert, per_hour)
 
         hourly = {
             "time": [_to_local_naive(h, tz_name) for h in target_hours],
@@ -224,7 +208,10 @@ class NWSProvider(WeatherProvider):
             "wind_direction_10m": series("windDirection"),
             "cloud_cover": series("skyCover"),
             "surface_pressure": series("pressure", lambda v: round(v / 100, 1)),  # Pa -> hPa
-            "precipitation": series("quantitativePrecipitation"),
+            "pressure_msl": [None] * len(target_hours),  # not reported by NWS grid data
+            # quantitativePrecipitation values are totals over their validTime interval
+            # (typically PT6H); spread them evenly so the hourly sum isn't overcounted.
+            "precipitation": series("quantitativePrecipitation", per_hour=True),
             "dew_point_2m": series("dewpoint"),
             "shortwave_radiation": [None] * len(target_hours),  # not reported by NWS
         }
@@ -241,6 +228,33 @@ class NWSProvider(WeatherProvider):
                 daily["sunset"].append(_to_local_naive(ss, tz_name))
 
         return {"hourly": hourly, "daily": daily, "utc_offset_seconds": _tz_offset_seconds(tz_name)}
+
+
+def _nws_expand_series(raw: list, target_hours: list, convert=lambda v: v, per_hour: bool = False) -> list:
+    """Expand NWS grid-data `values` (each valid over an ISO-8601 interval) onto
+    hourly target times. With per_hour=True the value is an interval total and is
+    divided by the interval length in hours instead of being repeated."""
+    spans = []
+    for entry in raw:
+        vt = entry.get("validTime", "")
+        if "/" not in vt:
+            continue
+        start_s, dur_s = vt.split("/", 1)
+        try:
+            start = datetime.fromisoformat(start_s)
+        except ValueError:
+            continue
+        hours = _parse_iso_duration_hours(dur_s)
+        spans.append((start, start + timedelta(hours=hours), hours, entry.get("value")))
+    out = []
+    for h in target_hours:
+        val = None
+        for start, end, hours, v in spans:
+            if start <= h < end:
+                val = v / hours if (per_hour and v is not None) else v
+                break
+        out.append(convert(val) if val is not None else None)
+    return out
 
 
 def _safe_zone(tz_name: str) -> bool:
@@ -299,7 +313,8 @@ class OpenWeatherMapProvider(WeatherProvider):
             hourly["wind_gusts_10m"].append(round((h.get("wind_gust", h.get("wind_speed", 0)) or 0) * 2.23694, 1))
             hourly["wind_direction_10m"].append(h.get("wind_deg"))
             hourly["cloud_cover"].append(h.get("clouds"))
-            hourly["surface_pressure"].append(h.get("pressure"))
+            hourly["surface_pressure"].append(None)
+            hourly["pressure_msl"].append(h.get("pressure"))  # One Call "pressure" is sea-level hPa
             hourly["precipitation"].append((h.get("rain") or {}).get("1h", 0.0))
             hourly["dew_point_2m"].append(h.get("dew_point"))
             hourly["shortwave_radiation"].append(None)  # not part of One Call 3.0
@@ -352,7 +367,8 @@ class WeatherAPIProvider(WeatherProvider):
                 hourly["wind_gusts_10m"].append(h.get("gust_mph", h.get("wind_mph")))
                 hourly["wind_direction_10m"].append(h.get("wind_degree"))
                 hourly["cloud_cover"].append(h.get("cloud"))
-                hourly["surface_pressure"].append(h.get("pressure_mb"))
+                hourly["surface_pressure"].append(None)
+                hourly["pressure_msl"].append(h.get("pressure_mb"))  # documented as sea-level mb
                 hourly["precipitation"].append(h.get("precip_mm"))
                 hourly["dew_point_2m"].append(h.get("dewpoint_c"))
                 hourly["shortwave_radiation"].append(None)  # WeatherAPI has UV index only, not irradiance
@@ -404,7 +420,8 @@ class VisualCrossingProvider(WeatherProvider):
                 hourly["wind_gusts_10m"].append(h.get("windgust", h.get("windspeed")))
                 hourly["wind_direction_10m"].append(h.get("winddir"))
                 hourly["cloud_cover"].append(h.get("cloudcover"))
-                hourly["surface_pressure"].append(h.get("pressure"))
+                hourly["surface_pressure"].append(None)
+                hourly["pressure_msl"].append(h.get("pressure"))  # documented as sea-level mb
                 hourly["precipitation"].append(_in_to_mm(h.get("precip")))
                 hourly["dew_point_2m"].append(_f_to_c(h.get("dew")))  # unitGroup=us -> dew is °F
                 hourly["shortwave_radiation"].append(h.get("solarradiation"))
@@ -456,7 +473,10 @@ class TomorrowIoProvider(WeatherProvider):
             hourly["wind_gusts_10m"].append(v.get("windGust", v.get("windSpeed")))
             hourly["wind_direction_10m"].append(v.get("windDirection"))
             hourly["cloud_cover"].append(v.get("cloudCover"))
-            hourly["surface_pressure"].append(v.get("pressureSurfaceLevel"))
+            # units=imperial -> pressure fields are inHg; the shared shape is hPa
+            surf, msl = v.get("pressureSurfaceLevel"), v.get("pressureSeaLevel")
+            hourly["surface_pressure"].append(round(surf * HPA_PER_INHG, 1) if surf is not None else None)
+            hourly["pressure_msl"].append(round(msl * HPA_PER_INHG, 1) if msl is not None else None)
             precip_rate = v.get("precipitationIntensity")
             hourly["precipitation"].append(round(precip_rate * 25.4, 1) if precip_rate is not None else None)
             hourly["dew_point_2m"].append(_f_to_c(v.get("dewPoint")))  # units=imperial -> dewPoint is °F

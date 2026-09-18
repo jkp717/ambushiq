@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 from app.core.database import engine
 from app.deer_ratings import rating as deer_rating
 from app.dependencies import get_active_region_id, require_token
-from app.forecast.service import get_forecast, get_historical_baseline_f, get_historical_day_weather
+from app.forecast.service import (
+    format_day_label,
+    get_forecast,
+    get_historical_baseline_f,
+    get_historical_day_weather,
+    pressure_msl_series,
+)
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 from app.stands.models import Stand
@@ -42,8 +48,9 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
         "pressure": _set.get("rate_w_pressure"), "wind": _set.get("rate_w_wind"),
         "rain": _set.get("rate_w_rain"), "temp": _set.get("rate_w_temp"),
     }
-    # surface pressure may be absent depending on the forecast params; fetch defensively
-    pressures = h.get("surface_pressure") or h.get("pressure_msl") or [None] * len(times)
+    # The pressure sweet spot is a sea-level range: use the provider's sea-level series,
+    # or reduce station pressure with the forecast elevation; None → neutral factor.
+    pressures = pressure_msl_series(h, fc.get("elevation"))
 
     # sunrise/sunset per day for daytime windows
     sun_by_day = {}
@@ -108,7 +115,7 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
         rating = deer_rating.rate_day(_date(y, m, d), wx, rate_weights,
                                       rut_peak_month=int(region["rut_peak_month"]),
                                       rut_peak_day=int(region["rut_peak_day"]))
-        label = datetime.fromisoformat(dk + "T12:00").strftime("%a %b %-d")
+        label = format_day_label(datetime.fromisoformat(dk + "T12:00"))
         rating["day"] = dk
         rating["label"] = label
         # weather forecast is reliable ~7 days; flag beyond that.
