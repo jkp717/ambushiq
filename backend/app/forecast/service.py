@@ -342,28 +342,25 @@ async def get_forecast(lat: float, lon: float, days: int = 3, tz_name: str | Non
 
 
 # ---------- historical baseline (deer-rating temp-shift factor) ----------
-_hist_cache: dict[str, tuple[float, Optional[float]]] = {}
+_hist_cache: dict[str, tuple[float, object]] = {}
 HIST_TTL = 12 * 3600  # actual past days never change; just avoids hammering the API
+HIST_FAIL_TTL = 300   # failures/empty results are retried soon (the archive lags a day or two)
 
 
-async def get_historical_baseline_f(lat: float, lon: float, end_date: date, days: int = 7) -> Optional[float]:
-    """Actual (observed) daily-high average over the `days` ending `end_date`
-    (inclusive), from Open-Meteo's free historical archive.
+def _hist_cache_get(key: str) -> tuple[bool, object]:
+    hit = _hist_cache.get(key)
+    if hit and time.time() - hit[0] < (HIST_TTL if hit[1] is not None else HIST_FAIL_TTL):
+        return True, hit[1]
+    return False, None
 
-    This is what the deer-rating temp-shift factor compares each rated day
-    against to detect a genuine cooling/warming departure from what's actually
-    been normal recently — as opposed to the mean of the same forward-looking
-    forecast window being rated, which is self-referential (every day in a
-    forecast that trends warm or cold just compares against its own drifted
-    average) and can't represent "recent" at all for the earliest rated days.
 
-    Best-effort: returns None on any failure so callers fall back to their
-    existing no-baseline behavior rather than breaking the rating endpoint.
-    """
-    key = f"{lat:.3f},{lon:.3f}:{end_date.isoformat()}:{days}"
-    now = time.time()
-    if key in _hist_cache and now - _hist_cache[key][0] < HIST_TTL:
-        return _hist_cache[key][1]
+async def get_historical_highs_f(lat: float, lon: float, end_date: date, days: int = 7) -> Optional[dict[str, float]]:
+    """Actual (observed) daily highs (°F) for the `days` ending `end_date` (inclusive),
+    keyed by ISO date, from Open-Meteo's free historical archive. None on any failure."""
+    key = f"highs:{lat:.3f},{lon:.3f}:{end_date.isoformat()}:{days}"
+    hit, cached = _hist_cache_get(key)
+    if hit:
+        return cached  # type: ignore[return-value]
 
     start = end_date - timedelta(days=days - 1)
     url = (
@@ -371,20 +368,49 @@ async def get_historical_baseline_f(lat: float, lon: float, end_date: date, days
         f"?latitude={lat}&longitude={lon}&start_date={start.isoformat()}&end_date={end_date.isoformat()}"
         "&daily=temperature_2m_max&temperature_unit=fahrenheit&timezone=auto"
     )
-    baseline: Optional[float] = None
+    result: Optional[dict[str, float]] = None
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(url, timeout=15)
             r.raise_for_status()
             j = r.json()
-        highs = [v for v in (j.get("daily", {}).get("temperature_2m_max") or []) if v is not None]
-        if highs:
-            baseline = sum(highs) / len(highs)
+        daily = j.get("daily", {})
+        pairs = zip(daily.get("time") or [], daily.get("temperature_2m_max") or [])
+        result = {d: float(v) for d, v in pairs if v is not None} or None
     except Exception:
-        baseline = None
+        result = None
 
-    _hist_cache[key] = (now, baseline)
-    return baseline
+    _hist_cache[key] = (time.time(), result)
+    return result
+
+
+async def get_historical_baseline_f(lat: float, lon: float, end_date: date, days: int = 7) -> Optional[float]:
+    """Mean of the observed daily highs over the `days` ending `end_date` (inclusive).
+
+    Best-effort: returns None on any failure so callers fall back to their
+    no-baseline behavior rather than breaking the rating endpoint."""
+    highs = await get_historical_highs_f(lat, lon, end_date, days)
+    return sum(highs.values()) / len(highs) if highs else None
+
+
+def rolling_baselines_f(day_keys: list[str], forecast_highs: dict[str, float],
+                        past_highs: Optional[dict[str, float]], window: int = 7,
+                        min_days: int = 3) -> dict[str, Optional[float]]:
+    """Per-day temperature baseline: the mean of the `window` daily highs BEFORE each
+    day, taken from observed highs for past dates and forecast highs for future ones.
+
+    Every rated day is compared with its own trailing week, so a slow seasonal cooling
+    across a 14-day forecast no longer reads as a front on the last days, and it is
+    never self-referential (a day is not part of its own baseline). None when fewer
+    than `min_days` prior highs are known (the temperature factor then goes neutral)."""
+    known = {**(past_highs or {}), **forecast_highs}
+    out: dict[str, Optional[float]] = {}
+    for dk in day_keys:
+        d = date.fromisoformat(dk)
+        prior = [known[(d - timedelta(days=k)).isoformat()] for k in range(1, window + 1)
+                 if (d - timedelta(days=k)).isoformat() in known]
+        out[dk] = sum(prior) / len(prior) if len(prior) >= min_days else None
+    return out
 
 
 async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optional[dict]:
@@ -403,9 +429,9 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     delta rather than showing something misleading.
     """
     key = f"hday:{lat:.3f},{lon:.3f}:{d.isoformat()}"
-    now = time.time()
-    if key in _hist_cache and now - _hist_cache[key][0] < HIST_TTL:
-        return _hist_cache[key][1]
+    hit, cached = _hist_cache_get(key)
+    if hit:
+        return cached  # type: ignore[return-value]
 
     HPA_TO_INHG = 0.02953  # matches app/deer_ratings/rating.py's own constant
     url = (
@@ -465,7 +491,7 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     except Exception:
         result = None
 
-    _hist_cache[key] = (now, result)
+    _hist_cache[key] = (time.time(), result)
     return result
 
 

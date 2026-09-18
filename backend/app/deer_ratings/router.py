@@ -13,9 +13,10 @@ from app.dependencies import get_active_region_id, require_token
 from app.forecast.service import (
     format_day_label,
     get_forecast,
-    get_historical_baseline_f,
     get_historical_day_weather,
+    get_historical_highs_f,
     pressure_msl_series,
+    rolling_baselines_f,
 )
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
@@ -63,23 +64,30 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     for i, t in enumerate(times):
         by_day.setdefault(t[:10], []).append(i)
 
-    # trailing baseline high — the actual (observed) daily-high average over the
-    # last 7 days ending yesterday (property-local), from Open-Meteo's historical
-    # archive. NOT the mean of this same forward-looking forecast window: that
-    # was self-referential (every day just compared against a baseline that
-    # includes itself and every other forecast day) and couldn't represent
-    # "recent" for the earliest, highest-confidence rated days.
     day_keys = sorted(by_day.keys())
-    baseline_f = await get_historical_baseline_f(lat, lon, _local_today - timedelta(days=1))
+
+    # daytime indices (sunrise..sunset) and forecast high per day
+    day_idxs_by: dict[str, list[int]] = {}
+    forecast_highs: dict[str, float] = {}
+    for dk in day_keys:
+        sr_h, ss_h = sun_by_day.get(dk, (6.5, 19.0))
+        idxs = by_day[dk]
+        day_idxs_by[dk] = [i for i in idxs if sr_h <= datetime.fromisoformat(times[i]).hour <= ss_h] or idxs
+        temps = [h["temperature_2m"][i] for i in day_idxs_by[dk] if h["temperature_2m"][i] is not None]
+        if temps:
+            forecast_highs[dk] = max(temps) * 9 / 5 + 32
+
+    # Each day's temperature baseline is the mean of its own trailing 7 daily highs:
+    # observed highs (Open-Meteo archive) for past dates, forecast highs for future ones.
+    # Never the mean of the whole forecast window (self-referential) and never anchored
+    # to today (which made a seasonal cooling trend look like a front by day +13).
+    past_highs = await get_historical_highs_f(lat, lon, _local_today - timedelta(days=1), days=7)
+    baselines = rolling_baselines_f(day_keys, forecast_highs, past_highs)
 
     out = []
     for di, dk in enumerate(day_keys):
-        idxs = by_day[dk]
-        sr_h, ss_h = sun_by_day.get(dk, (6.5, 19.0))
-        # daytime indices (sunrise..sunset)
-        day_idxs = [i for i in idxs if sr_h <= datetime.fromisoformat(times[i]).hour <= ss_h]
-        if not day_idxs:
-            day_idxs = idxs
+        day_idxs = day_idxs_by[dk]
+        baseline_f = baselines.get(dk)
 
         def davg(arr):
             vals = [arr[i] for i in day_idxs if arr[i] is not None]
@@ -132,7 +140,10 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     previous_day = None
     yesterday = _local_today - timedelta(days=1)
     hist_wx = await get_historical_day_weather(lat, lon, yesterday)
-    if hist_wx:
+    # The archive lags a day or two; a mostly-empty "yesterday" would rate on neutral
+    # defaults and produce a misleading delta, so require most inputs to be present.
+    core_inputs = ("pressure_inhg", "wind_mph", "rain_mm", "day_high_f", "baseline_f")
+    if hist_wx and sum(hist_wx.get(k) is not None for k in core_inputs) >= 3:
         prev_rating = deer_rating.rate_day(yesterday, hist_wx, rate_weights,
                                             rut_peak_month=int(region["rut_peak_month"]),
                                             rut_peak_day=int(region["rut_peak_day"]))
