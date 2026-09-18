@@ -87,7 +87,7 @@ async def analyze_stand_terrain(stand_id: int, region_id: int = Depends(get_acti
                     with Session(engine) as s:
                         st = s.get(Stand, stand_id)
                         st.terrain_json = json.dumps(terrain)
-                        st.downhill_deg = terrain["downhill_deg"]
+                        st.downhill_deg = None if terrain.get("flat") else terrain["downhill_deg"]
                         s.commit()
                         s.refresh(st)
                         await queue.put(json.dumps({"progress": 100, "complete": True, "terrain": st.to_dict()}) + "\n")

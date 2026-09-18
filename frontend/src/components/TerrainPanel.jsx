@@ -8,8 +8,17 @@ function TerrainPanel({ t }) {
       <div style={{ fontSize: 12.5, lineHeight: 1.6, flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--green)", marginBottom: 4 }}><CheckCircle2 size={13} /><span style={{ fontWeight: 500 }}>{t.source}</span></div>
         <div style={{ color: "var(--sub)" }}>Elevation <b style={{ color: "var(--txt)" }}>{t.elevation} m</b> · relief <b style={{ color: "var(--txt)" }}>{t.relief} m</b></div>
-        <div style={{ color: "var(--sub)" }}>Slope <b style={{ color: "var(--txt)" }}>{t.slope_pct}%</b> · faces <b style={{ color: "var(--txt)" }}>{degToCompass(t.downhill_deg)}</b></div>
-        <div style={{ color: "var(--sub)", display: "flex", alignItems: "center", gap: 4 }}><Waves size={12} color="var(--blue)" /> Drains <b style={{ color: "var(--txt)" }}>{degToCompass(t.drainage_deg)}</b> {t.channel_strength > 0.5 ? "(strong)" : t.channel_strength > 0.2 ? "(moderate)" : "(diffuse)"}</div>
+        {t.flat ? (
+          <>
+            <div style={{ color: "var(--sub)" }}>Slope <b style={{ color: "var(--txt)" }}>{t.slope_pct}%</b> · <b style={{ color: "var(--txt)" }}>flat ground</b></div>
+            <div style={{ color: "var(--sub)", display: "flex", alignItems: "center", gap: 4 }}><Waves size={12} color="var(--blue)" /> No dominant drainage direction</div>
+          </>
+        ) : (
+          <>
+            <div style={{ color: "var(--sub)" }}>Slope <b style={{ color: "var(--txt)" }}>{t.slope_pct}%</b> · faces <b style={{ color: "var(--txt)" }}>{degToCompass(t.downhill_deg)}</b></div>
+            <div style={{ color: "var(--sub)", display: "flex", alignItems: "center", gap: 4 }}><Waves size={12} color="var(--blue)" /> Drains <b style={{ color: "var(--txt)" }}>{degToCompass(t.drainage_deg)}</b> {t.channel_strength > 0.5 ? "(strong)" : t.channel_strength > 0.2 ? "(moderate)" : "(diffuse)"}</div>
+          </>
+        )}
       </div>
     </div>
   );

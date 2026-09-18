@@ -24,7 +24,7 @@ function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
               </div>
               <div className="list-card-sub">
                 {(+s.lat).toFixed(4)}, {(+s.lon).toFixed(4)}
-                {s.terrain && <> · {s.terrain.elevation}m · drains {degToCompass(s.terrain.drainage_deg)}</>}
+                {s.terrain && <> · {s.terrain.elevation}m · {s.terrain.flat ? "flat ground" : <>drains {degToCompass(s.terrain.drainage_deg)}</>}</>}
                 {!s.terrain && s.downhill_deg != null && <> · downhill {degToCompass(s.downhill_deg)}</>}
                 {s.deer_approach_deg != null && <> · deer from {degToCompass(s.deer_approach_deg)}</>}
                 {s.visibility_m ? <> · visibility {Math.round(s.visibility_m)}m</> : null}

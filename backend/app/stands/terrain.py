@@ -1,16 +1,8 @@
 """Terrain analysis: elevation grid -> slope/aspect + cold-air drainage (D-Infinity flow accumulation)."""
 from __future__ import annotations
-try:
-    from warnings import deprecated  # PEP 702 — stdlib only since Python 3.13
-except ImportError:
-    def deprecated(reason):
-        def _wrap(fn):
-            return fn
-        return _wrap
 import json
 import math
 import asyncio
-from dataclasses import dataclass, asdict
 from typing import Optional
 import httpx
 import numpy as np
@@ -21,9 +13,9 @@ DEFAULT_GRID = 41   # denser than the artifact (24) — odd number ensures exact
 DEFAULT_BOX_M = 800.0
 M_PER_DEG_LAT = 111320.0
 
-DR = [-1, -1, -1, 0, 0, 1, 1, 1]
-DC = [-1, 0, 1, -1, 1, -1, 0, 1]
-D8_BEARING = [315, 0, 45, 270, 90, 225, 180, 135]
+# Rise/run below which a cell is treated as flat: richdem reports aspect 270 for a
+# zero gradient, so flat cells must be masked out of every direction average.
+FLAT_SLOPE_EPS = 0.005
 
 
 def build_sample_grid(lat: float, lon: float, grid: int = DEFAULT_GRID, box_m: float = DEFAULT_BOX_M):
@@ -165,107 +157,17 @@ async def fetch_terrain(lat: float, lon: float, grid: int = DEFAULT_GRID, box_m:
     return result
 
 
-@deprecated("Use analyze_terrain() instead.")
-def analyze_terrain_d8(dem, cell_m: float, source: str) -> dict:
-    """Analyze terrian using the D8 flow accumulation spatial analysis algorithm"""
-    n = len(dem)
-    ctr = n // 2
-
-    dzdx = (dem[ctr][ctr + 1] - dem[ctr][ctr - 1]) / (2 * cell_m)
-    dzdy = (dem[ctr + 1][ctr] - dem[ctr - 1][ctr]) / (2 * cell_m)
-    east, south = -dzdx, -dzdy
-    downhill_deg = (math.degrees(math.atan2(east, -south)) + 360) % 360
-    slope_pct = round(math.hypot(dzdx, dzdy) * 100)
-
-    # D8 flow direction
-    direction = [[-1] * n for _ in range(n)]
-    for r in range(n):
-        for c in range(n):
-            # best_slope set slightly below 0 so perfectly flat cells still pick a flow path
-            best, best_slope = -1, -1e-6 
-            for k in range(8):
-                nr, nc = r + DR[k], c + DC[k]
-                if nr < 0 or nc < 0 or nr >= n or nc >= n:
-                    continue
-                dist = cell_m * 1.4142 if DR[k] and DC[k] else cell_m
-                slope = (dem[r][c] - dem[nr][nc]) / dist
-                if slope > best_slope:
-                    best_slope, best = slope, k
-            direction[r][c] = best
-
-    # accumulation (Kahn topological order)
-    acc = [[1] * n for _ in range(n)]
-    indeg = [[0] * n for _ in range(n)]
-    for r in range(n):
-        for c in range(n):
-            k = direction[r][c]
-            if k >= 0:
-                indeg[r + DR[k]][c + DC[k]] += 1
-    queue = [(r, c) for r in range(n) for c in range(n) if indeg[r][c] == 0]
-    head = 0
-    while head < len(queue):
-        r, c = queue[head]
-        head += 1
-        k = direction[r][c]
-        if k >= 0:
-            nr, nc = r + DR[k], c + DC[k]
-            acc[nr][nc] += acc[r][c]
-            indeg[nr][nc] -= 1
-            if indeg[nr][nc] == 0:
-                queue.append((nr, nc))
-
-    bx = by = acc_sum = 0.0
-    max_near = 0
-    for r in range(ctr - 3, ctr + 4):
-        for c in range(ctr - 3, ctr + 4):
-            if r < 0 or c < 0 or r >= n or c >= n:
-                continue
-            k = direction[r][c]
-            if k < 0:
-                continue
-            w = acc[r][c]
-            b = math.radians(D8_BEARING[k])
-            bx += math.sin(b) * w
-            by += math.cos(b) * w
-            acc_sum += w
-            max_near = max(max_near, acc[r][c])
-
-    # Protect against symmetric vector cancellation resulting in 0,0 inputs to atan2
-    if acc_sum > 0 and (abs(bx) > 1e-6 or abs(by) > 1e-6):
-        drainage_deg = round((math.degrees(math.atan2(bx, by)) + 360) % 360)
-    else:
-        drainage_deg = round(downhill_deg)
-        
-    channel_strength = round(min(1.0, max_near / (n * n * 0.06)) * 100) / 100
-
-    flat_all = [v for row in dem for v in row]
-    min_e, max_e = min(flat_all), max(flat_all)
-
-    return {
-        "source": source,
-        "dem": dem,
-        "acc": acc,
-        "cell_m": cell_m,
-        "downhill_deg": round(downhill_deg),
-        "slope_pct": slope_pct,
-        "drainage_deg": drainage_deg,
-        "channel_strength": channel_strength,
-        "elevation": round(dem[ctr][ctr]),
-        "relief": round(max_e - min_e),
-        "grid_size": n,
-        "box_m": DEFAULT_BOX_M,
-    }
-
-
 def compute_slope_aspect(dem_np, cell_m: float = 1.0):
     """Fill sinks + compute D-Infinity slope/aspect grids. Shared by analyze_terrain()
     and scouting/terrain_features.py so funnel detection can get full per-cell slope
-    grids without duplicating this RichDEM setup."""
-    rda = rd.rdarray(dem_np, no_data=-9999)
-    # Set an explicit geotransform (cell size = cell_m, origin arbitrary) so RichDEM
-    # doesn't fall back to its 1x1-cell default and print a "No geotransform defined"
-    # warning on every call — our own code always applies cell_m separately anyway,
-    # so this only silences the noise, it doesn't change any computed values.
+    grids without duplicating this RichDEM setup.
+
+    The caller's array is never modified (RichDEM fills in place, so it works on a
+    copy). Returns the sink-filled DEM plus slope (true rise/run) and aspect (degrees
+    clockwise from north of the downslope direction) grids."""
+    rda = rd.rdarray(np.array(dem_np, dtype=np.float32, copy=True), no_data=-9999)
+    # The geotransform carries the cell size, so RichDEM's slope_riserun is already
+    # true rise/run (metres per metre) — callers must NOT divide it by cell_m again.
     rda.geotransform = [0, cell_m, 0, 0, 0, -cell_m]
     # Fill artificial sinks to prevent the D-infinity flow from getting trapped
     rd.fill_depressions(rda, epsilon=True, in_place=True)
@@ -279,61 +181,49 @@ def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_
     n = len(dem)
     ctr = n // 2
 
-    # Load 2D list into a numpy array and wrap it for RichDEM
     dem_np = np.array(dem, dtype=np.float32)
     rda, slope_rda, aspect_rda = compute_slope_aspect(dem_np, cell_m)
 
     # Calculate D-Infinity Flow Accumulation (sinks already filled by compute_slope_aspect)
     accum_rda = rd.flow_accumulation(rda, method='Dinf')
 
-    slope_pct = round((float(slope_rda[ctr, ctr]) / cell_m) * 100)
+    # slope_riserun is already true rise/run, so percent slope is just ×100.
+    slope_pct = max(0, round(float(slope_rda[ctr, ctr]) * 100))
 
-    # downhill_deg (uphill/rising-thermal direction) is a slope-magnitude-weighted aspect
-    # average over the same 7x7 neighborhood used for drainage_deg below, rather than a raw
-    # single-cell read. A single pixel is noisy against real DEM error and, more importantly,
-    # against ordinary stand-placement error on the map — a few meters of pin drift shouldn't
-    # be able to flip which side of a micro-feature the thermal direction is read from.
-    ubx = uby = uslope_sum = 0.0
-    for r in range(max(0, ctr - 3), min(n, ctr + 4)):
-        for c in range(max(0, ctr - 3), min(n, ctr + 4)):
-            asp = float(aspect_rda[r, c])
-            if asp < 0:
-                continue
-            w = float(slope_rda[r, c])
-            b = math.radians(asp)
-            ubx += math.sin(b) * w
-            uby += math.cos(b) * w
-            uslope_sum += w
+    # downhill_deg and drainage_deg are weighted aspect averages over the 7x7 window
+    # around the stand rather than raw single-cell reads. A single pixel is noisy against
+    # real DEM error and ordinary stand-pin drift — a few meters shouldn't be able to flip
+    # which side of a micro-feature the thermal direction is read from.
+    win = slice(max(0, ctr - 3), min(n, ctr + 4))
+    slope_w = np.asarray(slope_rda, dtype=np.float64)[win, win]
+    asp_w = np.asarray(aspect_rda, dtype=np.float64)[win, win]
+    acc_w = np.asarray(accum_rda, dtype=np.float64)[win, win]
+    # richdem reports aspect 270 for a zero gradient, so flat cells are masked out of
+    # the direction averages; NoData (-9999 slope) falls out via the same test.
+    valid = (asp_w >= 0) & (slope_w > FLAT_SLOPE_EPS)
+    flat = not bool(valid.any())
+    rad = np.radians(asp_w)
 
-    if uslope_sum > 0 and (abs(ubx) > 1e-6 or abs(uby) > 1e-6):
+    ubx = float(np.sum(np.where(valid, np.sin(rad) * slope_w, 0.0)))
+    uby = float(np.sum(np.where(valid, np.cos(rad) * slope_w, 0.0)))
+    if not flat and (abs(ubx) > 1e-6 or abs(uby) > 1e-6):
         downhill_deg = (math.degrees(math.atan2(ubx, uby)) + 360) % 360
     else:
-        aspect_val = float(aspect_rda[ctr, ctr])
-        downhill_deg = aspect_val if aspect_val >= 0 else 0.0
+        downhill_deg = 0.0
 
-    # Calculate true D-Infinity accumulation drainage vector across the 7x7 center neighborhood
-    bx = by = acc_sum = 0.0
-    max_near = 0.0
-    for r in range(max(0, ctr - 3), min(n, ctr + 4)):
-        for c in range(max(0, ctr - 3), min(n, ctr + 4)):
-            asp = float(aspect_rda[r, c])
-            if asp < 0:
-                continue
-            w = float(accum_rda[r, c])
-            b = math.radians(asp)
-            bx += math.sin(b) * w
-            by += math.cos(b) * w
-            acc_sum += w
-            if w > max_near:
-                max_near = w
-                
-    if acc_sum > 0 and (abs(bx) > 1e-6 or abs(by) > 1e-6):
+    # D-Infinity accumulation-weighted drainage direction over the same window
+    bx = float(np.sum(np.where(valid, np.sin(rad) * acc_w, 0.0)))
+    by = float(np.sum(np.where(valid, np.cos(rad) * acc_w, 0.0)))
+    if not flat and (abs(bx) > 1e-6 or abs(by) > 1e-6):
         drainage_deg = round((math.degrees(math.atan2(bx, by)) + 360) % 360)
     else:
         drainage_deg = round(downhill_deg)
-                
+
+    aspect_ok = asp_w >= 0
+    max_near = float(acc_w[aspect_ok].max()) if aspect_ok.any() else 0.0
     channel_strength = round(min(1.0, max_near / (n * n * 0.06)) * 100) / 100
 
+    # relief is measured on the raw DEM — the sink-filled copy would understate it
     min_e = float(np.min(dem_np))
     max_e = float(np.max(dem_np))
 
@@ -348,6 +238,7 @@ def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_
         "channel_strength": channel_strength,
         "elevation": round(dem[ctr][ctr]),
         "relief": round(max_e - min_e),
+        "flat": flat,
         "grid_size": n,
         "box_m": box_m,
     }
