@@ -19,6 +19,7 @@ const COLORS = {
   food: "#3B6D11",
   stand: "#A32D2D",
   suggestion: "#0E8A7D",
+  selected: "#F5A300",
 };
 
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
@@ -148,6 +149,7 @@ const HuntMap = forwardRef(function HuntMap({
   drawMode, onMapClick, draftPoints, onFinishCorridor,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
+  selectMode = false, selectedIds, onToggleSelect, boxTool = false, onBoxSelect,
   height = 420,
 }, ref) {
   const mapRef = useRef(null);
@@ -333,24 +335,101 @@ const HuntMap = forwardRef(function HuntMap({
     if (!layers.suggestions) return;
     (suggestions || []).forEach((sg) => {
       const dismissed = sg.status === "dismissed";
+      const selected = selectMode && !!selectedIds?.has(sg.id);
+      const color = selected ? COLORS.selected : COLORS.suggestion;
       const circle = L.circle([sg.lat, sg.lon], {
         radius: sg.radius_m,
-        color: COLORS.suggestion, fillColor: COLORS.suggestion,
-        fillOpacity: dismissed ? 0.06 : 0.15 + 0.35 * (Math.max(0, Math.min(100, sg.score)) / 100),
-        opacity: dismissed ? 0.35 : 0.9,
-        weight: 2,
-        dashArray: dismissed ? "3 5" : null,
-        interactive: !drawMode,
+        color, fillColor: color,
+        fillOpacity: selected ? 0.55 : dismissed ? 0.06 : 0.15 + 0.35 * (Math.max(0, Math.min(100, sg.score)) / 100),
+        opacity: selected ? 1 : dismissed ? 0.35 : 0.9,
+        weight: selected ? 4 : 2,
+        dashArray: dismissed && !selected ? "3 5" : null,
+        // Select mode: circles are tappable (popups off) unless the box tool owns the pointer.
+        interactive: selectMode ? !boxTool : !drawMode,
       });
-      if (!drawMode) bindFeaturePopup(circle, {
-        title: `Scouting suggestion (${Math.round(sg.score)}/100)`,
-        subtitle: sg.reasoning?.text || "",
-        kind: "suggestion", id: sg.id,
-        dismissed, onDismiss: onDismissSuggestion, onDelete: onDeleteFeature,
-      });
+      if (selectMode) {
+        circle.on("click", (e) => { L.DomEvent.stopPropagation(e); onToggleSelect && onToggleSelect(sg.id); });
+      } else if (!drawMode) {
+        bindFeaturePopup(circle, {
+          title: `Scouting suggestion (${Math.round(sg.score)}/100)`,
+          subtitle: sg.reasoning?.text || "",
+          kind: "suggestion", id: sg.id,
+          dismissed, onDismiss: onDismissSuggestion, onDelete: onDeleteFeature,
+        });
+      }
       circle.addTo(g);
     });
-  }, [suggestions, ready, layers.suggestions, drawMode, onDismissSuggestion, onDeleteFeature]);
+  }, [suggestions, ready, layers.suggestions, drawMode, onDismissSuggestion, onDeleteFeature,
+      selectMode, selectedIds, boxTool, onToggleSelect]);
+
+  // Select mode box tool: drag a rectangle (desktop: hold Shift; touch: turn the Box tool on) and
+  // report the ids of every suggestion whose center falls inside it. Uses raw pointer events on
+  // the map container because Leaflet's own mouse events don't fire during a touch drag.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !selectMode) return;
+    const el = map.getContainer();
+    let shiftHeld = false, pointerId = null, start = null, rect = null;
+
+    const setDragging = (on) => {
+      if (on) { map.dragging.enable(); map.boxZoom.enable(); } else { map.dragging.disable(); map.boxZoom.disable(); }
+    };
+    const applyIdle = () => {
+      const tool = boxTool || shiftHeld;
+      setDragging(!tool);
+      el.style.touchAction = boxTool ? "none" : "";   // pinch-zoom (Leaflet touch events) still works
+      el.style.cursor = tool ? "crosshair" : "";
+    };
+    const cancelBox = () => {
+      if (rect) { map.removeLayer(rect); rect = null; }
+      start = null; pointerId = null;
+    };
+    const onKey = (e) => {
+      if (e.key !== "Shift") return;
+      shiftHeld = e.type === "keydown";
+      if (!start) applyIdle();
+    };
+    const onDown = (e) => {
+      if (e.target.closest && e.target.closest(".leaflet-control")) return;
+      if (start && e.pointerId !== pointerId) { cancelBox(); return; }   // second finger = pinch, not a box
+      if (!(boxTool || shiftHeld) || (e.pointerType === "mouse" && e.button !== 0)) return;
+      pointerId = e.pointerId;
+      start = map.mouseEventToLatLng(e);
+      rect = L.rectangle([start, start], { color: COLORS.selected, weight: 2, dashArray: "4 4", fillOpacity: 0.12, interactive: false }).addTo(map);
+      try { el.setPointerCapture(e.pointerId); } catch { /* not all browsers allow it */ }
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!start || e.pointerId !== pointerId) return;
+      rect.setBounds(L.latLngBounds(start, map.mouseEventToLatLng(e)));
+    };
+    const onUp = (e) => {
+      if (!start || e.pointerId !== pointerId) return;
+      const bounds = L.latLngBounds(start, map.mouseEventToLatLng(e));
+      cancelBox();
+      const ids = (suggestions || []).filter((sg) => bounds.contains([sg.lat, sg.lon])).map((sg) => sg.id);
+      if (ids.length && onBoxSelect) onBoxSelect(ids);
+    };
+
+    applyIdle();
+    el.addEventListener("pointerdown", onDown, true);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", cancelBox);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    return () => {
+      cancelBox();
+      el.removeEventListener("pointerdown", onDown, true);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", cancelBox);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+      setDragging(true);
+      el.style.touchAction = ""; el.style.cursor = "";
+    };
+  }, [ready, selectMode, boxTool, suggestions, onBoxSelect]);
 
   // render scent cones — geographic sector from each stand in the blended scent direction
   useEffect(() => {

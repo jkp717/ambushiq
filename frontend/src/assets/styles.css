@@ -447,6 +447,16 @@ input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow
   border-bottom: 1px solid rgba(133,79,11,.2);
 }
 
+/* scouting multi-select bar (reuses the draw banner); the filter row wraps beneath */
+.map-select-bar .btn { min-height: 34px; }
+.map-select-bar .btn-on { background: #F5A300; color: #1a1a1a; border-color: #F5A300; }
+.map-select-bar .map-select-del:not(:disabled) { color: var(--red, #A32D2D); }
+.map-select-filters {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.map-select-below { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+.map-select-below input { width: 58px; padding: 6px 8px; font-size: 14px; }
+
 /* map body — fills remaining height; z-index: 1 creates a stacking context that
    contains all Leaflet z-indices so the top-bar (z:1000) always overlaps them */
 .map-body {

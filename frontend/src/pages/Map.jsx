@@ -12,6 +12,7 @@ import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
 import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
+import SelectionBar from "../components/SelectionBar.jsx";
 
 function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
   const today = localDate(utcOffset);
@@ -92,8 +93,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: false, scrapes: false, rubs: false, suggestions: true });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true });
   const [layersOpen, setLayersOpen] = useState(false);
+
+  // Scouting multi-select: tap circles / box-select, then bulk dismiss, restore or delete
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [boxTool, setBoxTool] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // New stand-specific layer state
   const [standLayers, setStandLayers] = useState({});
@@ -265,6 +272,45 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   }
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); setScoutDraft(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
+
+  // ── scouting multi-select ──
+  const exitSelect = useCallback(() => { setSelectMode(false); setBoxTool(false); setSelectedIds(new Set()); }, []);
+  function enterSelect() { cancelDraw(); setSelectMode(true); }
+  const toggleSelected = useCallback((id) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  }), []);
+  const addSelected = useCallback((ids) => setSelectedIds((prev) => new Set([...prev, ...ids])), []);
+  const selectWhere = (pred) => setSelectedIds(new Set((suggestions || []).filter(pred).map((s) => s.id)));
+  const selectedSuggestions = (suggestions || []).filter((s) => selectedIds.has(s.id));
+  const allSelectedDismissed = selectedSuggestions.length > 0 && selectedSuggestions.every((s) => s.status === "dismissed");
+
+  async function bulkAction(action) {
+    if (!selectedIds.size) return;
+    setBulkBusy(true);
+    try {
+      await api("/scouting/bulk", { method: "POST", body: JSON.stringify({ ids: [...selectedIds], action }) });
+      await reloadSuggestions();
+      setSelectedIds(new Set());
+    } catch { setErr(`Couldn't ${action} the selected suggestions.`); }
+    finally { setBulkBusy(false); }
+  }
+
+  // starting any draw/add action leaves Select mode; hiding the Scouting layer does too
+  useEffect(() => { if (drawMode) exitSelect(); }, [drawMode, exitSelect]);
+  useEffect(() => { if (!layers.suggestions) exitSelect(); }, [layers.suggestions, exitSelect]);
+  // drop selected ids that no longer exist (deleted elsewhere, region switch)
+  useEffect(() => {
+    const live = new Set((suggestions || []).map((s) => s.id));
+    setSelectedIds((prev) => (prev.size && [...prev].some((id) => !live.has(id)) ? new Set([...prev].filter((id) => live.has(id))) : prev));
+  }, [suggestions]);
+  useEffect(() => {
+    if (!selectMode) return;
+    const onKey = (e) => { if (e.key === "Escape") exitSelect(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, exitSelect]);
 
   // Stable identity — a new function reference here on every radius tick would
   // re-trigger HuntMap's draft-circle effect mid-drag and fight the user's own gesture.
@@ -493,6 +539,20 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
         </div>
       )}
 
+      {selectMode && (
+        <SelectionBar
+          count={selectedIds.size} total={(suggestions || []).length} allDismissed={allSelectedDismissed}
+          boxTool={boxTool} busy={bulkBusy}
+          onToggleBox={() => setBoxTool((b) => !b)}
+          onSelectAll={() => selectWhere(() => true)}
+          onSelectDismissed={() => selectWhere((s) => s.status === "dismissed")}
+          onSelectBelow={(score) => selectWhere((s) => s.score < score)}
+          onClear={() => setSelectedIds(new Set())}
+          onDismissRestore={() => bulkAction(allSelectedDismissed ? "restore" : "dismiss")}
+          onDelete={() => bulkAction("delete")}
+          onDone={exitSelect} />
+      )}
+
       {/* map fills all remaining vertical space */}
       <div className="map-body">
         <div className="map-fill">
@@ -504,6 +564,8 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             onDismissSuggestion={onDismissSuggestion} center={{ lat: activeRegion.lat, lon: activeRegion.lon, set: true }}
             scoutDraft={scoutDraft} onScoutRadiusChange={onScoutRadiusChange}
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
+            selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelected}
+            boxTool={boxTool} onBoxSelect={addSelected}
             height="100%" />
         </div>
         <div className="layer-overlay">
@@ -514,6 +576,12 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
               <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
+              {layers.suggestions && (suggestions || []).length > 0 && (
+                <button className="chip" onClick={selectMode ? exitSelect : enterSelect}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: selectMode ? 700 : 400 }}>
+                  ☑ {selectMode ? "Selecting…" : "Select scouting"}
+                </button>
+              )}
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
