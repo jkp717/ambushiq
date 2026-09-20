@@ -6,7 +6,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
@@ -14,7 +14,7 @@ from app.dependencies import get_active_region_id, require_token
 from app.forecast.service import _haversine_m
 from app.scouting import service
 from app.scouting.models import ScoutingSuggestion
-from app.scouting.schemas import ScoutingAnalyzeIn, ScoutingBulkIn, ScoutingStatusIn
+from app.scouting.schemas import ScoutingAnalyzeIn, ScoutingStatusIn
 from app.settings.service import get_settings
 
 router = APIRouter(prefix="/api/scouting", tags=["scouting"])
@@ -72,24 +72,6 @@ async def analyze(body: ScoutingAnalyzeIn, region_id: int = Depends(get_active_r
         await task
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
-
-
-@router.post("/bulk")
-def bulk_update(body: ScoutingBulkIn, region_id: int = Depends(get_active_region_id),
-                _=Depends(require_token)):
-    """Delete, dismiss or restore many suggestions at once. Only rows in the active region
-    are touched; ids from other regions (or that don't exist) are silently ignored."""
-    if not body.ids:
-        return {"ok": True, "affected": 0}
-    with Session(engine) as s:
-        match = (ScoutingSuggestion.region_id == region_id, ScoutingSuggestion.id.in_(body.ids))
-        if body.action == "delete":
-            result = s.execute(delete(ScoutingSuggestion).where(*match))
-        else:
-            status = "dismissed" if body.action == "dismiss" else "new"
-            result = s.execute(update(ScoutingSuggestion).where(*match).values(status=status))
-        s.commit()
-        return {"ok": True, "affected": result.rowcount}
 
 
 @router.put("/{suggestion_id}")

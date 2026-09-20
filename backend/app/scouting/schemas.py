@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class ScoutingAnalyzeIn(BaseModel):
@@ -20,8 +20,3 @@ class ScoutingAnalyzeIn(BaseModel):
 
 class ScoutingStatusIn(BaseModel):
     status: Literal["new", "dismissed"]
-
-
-class ScoutingBulkIn(BaseModel):
-    ids: list[int] = Field(max_length=5000)
-    action: Literal["delete", "dismiss", "restore"]

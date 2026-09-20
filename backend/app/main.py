@@ -14,6 +14,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+from app.bulk.router import router as bulk_router
 from app.cameras.router import router as cameras_router
 from app.core.config import APP_TOKEN, APP_VERSION
 from app.core.database import init_db
@@ -75,6 +76,7 @@ app.include_router(deer_ratings_router)
 app.include_router(settings_router)
 app.include_router(cameras_router)
 app.include_router(scouting_router)
+app.include_router(bulk_router)
 app.include_router(regions_router)
 
 

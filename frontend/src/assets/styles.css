@@ -459,6 +459,8 @@ input[type="checkbox"], input[type="radio"] {
 .map-select-filters {
   flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
 }
+.map-select-note { flex-basis: 100%; font-size: 12px; font-weight: 400; color: var(--sub); }
+.map-select-warn { color: var(--red, #A32D2D); font-weight: 500; }
 .map-select-below { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
 .map-select-below input { width: 58px; padding: 6px 8px; font-size: 14px; }
 
@@ -488,6 +490,8 @@ input[type="checkbox"], input[type="radio"] {
   transition: background 0.12s;
 }
 .layer-toggle-btn:hover { background: rgba(0,0,0,.70); }
+/* multi-select mode on: solid (no transparency), same amber as selected map items */
+.layer-toggle-btn.on, .layer-toggle-btn.on:hover { background: #F5A300; color: #1a1a1a; backdrop-filter: none; }
 .layer-chips-panel {
   display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
   background: rgba(0,0,0,.40); backdrop-filter: blur(4px);

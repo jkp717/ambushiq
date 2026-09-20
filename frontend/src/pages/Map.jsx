@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download } from "lucide-react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect } from "lucide-react";
 import { api, tokenStore, regionStore } from "../services/api.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
@@ -96,9 +96,10 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true });
   const [layersOpen, setLayersOpen] = useState(false);
 
-  // Scouting multi-select: tap circles / box-select, then bulk dismiss, restore or delete
+  // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
+  // Selected items are "kind:id" keys (stand | zone | corridor | sign | suggestion).
   const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [boxTool, setBoxTool] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
 
@@ -273,38 +274,64 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); setScoutDraft(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
 
-  // ── scouting multi-select ──
-  const exitSelect = useCallback(() => { setSelectMode(false); setBoxTool(false); setSelectedIds(new Set()); }, []);
-  function enterSelect() { cancelDraw(); setSelectMode(true); }
-  const toggleSelected = useCallback((id) => setSelectedIds((prev) => {
+  // ── multi-select ──
+  // Everything currently visible on the map is selectable; hidden layers are not.
+  const features = useMemo(() => {
+    const active = (x) => !!x.is_active;
+    return [
+      ...stands.map((s) => ({ key: `stand:${s.id}`, kind: "stand", active: active(s) })),
+      ...(layers.zones ? zones.map((z) => ({ key: `zone:${z.id}`, kind: "zone", active: active(z) })) : []),
+      ...(layers.corridors ? corridors.map((c) => ({ key: `corridor:${c.id}`, kind: "corridor", active: active(c) })) : []),
+      ...(sign || [])
+        .filter((sg) => (sg.kind === "scrape" ? layers.scrapes : layers.rubs))
+        .map((sg) => ({ key: `sign:${sg.id}`, kind: "sign", active: active(sg) })),
+      ...(layers.suggestions
+        ? (suggestions || []).map((sg) => ({ key: `suggestion:${sg.id}`, kind: "suggestion", active: sg.status !== "dismissed", score: sg.score }))
+        : []),
+    ];
+  }, [stands, zones, corridors, sign, suggestions, layers]);
+  const featureByKey = useMemo(() => new Map(features.map((f) => [f.key, f])), [features]);
+
+  const selectedFeatures = [...selectedKeys].map((k) => featureByKey.get(k)).filter(Boolean);
+  const selectedCounts = selectedFeatures.reduce((c, f) => ({ ...c, [f.kind]: (c[f.kind] || 0) + 1 }), {});
+  const scoutingOnly = selectedFeatures.length > 0 && selectedFeatures.every((f) => f.kind === "suggestion");
+  const canActivate = selectedFeatures.some((f) => !f.active);
+  const canDeactivate = selectedFeatures.some((f) => f.active);
+
+  const exitSelect = useCallback(() => { setSelectMode(false); setBoxTool(false); setSelectedKeys(new Set()); }, []);
+  function toggleSelectMode() { if (selectMode) exitSelect(); else { cancelDraw(); setSelectMode(true); } }
+  const toggleSelected = useCallback((key) => setSelectedKeys((prev) => {
     const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   }), []);
-  const addSelected = useCallback((ids) => setSelectedIds((prev) => new Set([...prev, ...ids])), []);
-  const selectWhere = (pred) => setSelectedIds(new Set((suggestions || []).filter(pred).map((s) => s.id)));
-  const selectedSuggestions = (suggestions || []).filter((s) => selectedIds.has(s.id));
-  const allSelectedDismissed = selectedSuggestions.length > 0 && selectedSuggestions.every((s) => s.status === "dismissed");
+  const addSelected = useCallback((keys) => setSelectedKeys((prev) => new Set([...prev, ...keys])), []);
+  const selectWhere = (pred) => setSelectedKeys(new Set(features.filter(pred).map((f) => f.key)));
 
   async function bulkAction(action) {
-    if (!selectedIds.size) return;
+    if (!selectedFeatures.length) return;
     setBulkBusy(true);
     try {
-      await api("/scouting/bulk", { method: "POST", body: JSON.stringify({ ids: [...selectedIds], action }) });
-      await reloadSuggestions();
-      setSelectedIds(new Set());
-    } catch { setErr(`Couldn't ${action} the selected suggestions.`); }
+      const items = selectedFeatures.map((f) => ({ kind: f.kind, id: Number(f.key.split(":")[1]) }));
+      await api("/features/bulk", { method: "POST", body: JSON.stringify({ items, action }) });
+      const kinds = new Set(items.map((i) => i.kind));
+      await Promise.all([
+        kinds.has("stand") && reloadStands(), kinds.has("zone") && reloadZones(),
+        kinds.has("corridor") && reloadCorridors(), kinds.has("sign") && reloadSign(),
+        kinds.has("suggestion") && reloadSuggestions(),
+      ]);
+      setSelectedKeys(new Set());
+    } catch { setErr(`Couldn't ${action} the selected items.`); }
     finally { setBulkBusy(false); }
   }
 
-  // starting any draw/add action leaves Select mode; hiding the Scouting layer does too
+  // starting any draw/add action leaves multi-select mode
   useEffect(() => { if (drawMode) exitSelect(); }, [drawMode, exitSelect]);
-  useEffect(() => { if (!layers.suggestions) exitSelect(); }, [layers.suggestions, exitSelect]);
-  // drop selected ids that no longer exist (deleted elsewhere, region switch)
+  // drop selected keys that no longer exist or are no longer visible (deleted, layer hidden, region switch)
   useEffect(() => {
-    const live = new Set((suggestions || []).map((s) => s.id));
-    setSelectedIds((prev) => (prev.size && [...prev].some((id) => !live.has(id)) ? new Set([...prev].filter((id) => live.has(id))) : prev));
-  }, [suggestions]);
+    setSelectedKeys((prev) => (prev.size && [...prev].some((k) => !featureByKey.has(k))
+      ? new Set([...prev].filter((k) => featureByKey.has(k))) : prev));
+  }, [featureByKey]);
   useEffect(() => {
     if (!selectMode) return;
     const onKey = (e) => { if (e.key === "Escape") exitSelect(); };
@@ -541,14 +568,17 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
 
       {selectMode && (
         <SelectionBar
-          count={selectedIds.size} total={(suggestions || []).length} allDismissed={allSelectedDismissed}
+          counts={selectedCounts} total={features.length}
+          scoutingOnly={scoutingOnly} canActivate={canActivate} canDeactivate={canDeactivate}
           boxTool={boxTool} busy={bulkBusy}
           onToggleBox={() => setBoxTool((b) => !b)}
           onSelectAll={() => selectWhere(() => true)}
-          onSelectDismissed={() => selectWhere((s) => s.status === "dismissed")}
-          onSelectBelow={(score) => selectWhere((s) => s.score < score)}
-          onClear={() => setSelectedIds(new Set())}
-          onDismissRestore={() => bulkAction(allSelectedDismissed ? "restore" : "dismiss")}
+          onSelectKind={(kind) => selectWhere((f) => f.kind === kind)}
+          onSelectInactive={() => selectWhere((f) => !f.active)}
+          onSelectBelow={(score) => selectWhere((f) => f.kind === "suggestion" && f.score < score)}
+          onClear={() => setSelectedKeys(new Set())}
+          onActivate={() => bulkAction("activate")}
+          onDeactivate={() => bulkAction("deactivate")}
           onDelete={() => bulkAction("delete")}
           onDone={exitSelect} />
       )}
@@ -564,7 +594,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             onDismissSuggestion={onDismissSuggestion} center={{ lat: activeRegion.lat, lon: activeRegion.lon, set: true }}
             scoutDraft={scoutDraft} onScoutRadiusChange={onScoutRadiusChange}
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
-            selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelected}
+            selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
             height="100%" />
         </div>
@@ -576,16 +606,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
               <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
-              {layers.suggestions && (suggestions || []).length > 0 && (
-                <button className="chip" onClick={selectMode ? exitSelect : enterSelect}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: selectMode ? 700 : 400 }}>
-                  ☑ {selectMode ? "Selecting…" : "Select scouting"}
-                </button>
-              )}
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
             <Download size={16} />
+          </button>
+          <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
+            aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
+            <BoxSelect size={16} />
           </button>
           <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
             <Plus size={16} />

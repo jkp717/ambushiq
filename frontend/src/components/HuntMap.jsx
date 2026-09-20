@@ -23,7 +23,7 @@ const COLORS = {
 };
 
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
-function standIcon(vectors, rank) {
+function standIcon(vectors, rank, selected = false) {
   const size = 78, c = size / 2;
   // Arrow length tracks magnitude so stands with very different conditions don't look identical:
   // wind by speed (mph), thermal by its blended weight (0..1).
@@ -55,7 +55,8 @@ function standIcon(vectors, rank) {
       })()
     : "";
 
-  const ring = rank === 0 ? `<circle cx="${c}" cy="${c}" r="11" fill="none" stroke="${COLORS.stand}" stroke-width="2.5"/>` : "";
+  const ring = (rank === 0 ? `<circle cx="${c}" cy="${c}" r="11" fill="none" stroke="${COLORS.stand}" stroke-width="2.5"/>` : "")
+    + (selected ? `<circle cx="${c}" cy="${c}" r="15" fill="rgba(245,163,0,.25)" stroke="${COLORS.selected}" stroke-width="3.5"/>` : "");
   // The clickable hit-area is a small div (dotPx × dotPx) centered on the stand dot.
   // The SVG is absolutely offset so its visual center aligns with the div center, but
   // pointer-events:none on the SVG means only the tiny div registers clicks — arrows
@@ -149,9 +150,21 @@ const HuntMap = forwardRef(function HuntMap({
   drawMode, onMapClick, draftPoints, onFinishCorridor,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
-  selectMode = false, selectedIds, onToggleSelect, boxTool = false, onBoxSelect,
+  selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
   height = 420,
 }, ref) {
+  // Multi-select: every selectable feature is identified by a "kind:id" key. In select mode
+  // popups are off and a click toggles the key; `interactive` covers the box tool, which needs
+  // the pointer for itself.
+  const isSelected = (kind, id) => selectMode && !!selectedKeys?.has(`${kind}:${id}`);
+  const interactiveFor = () => (selectMode ? !boxTool : !drawMode);
+  const bindToggle = (layer, kind, id) => layer.on("click", (e) => {
+    L.DomEvent.stopPropagation(e);
+    onToggleSelect && onToggleSelect(`${kind}:${id}`);
+  });
+  const selectRef = useRef({});
+  selectRef.current = { selectMode, onToggleSelect };
+
   const mapRef = useRef(null);
   const mapEl = useRef(null);
   const layerGroups = useRef({});
@@ -237,25 +250,27 @@ const HuntMap = forwardRef(function HuntMap({
     if (!layers.zones) return;
     zones.forEach((z) => {
       const active = !!z.is_active;
-      const baseColor = COLORS[z.kind] || "#888";
+      const sel = isSelected("zone", z.id);
+      const baseColor = sel ? COLORS.selected : (COLORS[z.kind] || "#888");
       const circle = L.circle([z.lat, z.lon], {
         radius: z.radius_m,
-        color:       active ? baseColor : "#888",
-        fillColor:   active ? baseColor : "#888",
-        fillOpacity: active ? 0.18 : 0.04,
-        opacity:     active ? 1    : 0.4,
-        weight:      active ? 2    : 1.5,
-        dashArray:   active ? null : "6 5",
-        interactive: !drawMode,
+        color:       active || sel ? baseColor : "#888",
+        fillColor:   active || sel ? baseColor : "#888",
+        fillOpacity: sel ? 0.45 : active ? 0.18 : 0.04,
+        opacity:     active || sel ? 1    : 0.4,
+        weight:      sel ? 4 : active ? 2    : 1.5,
+        dashArray:   active || sel ? null : "6 5",
+        interactive: interactiveFor(),
       });
-      if (!drawMode) bindFeaturePopup(circle, {
+      if (selectMode) bindToggle(circle, "zone", z.id);
+      else if (!drawMode) bindFeaturePopup(circle, {
         title: z.name || `${z.kind} zone`,
         subtitle: `${z.kind} · ${z.radius_m} m${active ? "" : " · inactive"}`,
         kind: z.kind === "food" ? "food" : "bedding", id: z.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });
       circle.addTo(g);
     });
-  }, [zones, ready, layers.zones, drawMode, onEditFeature, onDeleteFeature]);
+  }, [zones, ready, layers.zones, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect]);
 
   // render corridors
   useEffect(() => {
@@ -263,14 +278,18 @@ const HuntMap = forwardRef(function HuntMap({
     const g = layerGroups.current.corridors; g.clearLayers();
     if (!layers.corridors) return;
     corridors.forEach((c) => {
-      const line = L.polyline(c.points, { color: COLORS.deer, weight: 3, opacity: 0.8, dashArray: "1 6", lineCap: "round", interactive: !drawMode });
-      if (!drawMode) bindFeaturePopup(line, {
+      const sel = isSelected("corridor", c.id);
+      const line = L.polyline(c.points, sel
+        ? { color: COLORS.selected, weight: 6, opacity: 1, lineCap: "round", interactive: interactiveFor() }
+        : { color: COLORS.deer, weight: 3, opacity: 0.8, dashArray: "1 6", lineCap: "round", interactive: interactiveFor() });
+      if (selectMode) bindToggle(line, "corridor", c.id);
+      else if (!drawMode) bindFeaturePopup(line, {
         title: c.name || "deer corridor", subtitle: `${c.points.length} points`,
         kind: "corridor", id: c.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });
       line.addTo(g);
     });
-  }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature]);
+  }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect]);
 
   // render deer sign (scrapes + rubs)
   useEffect(() => {
@@ -283,11 +302,13 @@ const HuntMap = forwardRef(function HuntMap({
       if (!isScrape && !layers.rubs)    return;
       const color = isScrape ? "#E87800" : "#8B3A1A";
       const g     = isScrape ? gS : gR;
-      const m = L.circleMarker([sg.lat, sg.lon], {
-        radius: 7, color, fillColor: color, fillOpacity: 0.8, weight: 2,
-        interactive: !drawMode,
-      });
-      if (!drawMode) {
+      const sel   = isSelected("sign", sg.id);
+      const m = L.circleMarker([sg.lat, sg.lon], sel
+        ? { radius: 10, color: COLORS.selected, fillColor: color, fillOpacity: 0.95, weight: 4, interactive: interactiveFor() }
+        : { radius: 7, color, fillColor: color, fillOpacity: 0.8, weight: 2, interactive: interactiveFor() });
+      if (selectMode) {
+        bindToggle(m, "sign", sg.id);
+      } else if (!drawMode) {
         bindFeaturePopup(m, {
           title: sg.name,
           subtitle: `${sg.kind} · ${(+sg.lat).toFixed(4)}, ${(+sg.lon).toFixed(4)}`,
@@ -296,7 +317,7 @@ const HuntMap = forwardRef(function HuntMap({
       }
       m.addTo(g);
     });
-  }, [sign, ready, layers.scrapes, layers.rubs, drawMode, onEditFeature, onDeleteFeature]);
+  }, [sign, ready, layers.scrapes, layers.rubs, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect]);
 
   // render scout-analysis draft circle: drag-to-resize, mirrors MiniMap.jsx's
   // Geoman pattern (L.circle + circle.pm.enable) ported onto the main map.
@@ -335,7 +356,7 @@ const HuntMap = forwardRef(function HuntMap({
     if (!layers.suggestions) return;
     (suggestions || []).forEach((sg) => {
       const dismissed = sg.status === "dismissed";
-      const selected = selectMode && !!selectedIds?.has(sg.id);
+      const selected = isSelected("suggestion", sg.id);
       const color = selected ? COLORS.selected : COLORS.suggestion;
       const circle = L.circle([sg.lat, sg.lon], {
         radius: sg.radius_m,
@@ -344,11 +365,10 @@ const HuntMap = forwardRef(function HuntMap({
         opacity: selected ? 1 : dismissed ? 0.35 : 0.9,
         weight: selected ? 4 : 2,
         dashArray: dismissed && !selected ? "3 5" : null,
-        // Select mode: circles are tappable (popups off) unless the box tool owns the pointer.
-        interactive: selectMode ? !boxTool : !drawMode,
+        interactive: interactiveFor(),
       });
       if (selectMode) {
-        circle.on("click", (e) => { L.DomEvent.stopPropagation(e); onToggleSelect && onToggleSelect(sg.id); });
+        bindToggle(circle, "suggestion", sg.id);
       } else if (!drawMode) {
         bindFeaturePopup(circle, {
           title: `Scouting suggestion (${Math.round(sg.score)}/100)`,
@@ -360,15 +380,33 @@ const HuntMap = forwardRef(function HuntMap({
       circle.addTo(g);
     });
   }, [suggestions, ready, layers.suggestions, drawMode, onDismissSuggestion, onDeleteFeature,
-      selectMode, selectedIds, boxTool, onToggleSelect]);
+      selectMode, selectedKeys, boxTool, onToggleSelect]);
 
   // Select mode box tool: drag a rectangle (desktop: hold Shift; touch: turn the Box tool on) and
-  // report the ids of every suggestion whose center falls inside it. Uses raw pointer events on
-  // the map container because Leaflet's own mouse events don't fire during a touch drag.
+  // report the keys of every visible feature it covers. Uses raw pointer events on the map
+  // container because Leaflet's own mouse events don't fire during a touch drag.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !selectMode) return;
     const el = map.getContainer();
+
+    // Points (stands, zones, sign, suggestions) count by their center; a corridor counts if any
+    // vertex is inside the box or any segment crosses it. Hidden layers are not selectable.
+    const boxKeys = (bounds) => {
+      const inside = (lat, lon) => bounds.contains([lat, lon]);
+      const planar = L.bounds(L.point(bounds.getWest(), bounds.getSouth()), L.point(bounds.getEast(), bounds.getNorth()));
+      const lineHits = (pts) => pts.some(([lat, lon]) => inside(lat, lon))
+        || pts.some((p, i) => i > 0 && L.LineUtil.clipSegment(L.point(pts[i - 1][1], pts[i - 1][0]), L.point(p[1], p[0]), planar));
+      const keys = [];
+      stands.forEach((s) => { if (inside(s.lat, s.lon)) keys.push(`stand:${s.id}`); });
+      if (layers.zones) zones.forEach((z) => { if (inside(z.lat, z.lon)) keys.push(`zone:${z.id}`); });
+      if (layers.corridors) corridors.forEach((c) => { if (lineHits(c.points)) keys.push(`corridor:${c.id}`); });
+      (sign || []).forEach((sg) => {
+        if ((sg.kind === "scrape" ? layers.scrapes : layers.rubs) && inside(sg.lat, sg.lon)) keys.push(`sign:${sg.id}`);
+      });
+      if (layers.suggestions) (suggestions || []).forEach((sg) => { if (inside(sg.lat, sg.lon)) keys.push(`suggestion:${sg.id}`); });
+      return keys;
+    };
     let shiftHeld = false, pointerId = null, start = null, rect = null;
 
     const setDragging = (on) => {
@@ -407,8 +445,8 @@ const HuntMap = forwardRef(function HuntMap({
       if (!start || e.pointerId !== pointerId) return;
       const bounds = L.latLngBounds(start, map.mouseEventToLatLng(e));
       cancelBox();
-      const ids = (suggestions || []).filter((sg) => bounds.contains([sg.lat, sg.lon])).map((sg) => sg.id);
-      if (ids.length && onBoxSelect) onBoxSelect(ids);
+      const keys = boxKeys(bounds);
+      if (keys.length && onBoxSelect) onBoxSelect(keys);
     };
 
     applyIdle();
@@ -429,7 +467,7 @@ const HuntMap = forwardRef(function HuntMap({
       setDragging(true);
       el.style.touchAction = ""; el.style.cursor = "";
     };
-  }, [ready, selectMode, boxTool, suggestions, onBoxSelect]);
+  }, [ready, selectMode, boxTool, stands, zones, corridors, sign, suggestions, layers, onBoxSelect]);
 
   // render scent cones — geographic sector from each stand in the blended scent direction
   useEffect(() => {
@@ -514,8 +552,8 @@ const HuntMap = forwardRef(function HuntMap({
         deer_approach_deg: sl.deer ? s.deer_approach_deg : null,
       };
       const rank = rankIndex[s.id] ?? 99;
-      const icon = standIcon(vectors, rank);
-      
+      const icon = standIcon(vectors, rank, isSelected("stand", s.id));
+
       const windTxt = v.wind_to_deg != null ? `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph` : "";
       const thermTxt = v.thermal_to_deg != null ? `Thermal ${v.thermal_phase} → ${degToCompass(v.thermal_to_deg)}` : "";
       const subtitle = [windTxt, thermTxt].filter(Boolean).join(" · ");
@@ -524,14 +562,25 @@ const HuntMap = forwardRef(function HuntMap({
         const m = standsMarkers.current[s.id];
         m.setIcon(icon);
         // removed the !m.isPopupOpen() check here so it always updates the stored HTML
-        if (!drawMode) {
+        if (selectMode) {
+          m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection instead
+        } else if (!drawMode) {
           bindFeaturePopup(m, {
             title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
         }
       } else {
         const m = L.marker([s.lat, s.lon], { icon, interactive: !drawMode });
-        if (!drawMode) {
+        // Markers are reused across renders, so the toggle handler is registered once and reads
+        // the live select-mode state from a ref.
+        m.on("click", (e) => {
+          if (!selectRef.current.selectMode) return;
+          L.DomEvent.stopPropagation(e);
+          selectRef.current.onToggleSelect && selectRef.current.onToggleSelect(`stand:${s.id}`);
+        });
+        if (selectMode) {
+          // no popup while selecting
+        } else if (!drawMode) {
           bindFeaturePopup(m, {
             title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
@@ -540,7 +589,8 @@ const HuntMap = forwardRef(function HuntMap({
         standsMarkers.current[s.id] = m;
       }
     });
-  }, [stands, conditions, ready, standLayers, drawMode, onEditFeature, onDeleteFeature, onToggleStandLayer]);
+  }, [stands, conditions, ready, standLayers, drawMode, onEditFeature, onDeleteFeature, onToggleStandLayer,
+      selectMode, selectedKeys]);
 
   // render draft (in-progress drawing)
   useEffect(() => {
