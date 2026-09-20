@@ -313,23 +313,41 @@ input[type="checkbox"], input[type="radio"] {
    and publishes --sheet-lift (visible panel height) on .map-page so the corner controls below can
    ride above it. The sheet itself is click-through; only the tab and panel take pointer events. ── */
 .bottom-sheet {
-  --tab-h: calc(44px + env(safe-area-inset-bottom, 0px));
+  --tab-h: 44px;
+  /* bottom safe-area inset: 0 in a browser tab, ~34px (home indicator) in the installed PWA */
+  --sab: env(safe-area-inset-bottom, 0px);
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 600;
   display: flex; flex-direction: column; align-items: stretch;
   pointer-events: none;
   transition: transform .22s cubic-bezier(.2, .8, .2, 1);
 }
-.bottom-sheet.is-closed { transform: translateY(calc(100% - var(--tab-h))); }
+/* Closed: slide down until only the tab shows, stopping --sab short of the bottom edge so the tab
+   floats just above the home-indicator zone (BottomSheet.jsx mirrors this distance). In a browser
+   --sab is 0 and the tab sits flush on the bottom edge. */
+.bottom-sheet.is-closed { transform: translateY(calc(100% - var(--tab-h) - var(--sab))); }
 .bottom-sheet-tab {
   pointer-events: auto; align-self: center; position: relative; margin-bottom: -1px; /* covers the panel's top border */
   height: var(--tab-h); box-sizing: border-box;
-  padding: 0 16px env(safe-area-inset-bottom, 0px);
+  padding: 0 16px;
   display: inline-flex; align-items: center; gap: 8px;
   background: var(--bg); color: var(--txt);
   border: 1px solid var(--bord); border-bottom: none; border-radius: 14px 14px 0 0;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, .18);
   font: inherit; font-size: 14px; font-weight: 700; white-space: nowrap;
   cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+  transition: border-radius .22s;
+}
+/* Floating (closed) with a safe-area gap beneath it: round the bottom corners and close the outline.
+   The min() terms are 0 when there is no inset, leaving the flush "attached tab" look unchanged. */
+.bottom-sheet.is-closed .bottom-sheet-tab {
+  margin-bottom: 0;
+  border-bottom: min(1px, var(--sab)) solid var(--bord);
+  border-radius: 14px 14px min(14px, var(--sab)) min(14px, var(--sab));
+}
+/* zero-size probe so JS can read the safe-area inset in px */
+.bottom-sheet-probe {
+  position: absolute; left: 0; bottom: 0; width: 0; height: var(--sab);
+  visibility: hidden; pointer-events: none;
 }
 .bottom-sheet-tab:active { cursor: grabbing; }
 .bottom-sheet-tab svg { color: var(--sub); flex-shrink: 0; }

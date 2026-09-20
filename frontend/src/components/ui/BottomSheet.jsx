@@ -17,12 +17,24 @@ const FLICK_PX_PER_MS = 0.4; // release speed that overrides the halfway rule
 function BottomSheet({ open, onOpenChange, tab, children }) {
   const sheetRef = useRef(null);
   const tabRef = useRef(null);
+  const probeRef = useRef(null);
   const drag = useRef(null);
 
+  // Height of the panel below the tab (including its bottom safe-area padding).
   const panelHeight = useCallback(() => {
     const sheet = sheetRef.current, tabEl = tabRef.current;
     return sheet && tabEl ? Math.max(0, sheet.offsetHeight - tabEl.offsetHeight) : 0;
   }, []);
+
+  // The bottom safe-area inset in px (iPhone home indicator in the installed PWA; 0 in a browser
+  // tab). Measured with a probe element because env() isn't readable from JS directly.
+  const safeBottom = useCallback(() => probeRef.current?.offsetHeight || 0, []);
+
+  // How far the sheet slides down when closed. It stops `safeBottom` short of fully hidden so the
+  // tab floats above the home-indicator zone instead of stretching a dead band under its text
+  // (and swipes starting there aren't swallowed by the system home gesture). Matches the
+  // `.bottom-sheet.is-closed` transform in styles.css.
+  const hiddenDistance = useCallback(() => Math.max(0, panelHeight() - safeBottom()), [panelHeight, safeBottom]);
 
   const setLift = useCallback((px) => {
     const parent = sheetRef.current?.parentElement;
@@ -58,10 +70,10 @@ function BottomSheet({ open, onOpenChange, tab, children }) {
 
   const onPointerDown = (e) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    const panelH = panelHeight();
+    const panelFull = panelHeight(), hidden = hiddenDistance();
     drag.current = {
-      id: e.pointerId, startY: e.clientY, startT: open ? 0 : panelH, panelH,
-      lastY: e.clientY, lastTime: performance.now(), velocity: 0, t: open ? 0 : panelH, moved: false,
+      id: e.pointerId, startY: e.clientY, startT: open ? 0 : hidden, hidden, panelFull,
+      lastY: e.clientY, lastTime: performance.now(), velocity: 0, t: open ? 0 : hidden, moved: false,
     };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not all browsers allow it */ }
   };
@@ -78,9 +90,9 @@ function BottomSheet({ open, onOpenChange, tab, children }) {
       sheet.classList.add("dragging");
       sheet.parentElement?.classList.add("sheet-dragging");
     }
-    d.t = Math.max(0, Math.min(d.panelH, d.startT + dy));
+    d.t = Math.max(0, Math.min(d.hidden, d.startT + dy));
     sheetRef.current.style.transform = `translateY(${d.t}px)`;
-    setLift(d.panelH - d.t);
+    setLift(d.hidden > 0 ? d.panelFull * (1 - d.t / d.hidden) : 0);   // full panel height open → 0 closed
     const now = performance.now();
     d.velocity = (e.clientY - d.lastY) / Math.max(1, now - d.lastTime);   // px/ms, negative = upward
     d.lastY = e.clientY;
@@ -92,7 +104,7 @@ function BottomSheet({ open, onOpenChange, tab, children }) {
     if (!d || e.pointerId !== d.id) return;
     drag.current = null;
     if (!d.moved) { onOpenChange(!open); return; }                     // a tap
-    const settleOpen = Math.abs(d.velocity) > FLICK_PX_PER_MS ? d.velocity < 0 : d.t < d.panelH / 2;
+    const settleOpen = Math.abs(d.velocity) > FLICK_PX_PER_MS ? d.velocity < 0 : d.t < d.hidden / 2;
     endDrag(settleOpen);
   };
 
@@ -115,6 +127,7 @@ function BottomSheet({ open, onOpenChange, tab, children }) {
         {tab}
       </button>
       <div className="bottom-sheet-panel">{children}</div>
+      <div ref={probeRef} className="bottom-sheet-probe" aria-hidden="true" />
     </div>
   );
 }
