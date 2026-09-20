@@ -5,7 +5,7 @@ import logging
 import os
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(
@@ -23,6 +23,7 @@ from app.deer_ratings.router import router as deer_ratings_router
 from app.deer_sign.router import router as deer_sign_router
 from app.dependencies import require_token
 from app.forecast.router import router as forecast_router
+from app.forecast.service import ForecastUnavailable
 from app.regions.router import router as regions_router
 from app.scheduler import start_scheduler
 from app.scouting.router import router as scouting_router
@@ -46,6 +47,13 @@ async def _static_cache_headers(request: Request, call_next):
     elif not path.startswith("/api/") and not path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+@app.exception_handler(ForecastUnavailable)
+async def _forecast_unavailable(request: Request, exc: ForecastUnavailable):
+    """A weather-provider outage is a bad gateway, not a crash: return a clean 502 (which the
+    frontend already handles) instead of an unhandled ASGI exception and a 500."""
+    return JSONResponse(status_code=502, content={"detail": f"forecast unreachable: {exc}"})
 
 
 @app.on_event("startup")

@@ -1,6 +1,8 @@
 """Business logic for forecast fetching, sit-building, and proximity/camera scoring inputs."""
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import time
 from dataclasses import dataclass, field
@@ -18,7 +20,7 @@ from app.corridors.models import Corridor
 from app.deer_ratings.rating import phase_proximity_multipliers, rut_intensity
 from app.deer_sign.models import DeerSign
 from app.forecast import scoring
-from app.forecast.providers import _sun_times_utc, get_weather_provider
+from app.forecast.providers import WeatherError, _sun_times_utc, get_weather_provider
 from app.settings.service import _thermal_params, get_settings
 from app.zones.models import Zone
 
@@ -354,6 +356,36 @@ def _apply_safety_defaults(forecast: dict) -> None:
         solar[i] = round(700 * math.sin(math.pi * frac) * (1 - 0.75 * cloud_i / 100), 1)
 
 
+class ForecastUnavailable(Exception):
+    """The weather provider could not be reached (timeout, network error, 5xx, rejected key)
+    and no cached forecast exists. main.py maps this to HTTP 502."""
+
+
+FETCH_ATTEMPTS = 2
+_RETRY_DELAY_S = 1.0
+
+
+async def _fetch_with_retry(provider, lat: float, lon: float, days: int, tz_name: str) -> dict:
+    """provider.fetch with one retry for transient failures (timeouts, connection errors,
+    5xx). Anything still failing is raised as ForecastUnavailable."""
+    last: Exception | None = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            return await provider.fetch(lat, lon, days, tz_name)
+        except httpx.HTTPStatusError as e:
+            last = e
+            if e.response.status_code < 500:
+                break                      # 4xx won't get better by retrying
+        except httpx.TransportError as e:  # includes ReadTimeout / ConnectTimeout
+            last = e
+        except WeatherError as e:          # e.g. provider rejected the API key
+            last = e
+            break
+        if attempt < FETCH_ATTEMPTS - 1:
+            await asyncio.sleep(_RETRY_DELAY_S)
+    raise ForecastUnavailable(f"weather provider unreachable: {str(last) or type(last).__name__}") from last
+
+
 async def get_forecast(lat: float, lon: float, days: int = 3, tz_name: str | None = None) -> dict:
     settings = get_settings()
     tz_name = tz_name or "America/Chicago"
@@ -368,7 +400,14 @@ async def get_forecast(lat: float, lon: float, days: int = 3, tz_name: str | Non
         return _fc_cache[key][1]
 
     primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get("weather_provider_api_key")))
-    forecast = await primary.fetch(lat, lon, days, tz_name)
+    try:
+        forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
+    except ForecastUnavailable:
+        # Upstream is down or slow: an expired cached forecast beats an error page.
+        if key in _fc_cache:
+            logging.getLogger(__name__).warning("weather provider unavailable; serving stale forecast for %s", key)
+            return {**_fc_cache[key][1], "stale": True}
+        raise
 
     if not primary.has_solar and secondary_id and secondary_id != primary_id:
         secondary = get_weather_provider(secondary_id, decrypt_settings_key(settings.get("weather_secondary_provider_api_key")))
