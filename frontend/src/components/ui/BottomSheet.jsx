@@ -17,24 +17,14 @@ const FLICK_PX_PER_MS = 0.4; // release speed that overrides the halfway rule
 function BottomSheet({ open, onOpenChange, tab, children }) {
   const sheetRef = useRef(null);
   const tabRef = useRef(null);
-  const probeRef = useRef(null);
   const drag = useRef(null);
 
-  // Height of the panel below the tab (including its bottom safe-area padding).
+  // Height of the panel below the tab (including its bottom safe-area padding). This is also how
+  // far the sheet slides down when closed: only the tab stays visible, flush on the bottom edge.
   const panelHeight = useCallback(() => {
     const sheet = sheetRef.current, tabEl = tabRef.current;
     return sheet && tabEl ? Math.max(0, sheet.offsetHeight - tabEl.offsetHeight) : 0;
   }, []);
-
-  // The bottom safe-area inset in px (iPhone home indicator in the installed PWA; 0 in a browser
-  // tab). Measured with a probe element because env() isn't readable from JS directly.
-  const safeBottom = useCallback(() => probeRef.current?.offsetHeight || 0, []);
-
-  // How far the sheet slides down when closed. It stops `safeBottom` short of fully hidden so the
-  // tab floats above the home-indicator zone instead of stretching a dead band under its text
-  // (and swipes starting there aren't swallowed by the system home gesture). Matches the
-  // `.bottom-sheet.is-closed` transform in styles.css.
-  const hiddenDistance = useCallback(() => Math.max(0, panelHeight() - safeBottom()), [panelHeight, safeBottom]);
 
   const setLift = useCallback((px) => {
     const parent = sheetRef.current?.parentElement;
@@ -70,7 +60,7 @@ function BottomSheet({ open, onOpenChange, tab, children }) {
 
   const onPointerDown = (e) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    const panelFull = panelHeight(), hidden = hiddenDistance();
+    const panelFull = panelHeight(), hidden = panelFull;
     drag.current = {
       id: e.pointerId, startY: e.clientY, startT: open ? 0 : hidden, hidden, panelFull,
       lastY: e.clientY, lastTime: performance.now(), velocity: 0, t: open ? 0 : hidden, moved: false,
@@ -127,7 +117,6 @@ function BottomSheet({ open, onOpenChange, tab, children }) {
         {tab}
       </button>
       <div className="bottom-sheet-panel">{children}</div>
-      <div ref={probeRef} className="bottom-sheet-probe" aria-hidden="true" />
     </div>
   );
 }
