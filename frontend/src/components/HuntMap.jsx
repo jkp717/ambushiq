@@ -20,6 +20,7 @@ const COLORS = {
   stand: "#A32D2D",
   suggestion: "#0E8A7D",
   selected: "#F5A300",
+  userLocation: "#4285F4",   // Google's location blue
 };
 
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
@@ -151,8 +152,10 @@ const HuntMap = forwardRef(function HuntMap({
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
+  userLocation = null,
   height = 420,
 }, ref) {
+  const userRefs = useRef({ marker: null, circle: null });
   // Multi-select: every selectable feature is identified by a "kind:id" key. In select mode
   // popups are off and a click toggles the key; `interactive` covers the box tool, which needs
   // the pointer for itself.
@@ -205,7 +208,8 @@ const HuntMap = forwardRef(function HuntMap({
       };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "scent" is added before "stands" so cones render below stand markers
-      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      // "location" (the device's blue dot) goes last so it draws above everything else
+      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -381,6 +385,48 @@ const HuntMap = forwardRef(function HuntMap({
     });
   }, [suggestions, ready, layers.suggestions, drawMode, onDismissSuggestion, onDeleteFeature,
       selectMode, selectedKeys, boxTool, onToggleSelect]);
+
+  // The device's location, drawn like Google Maps: blue dot with a white ring and pulsing halo, a
+  // translucent accuracy circle, and a heading beam when a direction is known. Created once and
+  // then updated in place; never interactive, and it never moves the map.
+  useEffect(() => {
+    if (!ready) return;
+    const g = layerGroups.current.location;
+    const r = userRefs.current;
+    if (!userLocation) {
+      g.clearLayers();
+      r.marker = null; r.circle = null;
+      return;
+    }
+    const ll = [userLocation.lat, userLocation.lon];
+    const accuracy = Math.max(0, userLocation.accuracy || 0);
+    const showCircle = accuracy >= 6;   // smaller than the dot itself: don't draw it
+    const circleStyle = { opacity: showCircle ? 0.35 : 0, fillOpacity: showCircle ? 0.12 : 0 };
+    if (!r.circle) {
+      r.circle = L.circle(ll, {
+        radius: accuracy, color: COLORS.userLocation, fillColor: COLORS.userLocation, weight: 1,
+        interactive: false, ...circleStyle,
+      }).addTo(g);
+    } else {
+      r.circle.setLatLng(ll); r.circle.setRadius(accuracy); r.circle.setStyle(circleStyle);
+    }
+    if (!r.marker) {
+      r.marker = L.marker(ll, {
+        icon: L.divIcon({
+          className: "user-loc-icon", iconSize: [22, 22], iconAnchor: [11, 11],
+          html: '<div class="user-loc"><div class="user-loc-beam"></div><div class="user-loc-pulse"></div><div class="user-loc-dot"></div></div>',
+        }),
+        interactive: false, keyboard: false, zIndexOffset: 1000,
+      }).addTo(g);
+    } else {
+      r.marker.setLatLng(ll);
+    }
+    const beam = r.marker.getElement() && r.marker.getElement().querySelector(".user-loc-beam");
+    if (beam) {
+      if (userLocation.heading == null) beam.style.display = "none";
+      else { beam.style.display = "block"; beam.style.transform = `rotate(${userLocation.heading}deg)`; }
+    }
+  }, [userLocation, ready]);
 
   // Select mode box tool: drag a rectangle (desktop: hold Shift; touch: turn the Box tool on) and
   // report the keys of every visible feature it covers. Uses raw pointer events on the map

@@ -542,6 +542,35 @@ input[type="checkbox"], input[type="radio"] {
 .layer-toggle-btn:hover { background: rgba(0,0,0,.70); }
 /* multi-select mode on: solid (no transparency), same amber as selected map items */
 .layer-toggle-btn.on, .layer-toggle-btn.on:hover { background: #F5A300; color: #1a1a1a; backdrop-filter: none; }
+/* device-location button: on = solid Google blue (matches the blue dot); blinks until the first GPS fix */
+.layer-toggle-btn.on.loc, .layer-toggle-btn.on.loc:hover { background: #1A73E8; color: #fff; }
+.layer-toggle-btn.locating svg { animation: loc-blink 1s ease-in-out infinite; }
+@keyframes loc-blink { 50% { opacity: .35; } }
+
+/* ── device location marker, styled after the Google Maps "you are here" dot ── */
+.user-loc-icon { background: none; border: none; }
+.user-loc { position: relative; width: 22px; height: 22px; pointer-events: none; }
+.user-loc-dot {
+  position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  box-sizing: border-box; border-radius: 50%;
+  background: #4285F4; border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .08), 0 1px 5px rgba(0, 0, 0, .5);
+}
+.user-loc-pulse {
+  position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border-radius: 50%; background: rgba(66, 133, 244, .35);
+  animation: user-loc-pulse 2s ease-out infinite;
+}
+@keyframes user-loc-pulse { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(3.2); opacity: 0; } }
+/* heading beam: a soft wedge pointing up (rotated from JS), fading outward and toward its edges */
+.user-loc-beam {
+  display: none; position: absolute; left: 50%; top: 50%;
+  width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%;
+  background: conic-gradient(from -34deg at 50% 50%,
+    rgba(66, 133, 244, 0) 0deg, rgba(66, 133, 244, .55) 34deg, rgba(66, 133, 244, 0) 68deg, transparent 68deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 0, transparent 9px, #000 14px, transparent 68%);
+  mask-image: radial-gradient(circle, transparent 0, transparent 9px, #000 14px, transparent 68%);
+}
 .layer-chips-panel {
   display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
   background: rgba(0,0,0,.40); backdrop-filter: blur(4px);

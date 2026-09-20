@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
 import { api, tokenStore, regionStore } from "../services/api.js";
+import useGeolocation from "../hooks/useGeolocation.js";
+import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M } from "../utils/geo.js";
@@ -103,6 +105,11 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [boxTool, setBoxTool] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Device location (the blue dot): off by default, never persisted, never moves the map
+  const [locationOn, setLocationOn] = useState(false);
+  const geo = useGeolocation(locationOn);
+  const compassHeading = useDeviceHeading(locationOn);
 
   // New stand-specific layer state
   const [standLayers, setStandLayers] = useState({});
@@ -275,6 +282,30 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   }
   function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); setScoutDraft(null); }
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
+
+  // ── device location ──
+  const userLocation = useMemo(() => {
+    const p = geo.position;
+    if (!p) return null;
+    // beam direction: the compass when available, else the GPS heading while actually moving
+    const gpsHeading = p.gpsHeading != null && (p.speed || 0) > 0.8 ? p.gpsHeading : null;
+    return { lat: p.lat, lon: p.lon, accuracy: p.accuracy, heading: compassHeading ?? gpsHeading };
+  }, [geo.position, compassHeading]);
+
+  function toggleLocation() {
+    if (locationOn) { setLocationOn(false); return; }
+    requestOrientationPermission();   // iOS requires this inside the tap; a denial just means no compass beam
+    setLocationOn(true);
+  }
+  useEffect(() => {
+    if (!locationOn) return;
+    const problem = {
+      denied: "Location permission was denied. Allow location for this site in your phone's settings to show your position.",
+      unavailable: "This device or browser doesn't support location.",
+      insecure: "Location needs a secure (HTTPS) connection.",
+    }[geo.status];
+    if (problem) { setLocationOn(false); setErr(problem); }
+  }, [geo.status, locationOn]);
 
   // ── multi-select ──
   // Everything currently visible on the map is selectable; hidden layers are not.
@@ -607,6 +638,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
+            userLocation={userLocation}
             height="100%" />
         </div>
         <div className="layer-overlay">
@@ -625,6 +657,11 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
           <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
             aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
             <BoxSelect size={16} />
+          </button>
+          <button className={"layer-toggle-btn loc" + (locationOn ? " on" : "") + (locationOn && geo.status === "locating" ? " locating" : "")}
+            onClick={toggleLocation} aria-pressed={locationOn}
+            title={locationOn ? "Hide my location" : "Show my location"}>
+            <Navigation2 size={16} fill={locationOn ? "currentColor" : "none"} />
           </button>
           <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
             <Plus size={16} />
