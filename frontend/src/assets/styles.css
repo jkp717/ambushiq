@@ -51,6 +51,11 @@ input, select {
   color: var(--txt); font-size: 15px; font-family: inherit;
 }
 input:focus, select:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(12,68,124,.15); }
+/* Checkboxes/radios are a fixed 20px control, never a full-width field — without this they
+   inherit the 100% width above and stretch across every modal and form. */
+input[type="checkbox"], input[type="radio"] {
+  width: 20px; height: 20px; padding: 0; flex: 0 0 20px; cursor: pointer;
+}
 
 /* ── buttons ── */
 .btn {

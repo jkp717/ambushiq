@@ -141,7 +141,7 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         </Field>
       </div>
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
-        <input type="checkbox" checked={s.is_active !== false} style={{ maxWidth: 20 }} onChange={(e) => setS({ ...s, is_active: e.target.checked })} />
+        <input type="checkbox" checked={s.is_active !== false} onChange={(e) => setS({ ...s, is_active: e.target.checked })} />
         Active — included in rankings and map scoring
       </label>
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
