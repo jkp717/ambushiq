@@ -25,7 +25,7 @@ export default function MiniMap({ kind, feature, height = 150, editable = false,
   onChangeRef.current = onChange;
 
   useEffect(() => {
-    let tries = 0, timer = null;
+    let tries = 0, timer = null, sizeTimer = null;
     function init() {
       if (mapRef.current || !elRef.current) return;
       if (typeof L === "undefined") { if (tries++ < 50) timer = setTimeout(init, 100); return; }
@@ -37,7 +37,10 @@ export default function MiniMap({ kind, feature, height = 150, editable = false,
       L.tileLayer(USGS_TOPO, { maxZoom: 16 }).addTo(map);
       mapRef.current = map;
       drawFeature();
-      setTimeout(() => map.invalidateSize(), 60);  // ensure tiles fill after layout
+      // Ensure tiles fill after layout. Cancelled in the cleanup below: if the effect re-runs or
+      // the modal closes within these 60 ms the map is already removed, and invalidateSize on a
+      // removed map throws ("Cannot read properties of undefined (reading '_leaflet_pos')").
+      sizeTimer = setTimeout(() => { if (mapRef.current === map) map.invalidateSize(); }, 60);
     }
 
     function fitTo(layer, fallbackLatLng) {
@@ -92,7 +95,7 @@ export default function MiniMap({ kind, feature, height = 150, editable = false,
     }
 
     init();
-    return () => { if (timer) clearTimeout(timer); if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; layerRef.current = null; } };
+    return () => { if (timer) clearTimeout(timer); if (sizeTimer) clearTimeout(sizeTimer); if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; layerRef.current = null; } };
     // re-create when the feature identity or edit mode changes
     // eslint-disable-next-line
   }, [kind, editable, JSON.stringify(feature)]);
