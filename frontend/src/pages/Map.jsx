@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal } from "lucide-react";
 import { api, tokenStore, regionStore } from "../services/api.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
@@ -7,6 +7,7 @@ import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M } from "
 import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
 import LayerChip from "../components/ui/LayerChip.jsx";
+import BottomSheet from "../components/ui/BottomSheet.jsx";
 import HuntMap from "../components/HuntMap.jsx";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
@@ -109,6 +110,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [pendingName, setPendingName] = useState(null);
   const [err, setErr] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
   const datePickerRef = useRef(null);
   const huntMapRef = useRef(null);
   const [showOfflinePanel, setShowOfflinePanel] = useState(false);
@@ -413,8 +415,16 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     <div className="map-page">
       {err && <div style={{ padding: "6px 12px" }}><Banner>{err}</Banner></div>}
 
-      {/* ── Time controls panel ── */}
+      {/* ── Time controls: bottom sheet. Only the centered tab (date + time + grip) shows until it is
+          dragged up (or tapped); the sheet is absolutely positioned over the map, so it takes no
+          layout space. ── */}
       {days.length > 0 && (
+        <BottomSheet open={timeOpen} onOpenChange={setTimeOpen}
+          tab={(() => {
+            const h = curHour?.hour ?? 0, ampm = h >= 12 ? "PM" : "AM";
+            const time = curHour ? `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}` : "";
+            return <><GripHorizontal size={18} /><span>{[curDay?.label, time].filter(Boolean).join(" · ") || "Time"}</span></>;
+          })()}>
         <div className="map-ctrl-panel">
           {/* Single compact row: date nav + time (weather moved to a floating card on the map) */}
           <div className="map-ctrl-top">
@@ -546,6 +556,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             );
           })()}
         </div>
+        </BottomSheet>
       )}
 
       {/* draw mode banner */}
