@@ -873,19 +873,6 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 }
 .wizard-step.active { background: var(--navy); color: #fff; border-color: var(--navy); }
 
-/* Sightings modal */
-.sightings-modal {
-  background: var(--bg); border: 2px solid var(--navy);
-  border-radius: var(--radius); overflow: hidden;
-  display: flex; flex-direction: column;
-  max-height: min(85vh, 680px); width: 100%;
-}
-.sightings-modal-hd {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  padding: 16px 16px 12px; flex-shrink: 0;
-  border-bottom: 1px solid var(--bord);
-}
-
 /* Photo grid */
 .sightings-grid {
   display: grid; grid-template-columns: repeat(3, 1fr);
@@ -939,6 +926,60 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .conf-high { background: rgba(59,109,17,.15); color: var(--green); }
 .conf-med  { background: rgba(133,79,11,.15); color: var(--amber); }
 .conf-low  { background: rgba(163,45,45,.15); color: var(--red); }
+
+/* Cameras: Daily Activity + Gallery */
+.cam-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.cam-toolbar-note { font-size: 12px; color: var(--sub); }
+.filter-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
+  border: 1px solid var(--bord2); border-radius: 8px; background: var(--bg); color: var(--txt);
+  font-size: 13.5px; font-weight: 500; cursor: pointer;
+}
+.filter-btn:hover { background: var(--surf); }
+.filter-btn.on { border-color: var(--navy); color: var(--navy); }
+.filter-badge {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--navy); color: #fff; font-size: 11px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.gallery-grid { padding: 0; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.sighting-cam {
+  padding: 4px 6px 0; font-size: 11px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.act-summary { font-size: 13px; color: var(--sub); margin-bottom: 8px; }
+.act-chart { border: 1px solid var(--bord); border-radius: var(--radius); background: var(--bg); padding: 12px 12px 8px; }
+.act-chart svg { width: 100%; height: auto; display: block; }
+.act-readout { min-height: 20px; font-size: 13px; margin-bottom: 6px; }
+.act-readout span { color: var(--sub); }
+.act-grid { stroke: var(--bord); stroke-width: 1; }
+.act-axis { fill: var(--sub); font-size: 11px; }
+.act-bar { fill: var(--navy); opacity: .85; }
+.act-bar.peak { fill: var(--amber); opacity: 1; }
+.act-bar.sel { fill: var(--blue); opacity: 1; }
+.act-caption { text-align: center; font-size: 11.5px; color: var(--sub); margin-top: 2px; }
+
+/* Filter modal (Daily Activity + Gallery) */
+.filter-modal { border: 2px solid var(--navy); overflow: hidden; }
+.filter-modal-hd { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--bord); }
+.filter-modal-body { padding: 0 16px; }
+.filter-modal-body section { padding: 12px 0; border-bottom: 1px solid var(--bord); }
+.filter-modal-body section:last-child { border-bottom: none; }
+.filter-label { font-size: 12px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-chip {
+  padding: 6px 12px; border-radius: 16px; border: 1px solid var(--bord2);
+  background: var(--bg); color: var(--txt); font-size: 13px; cursor: pointer;
+}
+.filter-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.filter-none { font-size: 12px; color: var(--sub); margin-top: 4px; }
+.filter-range { display: flex; gap: 10px; flex-wrap: wrap; }
+.filter-range label { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; font-size: 12px; color: var(--sub); }
+.filter-modal-ft {
+  position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--bord); background: var(--bg);
+}
 
 /* Lightbox (full-size photo overlay) */
 .lightbox {
