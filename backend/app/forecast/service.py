@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.cameras.models import Camera, CameraSighting
@@ -20,9 +22,14 @@ from app.corridors.models import Corridor
 from app.deer_ratings.rating import phase_proximity_multipliers, rut_intensity
 from app.deer_sign.models import DeerSign
 from app.forecast import scoring
+from app.forecast.models import ForecastCache
 from app.forecast.providers import WeatherError, _sun_times_utc, get_weather_provider
+from app.regions.models import Region
 from app.settings.service import _thermal_params, get_settings
+from app.stands.models import Stand
 from app.zones.models import Zone
+
+log = logging.getLogger(__name__)
 
 
 def _camera_status_by_stand(region_id: int) -> dict[int, dict]:
@@ -211,9 +218,43 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
             "total": b_cor + b_food + b_bed + b_scrape + b_rub}
 
 
-# ---------- forecast (server-side, short cache) ----------
+# ---------- server-side weather cache: memory + Postgres, stale-while-revalidate ----------
 _fc_cache: dict[str, tuple[float, dict]] = {}
-FC_TTL = 1800  # 30 min
+FC_TTL = 3600              # a forecast younger than this is served as-is
+FC_MAX_STALE = 24 * 3600   # older than FC_TTL but younger than this: served at once while a refresh runs behind it
+FC_SCHEMA = "v1"           # bump when the normalized forecast shape changes so persisted old-shape rows are ignored
+PERSIST_MAX_AGE = 7 * 24 * 3600   # persisted rows older than this are pruned
+_inflight: dict[str, asyncio.Future] = {}
+
+
+def _db_load(key: str) -> Optional[tuple[float, object]]:
+    """(fetched_at, payload) persisted for `key`, or None. Best-effort: a DB problem just means a cache miss."""
+    try:
+        with Session(engine) as s:
+            row = s.get(ForecastCache, key)
+            if row:
+                return row.fetched_at, json.loads(row.payload)
+    except Exception:
+        log.debug("weather cache read failed for %s", key, exc_info=True)
+    return None
+
+
+def _db_store(key: str, ts: float, payload: object) -> None:
+    try:
+        with Session(engine) as s:
+            s.merge(ForecastCache(key=key, fetched_at=ts, payload=json.dumps(payload)))
+            s.commit()
+    except Exception:
+        log.warning("could not persist weather cache entry %s", key, exc_info=True)
+
+
+def _db_prune() -> None:
+    try:
+        with Session(engine) as s:
+            s.execute(delete(ForecastCache).where(ForecastCache.fetched_at < time.time() - PERSIST_MAX_AGE))
+            s.commit()
+    except Exception:
+        log.debug("weather cache prune failed", exc_info=True)
 
 
 def _temp_swing_rolling(hourly: dict, half_window: int = 12, min_points: int = 12) -> list[Optional[float]]:
@@ -361,72 +402,151 @@ class ForecastUnavailable(Exception):
     and no cached forecast exists. main.py maps this to HTTP 502."""
 
 
-FETCH_ATTEMPTS = 2
-_RETRY_DELAY_S = 1.0
+FETCH_ATTEMPTS = 3
+ATTEMPT_TIMEOUT_S = 10.0   # Open-Meteo normally answers in ~1 s; a hung connection is abandoned, not waited on
+_RETRY_DELAY_S = 1.0       # grows linearly: 1 s, 2 s, ...
 
 
 async def _fetch_with_retry(provider, lat: float, lon: float, days: int, tz_name: str) -> dict:
-    """provider.fetch with one retry for transient failures (timeouts, connection errors,
-    5xx). Anything still failing is raised as ForecastUnavailable."""
+    """provider.fetch with retries for transient failures (timeouts, connection errors, 5xx).
+    Each attempt is capped at ATTEMPT_TIMEOUT_S. Anything still failing is raised as ForecastUnavailable."""
     last: Exception | None = None
     for attempt in range(FETCH_ATTEMPTS):
         try:
-            return await provider.fetch(lat, lon, days, tz_name)
+            return await asyncio.wait_for(provider.fetch(lat, lon, days, tz_name), ATTEMPT_TIMEOUT_S)
         except httpx.HTTPStatusError as e:
             last = e
             if e.response.status_code < 500:
                 break                      # 4xx won't get better by retrying
-        except httpx.TransportError as e:  # includes ReadTimeout / ConnectTimeout
+        except (httpx.TransportError, asyncio.TimeoutError) as e:  # includes ReadTimeout / ConnectTimeout
             last = e
         except WeatherError as e:          # e.g. provider rejected the API key
             last = e
             break
+        log.warning("weather fetch attempt %d/%d failed: %s", attempt + 1, FETCH_ATTEMPTS,
+                    str(last) or type(last).__name__)
         if attempt < FETCH_ATTEMPTS - 1:
-            await asyncio.sleep(_RETRY_DELAY_S)
+            await asyncio.sleep(_RETRY_DELAY_S * (attempt + 1))
     raise ForecastUnavailable(f"weather provider unreachable: {str(last) or type(last).__name__}") from last
 
 
-async def get_forecast(lat: float, lon: float, days: int = 3, tz_name: str | None = None) -> dict:
-    settings = get_settings()
-    tz_name = tz_name or "America/Chicago"
+def _fc_key(lat: float, lon: float, days: int, settings: dict, tz_name: str) -> str:
     primary_id = str(settings.get("weather_provider") or "open_meteo")
     secondary_id = str(settings.get("weather_secondary_provider") or "")
-
     # tz_name is part of the key: two regions at the same lat/lon with
     # different timezones must not share a cached forecast.
-    key = f"{lat:.3f},{lon:.3f}:{days}:{primary_id}:{secondary_id}:{tz_name}"
-    now = time.time()
-    if key in _fc_cache and now - _fc_cache[key][0] < FC_TTL:
-        return _fc_cache[key][1]
+    return f"{FC_SCHEMA}:{lat:.3f},{lon:.3f}:{days}:{primary_id}:{secondary_id}:{tz_name}"
 
+
+async def _fetch_and_store(key: str, lat: float, lon: float, days: int, tz_name: str, settings: dict) -> dict:
+    """One real upstream fetch (primary + optional solar backfill), gap-filled and cached in memory and Postgres."""
+    primary_id = str(settings.get("weather_provider") or "open_meteo")
+    secondary_id = str(settings.get("weather_secondary_provider") or "")
     primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get("weather_provider_api_key")))
-    try:
-        forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
-    except ForecastUnavailable:
-        # Upstream is down or slow: an expired cached forecast beats an error page.
-        if key in _fc_cache:
-            logging.getLogger(__name__).warning("weather provider unavailable; serving stale forecast for %s", key)
-            return {**_fc_cache[key][1], "stale": True}
-        raise
+    t0 = time.monotonic()
+    forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
+    log.info("weather fetched from %s in %.1fs (%d days)", primary_id, time.monotonic() - t0, days)
 
     if not primary.has_solar and secondary_id and secondary_id != primary_id:
         secondary = get_weather_provider(secondary_id, decrypt_settings_key(settings.get("weather_secondary_provider_api_key")))
         try:
-            secondary_forecast = await secondary.fetch(lat, lon, days, tz_name)
+            secondary_forecast = await asyncio.wait_for(secondary.fetch(lat, lon, days, tz_name), ATTEMPT_TIMEOUT_S)
             _backfill_from_secondary(forecast["hourly"], secondary_forecast["hourly"])
         except Exception:
             pass  # best-effort — the safety-net defaults below still cover any gaps
 
     _apply_safety_defaults(forecast)
 
+    now = time.time()
     _fc_cache[key] = (now, forecast)
+    _db_store(key, now, forecast)
     return forecast
+
+
+def _start_refresh(key: str, lat: float, lon: float, days: int, tz_name: str, settings: dict) -> asyncio.Future:
+    """Single-flight: concurrent requests for one key share a single upstream fetch."""
+    task = _inflight.get(key)
+    if task is None or task.done():
+        task = asyncio.ensure_future(_fetch_and_store(key, lat, lon, days, tz_name, settings))
+        _inflight[key] = task
+
+        def _cleanup(t: asyncio.Future, key: str = key) -> None:
+            if _inflight.get(key) is t:
+                del _inflight[key]
+            if not t.cancelled():
+                t.exception()   # mark retrieved, so a failed background refresh doesn't log "never retrieved"
+        task.add_done_callback(_cleanup)
+    return task
+
+
+def _stale_copy(entry: tuple[float, dict]) -> dict:
+    return {**entry[1], "stale": True, "fetched_at": entry[0]}
+
+
+async def get_forecast(lat: float, lon: float, days: int = 3, tz_name: str | None = None) -> dict:
+    """Cached forecast. Fresh (< FC_TTL) is returned as-is; older-but-usable (< FC_MAX_STALE) is
+    returned immediately, flagged "stale", while one background refresh runs; only a cold cache
+    blocks on the provider. If a blocking fetch fails, any cached copy still beats an error."""
+    settings = get_settings()
+    tz_name = tz_name or "America/Chicago"
+    key = _fc_key(lat, lon, days, settings, tz_name)
+
+    entry = _fc_cache.get(key)
+    if entry is None:
+        loaded = _db_load(key)          # survives container restarts
+        if loaded:
+            entry = _fc_cache[key] = loaded   # type: ignore[assignment]
+    if entry is not None:
+        age = time.time() - entry[0]
+        if age < FC_TTL:
+            return entry[1]
+        if age < FC_MAX_STALE:
+            _start_refresh(key, lat, lon, days, tz_name, settings)
+            return _stale_copy(entry)
+
+    try:
+        return await asyncio.shield(_start_refresh(key, lat, lon, days, tz_name, settings))
+    except ForecastUnavailable:
+        if entry is not None:
+            log.warning("weather provider unavailable; serving stale forecast for %s", key)
+            return _stale_copy(entry)
+        raise
+
+
+async def warm_forecasts() -> None:
+    """Refresh every region's forecast and its historical baselines ahead of any request, so users
+    hit a warm cache. Run at startup and every ~30 minutes by the scheduler; never raises."""
+    try:
+        settings = get_settings()
+        with Session(engine) as s:
+            targets = []
+            for region in s.scalars(select(Region)).all():
+                first = s.scalars(select(Stand).where(Stand.region_id == region.id).order_by(Stand.name)).first()
+                if first:
+                    targets.append((first.lat, first.lon, region.property_timezone or "America/Chicago"))
+        for lat, lon, tz_name in targets:
+            for days in (14, 3):    # 14: map / ratings / day view; 3: sit rankings
+                key = _fc_key(lat, lon, days, settings, tz_name)
+                try:
+                    await asyncio.shield(_start_refresh(key, lat, lon, days, tz_name, settings))
+                except ForecastUnavailable as e:
+                    log.warning("forecast warm-up failed (%s); keeping the cached copy", e)
+            try:
+                today = datetime.now(ZoneInfo(tz_name)).date()
+            except Exception:
+                today = datetime.now(timezone.utc).date()
+            await asyncio.gather(get_historical_highs_f(lat, lon, today - timedelta(days=1), 7),
+                                 get_historical_day_weather(lat, lon, today - timedelta(days=1)))
+        _db_prune()
+    except Exception:
+        log.warning("forecast warm-up failed", exc_info=True)
 
 
 # ---------- historical baseline (deer-rating temp-shift factor) ----------
 _hist_cache: dict[str, tuple[float, object]] = {}
 HIST_TTL = 12 * 3600  # actual past days never change; just avoids hammering the API
 HIST_FAIL_TTL = 300   # failures/empty results are retried soon (the archive lags a day or two)
+HIST_TIMEOUT_S = 8
 
 
 def _hist_cache_get(key: str) -> tuple[bool, object]:
@@ -436,11 +556,40 @@ def _hist_cache_get(key: str) -> tuple[bool, object]:
     return False, None
 
 
+def _hist_lookup(key: str) -> tuple[bool, object]:
+    """Memory first, then the persisted copy (so a restart doesn't refetch archive data that
+    can't have changed): (hit, value)."""
+    hit, val = _hist_cache_get(key)
+    if hit:
+        return True, val
+    loaded = _db_load(key)
+    if loaded and time.time() - loaded[0] < HIST_TTL:
+        _hist_cache[key] = loaded
+        return True, loaded[1]
+    return False, None
+
+
+def _hist_finish(key: str, result: object) -> object:
+    """Record a fetch outcome. A success is cached and persisted. A failure falls back to the last
+    persisted value (any age, within PERSIST_MAX_AGE) rather than nothing, and is retried soon."""
+    now = time.time()
+    if result is not None:
+        _hist_cache[key] = (now, result)
+        _db_store(key, now, result)
+        return result
+    old = _db_load(key)
+    if old and now - old[0] < PERSIST_MAX_AGE:
+        _hist_cache[key] = (now - HIST_TTL + HIST_FAIL_TTL, old[1])   # served now, retried in HIST_FAIL_TTL
+        return old[1]
+    _hist_cache[key] = (now, None)
+    return None
+
+
 async def get_historical_highs_f(lat: float, lon: float, end_date: date, days: int = 7) -> Optional[dict[str, float]]:
     """Actual (observed) daily highs (°F) for the `days` ending `end_date` (inclusive),
     keyed by ISO date, from Open-Meteo's free historical archive. None on any failure."""
     key = f"highs:{lat:.3f},{lon:.3f}:{end_date.isoformat()}:{days}"
-    hit, cached = _hist_cache_get(key)
+    hit, cached = _hist_lookup(key)
     if hit:
         return cached  # type: ignore[return-value]
 
@@ -453,7 +602,7 @@ async def get_historical_highs_f(lat: float, lon: float, end_date: date, days: i
     result: Optional[dict[str, float]] = None
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.get(url, timeout=15)
+            r = await client.get(url, timeout=HIST_TIMEOUT_S)
             r.raise_for_status()
             j = r.json()
         daily = j.get("daily", {})
@@ -462,8 +611,7 @@ async def get_historical_highs_f(lat: float, lon: float, end_date: date, days: i
     except Exception:
         result = None
 
-    _hist_cache[key] = (time.time(), result)
-    return result
+    return _hist_finish(key, result)  # type: ignore[return-value]
 
 
 async def get_historical_baseline_f(lat: float, lon: float, end_date: date, days: int = 7) -> Optional[float]:
@@ -511,7 +659,7 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     delta rather than showing something misleading.
     """
     key = f"hday:{lat:.3f},{lon:.3f}:{d.isoformat()}"
-    hit, cached = _hist_cache_get(key)
+    hit, cached = _hist_lookup(key)
     if hit:
         return cached  # type: ignore[return-value]
 
@@ -525,7 +673,7 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     result: Optional[dict] = None
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.get(url, timeout=15)
+            r = await client.get(url, timeout=HIST_TIMEOUT_S)
             r.raise_for_status()
             j = r.json()
         hh = j.get("hourly") or {}
@@ -573,8 +721,7 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     except Exception:
         result = None
 
-    _hist_cache[key] = (time.time(), result)
-    return result
+    return _hist_finish(key, result)  # type: ignore[return-value]
 
 
 def build_sits(forecast: dict) -> list[dict]:

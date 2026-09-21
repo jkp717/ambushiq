@@ -37,6 +37,12 @@ async def sync_cameras_job():
         detection_mod.unload_models()
 
 
+async def warm_forecast_job():
+    """Scheduler job: refresh the cached forecast + historical baselines for every region."""
+    from app.forecast.service import warm_forecasts
+    await warm_forecasts()
+
+
 def auto_cleanup_job():
     """Scheduler job (daily 3 AM UTC): delete JPEGs older than retention; keep
     sighting rows. Runs at a fixed UTC hour rather than any one region's local
@@ -106,5 +112,10 @@ def start_scheduler():
                   replace_existing=True, max_instances=1)
     sched.add_job(auto_cleanup_job, CronTrigger(hour=3, minute=0), id="auto_cleanup",
                   replace_existing=True, max_instances=1)
+    # Keep the weather cache warm: first run shortly after boot (so a restart never leaves the
+    # first user waiting on the provider), then every 30 minutes.
+    sched.add_job(warm_forecast_job, IntervalTrigger(minutes=30), id="warm_forecast",
+                  replace_existing=True, max_instances=1, coalesce=True,
+                  next_run_time=datetime.now(timezone.utc) + _dt.timedelta(seconds=5))
     sched.start()
     _scheduler = sched

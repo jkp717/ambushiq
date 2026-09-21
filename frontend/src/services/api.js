@@ -27,4 +27,18 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-export { tokenStore, regionStore, api };
+// GET that quietly retries once when the server or the weather service hiccups (5xx / network
+// error). Auth and other 4xx errors are not retried.
+async function apiRetry(path, opts = {}, retries = 1, delayMs = 1500) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await api(path, opts);
+    } catch (e) {
+      const transient = e.code === undefined || e.code >= 500;
+      if (!transient || attempt >= retries) throw e;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
+export { tokenStore, regionStore, api, apiRetry };

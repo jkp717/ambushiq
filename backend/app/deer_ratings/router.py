@@ -1,6 +1,7 @@
 """Route handlers for /api/deer-ratings."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -44,6 +45,12 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     # confidence flags and days_out are correct during the evening UTC↔local gap.
     _utc_offset = int(fc.get("utc_offset_seconds", 0))
     _local_today = (datetime.now(timezone.utc) + timedelta(seconds=_utc_offset)).date()
+    yesterday = _local_today - timedelta(days=1)
+    # Both archive lookups only need today's date, so run them side by side. Each is best-effort
+    # (None on failure) and cached, so they never fail or noticeably slow the rating.
+    past_highs, hist_wx = await asyncio.gather(
+        get_historical_highs_f(lat, lon, yesterday, days=7),
+        get_historical_day_weather(lat, lon, yesterday))
     _set = get_settings()
     rate_weights = {
         "pressure": _set.get("rate_w_pressure"), "wind": _set.get("rate_w_wind"),
@@ -81,7 +88,6 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     # observed highs (Open-Meteo archive) for past dates, forecast highs for future ones.
     # Never the mean of the whole forecast window (self-referential) and never anchored
     # to today (which made a seasonal cooling trend look like a front by day +13).
-    past_highs = await get_historical_highs_f(lat, lon, _local_today - timedelta(days=1), days=7)
     baselines = rolling_baselines_f(day_keys, forecast_highs, past_highs)
 
     out = []
@@ -138,8 +144,6 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     # today's card (the only one with no same-array predecessor) needs actual
     # observed weather for the day before, to show a day-over-day delta.
     previous_day = None
-    yesterday = _local_today - timedelta(days=1)
-    hist_wx = await get_historical_day_weather(lat, lon, yesterday)
     # The archive lags a day or two; a mostly-empty "yesterday" would rate on neutral
     # defaults and produce a misleading delta, so require most inputs to be present.
     core_inputs = ("pressure_inhg", "wind_mph", "rain_mm", "day_high_f", "baseline_f")
@@ -150,4 +154,5 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
         prev_rating["day"] = yesterday.isoformat()
         previous_day = prev_rating
 
-    return {"ratings": out, "utc_offset_seconds": _utc_offset, "previous_day": previous_day}
+    return {"ratings": out, "utc_offset_seconds": _utc_offset, "previous_day": previous_day,
+            "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}

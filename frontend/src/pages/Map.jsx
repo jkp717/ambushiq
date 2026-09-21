@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
-import { api, tokenStore, regionStore } from "../services/api.js";
+import { api, apiRetry, tokenStore, regionStore } from "../services/api.js";
 import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
@@ -116,6 +116,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
 
   const [pendingName, setPendingName] = useState(null);
   const [err, setErr] = useState(null);
+  const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
   const datePickerRef = useRef(null);
@@ -170,8 +171,10 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
 
   useEffect(() => {
     if (!stands.length) return;
-    api("/hours").then((j) => {
+    apiRetry("/hours").then((j) => {
       setDays(j.days || []);
+      setStaleAt(j.stale ? j.fetched_at ?? null : null);
+      setErr((cur) => (cur === "Couldn't load forecast." ? null : cur));
       // Apply the property's UTC offset so both the date comparison and the
       // current-hour lookup use property local time rather than the browser's
       // clock timezone (which may differ) or a bare UTC date.
@@ -445,6 +448,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   return (
     <div className="map-page">
       {err && <div style={{ padding: "6px 12px" }}><Banner>{err}</Banner></div>}
+      {staleAt && <div style={{ padding: "6px 12px" }}><Banner>Showing the cached forecast from {new Date(staleAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} while the weather service catches up. Reload in a minute for the latest.</Banner></div>}
 
       {/* ── Time controls: bottom sheet. Only the centered tab (date + time + grip) shows until it is
           dragged up (or tapped); the sheet is absolutely positioned over the map, so it takes no

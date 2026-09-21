@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Target, Plus, RefreshCw, AlertTriangle, Footprints, Wheat, Trees } from "lucide-react";
-import { api } from "../services/api.js";
+import { api, apiRetry } from "../services/api.js";
 import { localDate } from "../utils/formatters.js";
 import { PERIOD_COLORS } from "../utils/periods.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -21,11 +21,13 @@ function TodayPage({ stands, onGoDraw }) {
   const [useProx, setUseProx] = useState({ corridor: true, food: true, bedding: true });
   const [utcOffset, setUtcOffset] = useState(0);
   const [err, setErr] = useState(null);
+  const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
 
   useEffect(() => {
     if (!stands.length) return;
-    api("/deer-ratings").then((j) => {
+    apiRetry("/deer-ratings").then((j) => {
       setDeerRatings(j.ratings);
+      setStaleAt(j.stale ? j.fetched_at ?? null : null);
       setPreviousDay(j.previous_day ?? null);
       // Use the property's UTC offset so "today" matches the local calendar date
       // on the property rather than the UTC date in the browser or on the server.
@@ -39,7 +41,7 @@ function TodayPage({ stands, onGoDraw }) {
 
   useEffect(() => {
     if (!stands.length) return;
-    api("/hours").then((j) => setDays(j.days || [])).catch(() => {});
+    apiRetry("/hours").then((j) => setDays(j.days || [])).catch(() => {});
   }, [stands.length]);
 
   const curDay = days.find((d) => d.day === selectedDay);
@@ -77,6 +79,7 @@ function TodayPage({ stands, onGoDraw }) {
   return (
     <div className="today-page">
       {err && <Banner>{err}</Banner>}
+      {staleAt && <Banner>Showing the cached forecast from {new Date(staleAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} while the weather service catches up. Reload in a minute for the latest.</Banner>}
 
       {/* Hero */}
       {selectedRating

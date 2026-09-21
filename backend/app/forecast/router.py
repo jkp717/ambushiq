@@ -192,7 +192,8 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
         days_out = (_date(y, m, dnum) - local_today).days
         dd["confidence"] = "high" if days_out <= 7 else "low"
         dd["days_out"] = days_out
-    return {"days": day_list, "utc_offset_seconds": utc_offset}
+    return {"days": day_list, "utc_offset_seconds": utc_offset,
+            "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}
 
 
 @router.post("/api/map/conditions")
