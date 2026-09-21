@@ -10,6 +10,7 @@ import Banner from "../components/ui/Banner.jsx";
 import Empty from "../components/ui/Empty.jsx";
 import LayerChip from "../components/ui/LayerChip.jsx";
 import BottomSheet from "../components/ui/BottomSheet.jsx";
+import LocationEdgeIndicator from "../components/LocationEdgeIndicator.jsx";
 import HuntMap from "../components/HuntMap.jsx";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
@@ -671,6 +672,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             <Plus size={16} />
           </button>
         </div>
+        <LocationEdgeIndicator getMap={() => huntMapRef.current?.getMap?.() ?? null} location={userLocation} />
         <div className="map-add-btn">
           <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
         </div>
