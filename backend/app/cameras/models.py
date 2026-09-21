@@ -21,7 +21,10 @@ class Camera(Base):
     stand_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # FK stands.id
     is_active: Mapped[int] = mapped_column(Integer, default=1)
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)  # soft-delete: skip on re-discover
-    last_sync_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    last_sync_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)   # when the last sync finished (display only)
+    # Everything before this moment is known to be fully handled. Syncs restart from here minus an overlap,
+    # and it holds back at the earliest photo whose download failed so that photo is retried.
+    sync_cursor_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     # provider-reported health, refreshed on every sync — used to avoid
     # penalizing a stand when its camera simply can't capture/transmit
@@ -53,6 +56,12 @@ class CameraSighting(Base):
     species: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     species_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # NULL after cleanup
+    # Stable identity of the provider's photo (its id, else the image URL without the signed query), so
+    # photos stamped in the same second are not mistaken for duplicates. NULL on rows from before v3.11.
+    provider_photo_id: Mapped[Optional[str]] = mapped_column(String(400), nullable=True)
+    # 0 = the detector found no animal; the photo is kept (so nothing silently vanishes) but is excluded
+    # from scoring and the activity graph and hidden from the gallery unless asked for.
+    is_animal: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     def to_dict(self) -> dict:
@@ -63,5 +72,6 @@ class CameraSighting(Base):
             "id": self.id, "stand_id": self.stand_id, "camera_id": self.camera_id,
             "timestamp": self.timestamp, "confidence_score": self.confidence_score,
             "species": self.species, "species_confidence": self.species_confidence,
+            "is_animal": bool(self.is_animal),
             "image_url": img, "created_at": self.created_at,
         }

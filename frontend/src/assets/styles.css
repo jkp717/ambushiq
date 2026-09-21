@@ -897,6 +897,7 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   padding: 1px 5px; border-radius: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.sighting-species.sighting-empty { background: rgba(120,120,120,.85); font-weight: 500; }
 .sighting-thumb {
   width: 100%; height: 96px;
   object-fit: contain; background: var(--surf); display: block;
@@ -974,6 +975,7 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 }
 .filter-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
 .filter-none { font-size: 12px; color: var(--sub); margin-top: 4px; }
+.filter-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
 .filter-range { display: flex; gap: 10px; flex-wrap: wrap; }
 .filter-range label { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; font-size: 12px; color: var(--sub); }
 .filter-modal-ft {

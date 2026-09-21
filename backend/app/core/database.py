@@ -80,6 +80,14 @@ def init_db(retries: int = 30):
                     conn.commit()
                 except Exception:
                     pass
+                # v3.11: photo identity + "no animal detected" photos are kept, and a per-camera sync cursor
+                try:
+                    conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS provider_photo_id VARCHAR(400)"))
+                    conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS is_animal INTEGER NOT NULL DEFAULT 1"))
+                    conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS sync_cursor_at VARCHAR(32)"))
+                    conn.commit()
+                except Exception:
+                    pass
                 # deer_sign table
                 try:
                     conn.execute(text("""

@@ -67,7 +67,7 @@ async def analyze_area(lat: float, lon: float, radius_m: float, mode: str | None
         # since it only keeps sightings whose stand_id is in the already
         # region-filtered stand_by_id map above.
         camera_sightings = []
-        for row in s.scalars(select(CameraSighting)).all():
+        for row in s.scalars(select(CameraSighting).where(CameraSighting.is_animal == 1)).all():
             st = stand_by_id.get(row.stand_id)
             if not st:
                 continue

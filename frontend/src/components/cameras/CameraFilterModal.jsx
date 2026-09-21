@@ -106,6 +106,16 @@ function CameraFilterModal({ filters, cameras, speciesOptions, showTime, onApply
               {overnight && <div className="filter-none">Runs overnight, through midnight.</div>}
             </section>
           )}
+
+          {showTime && (
+            <section>
+              <label className="filter-check">
+                <input type="checkbox" checked={draft.includeEmpty} onChange={(e) => set({ includeEmpty: e.target.checked })} />
+                <span>Include photos where no animal was detected</span>
+              </label>
+              <div className="filter-none">The detector can miss night or partial shots, so these are kept but hidden by default.</div>
+            </section>
+          )}
         </div>
 
         <div className="filter-modal-ft">

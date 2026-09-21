@@ -251,14 +251,16 @@ async def verify_camera(camera_id: int, region_id: int = Depends(get_active_regi
 
 
 @router.post("/api/cameras/{camera_id}/sync")
-async def sync_camera_now(camera_id: int, bg: BackgroundTasks, region_id: int = Depends(get_active_region_id),
-                           _=Depends(require_token)):
-    """Manually trigger a sync for one camera. Returns immediately; sync runs in background."""
+async def sync_camera_now(camera_id: int, bg: BackgroundTasks,
+                           days: Optional[int] = Query(default=None, ge=1, le=90),
+                           region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    """Manually trigger a sync for one camera. Returns immediately; sync runs in background.
+    With `days`, re-imports that many days of history (photos already stored are skipped)."""
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if not cam or cam.region_id != region_id:
             raise HTTPException(404, "not found")
-    bg.add_task(_sync_one_camera_task, camera_id)
+    bg.add_task(_sync_one_camera_task, camera_id, days)
     return {"ok": True, "status": "running"}
 
 
@@ -277,6 +279,7 @@ def backfill_species(bg: BackgroundTasks, region_id: int = Depends(get_active_re
             .join(Camera, Camera.id == CameraSighting.camera_id)
             .where(
                 CameraSighting.species.is_(None),
+                CameraSighting.is_animal == 1,
                 CameraSighting.image_path.isnot(None),
                 Camera.region_id == region_id,
             )
@@ -300,7 +303,7 @@ def camera_sightings(
         cam = s.get(Camera, camera_id)
         if not cam or cam.region_id != region_id:
             raise HTTPException(404, "not found")
-        q = select(CameraSighting).where(CameraSighting.camera_id == camera_id)
+        q = select(CameraSighting).where(CameraSighting.camera_id == camera_id, CameraSighting.is_animal == 1)
         if since:
             q = q.where(CameraSighting.timestamp > since)
         q = q.order_by(CameraSighting.timestamp.desc()).limit(max(1, min(limit, 1000)))
@@ -324,7 +327,8 @@ def _scoped(q, region_id: int, brands: list[str], camera_ids: list[int]):
 def camera_filter_options(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """Animal types that actually appear in this region's photos (for the filter chips)."""
     with Session(engine) as s:
-        names = s.scalars(_scoped(select(CameraSighting.species).distinct(), region_id, [], [])).all()
+        names = s.scalars(_scoped(select(CameraSighting.species).distinct(), region_id, [], [])
+                          .where(CameraSighting.is_animal == 1)).all()
     return {"species": sorted({n for n in names if n}), "has_unclassified": any(not n for n in names)}
 
 
@@ -343,7 +347,8 @@ def camera_activity(
     tz = activity.region_tz(get_region_dict(region_id)["property_timezone"])
     with Session(engine) as s:
         rows = s.execute(_scoped(select(CameraSighting.camera_id, CameraSighting.species,
-                                        CameraSighting.timestamp), region_id, brand, camera_id)).all()
+                                        CameraSighting.timestamp), region_id, brand, camera_id)
+                         .where(CameraSighting.is_animal == 1)).all()
     parsed = [(cid, sp or None, t) for cid, sp, ts in rows if (t := activity.parse_utc(ts)) is not None]
     recorded_since = min((t.astimezone(tz).date() for _c, _s, t in parsed), default=None)
     matching = [r for r in parsed if activity.species_matches(r[1], species)]
@@ -360,6 +365,7 @@ def camera_gallery(
     date_to: Optional[date] = None,
     hour_from: Optional[int] = Query(default=None, ge=0, le=24),
     hour_to: Optional[int] = Query(default=None, ge=0, le=24),
+    include_empty: bool = False,
     before_ts: Optional[str] = None,
     before_id: Optional[int] = None,
     limit: int = 48,
@@ -376,6 +382,8 @@ def camera_gallery(
 
     with Session(engine) as s:
         q = _scoped(select(CameraSighting, Camera), region_id, brand, camera_id)
+        if not include_empty:
+            q = q.where(CameraSighting.is_animal == 1)
         if species:
             named = [x for x in species if x != activity.UNCLASSIFIED]
             conds = [CameraSighting.species.in_(named)] if named else []

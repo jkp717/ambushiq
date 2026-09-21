@@ -29,8 +29,9 @@ async def sync_cameras_job():
         for cid in ids:
             try:
                 res = await _sync_one_camera(cid)
-                if res.get("new"):
-                    log.info("scheduler: cam %s — %d new sighting(s)", cid, res["new"])
+                if res.get("new") or res.get("no_animal") or res.get("failed"):
+                    log.info("scheduler: cam %s — %d new sighting(s), %d with no animal, %d failed",
+                             cid, res.get("new", 0), res.get("no_animal", 0), res.get("failed", 0))
             except Exception:
                 continue
     finally:

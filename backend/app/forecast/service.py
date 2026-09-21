@@ -883,7 +883,7 @@ def build_scoring_context(region_id: int, region: dict, settings: dict, utc_offs
             select(DeerSign).where(DeerSign.is_active == 1, DeerSign.region_id == region_id)).all()]
         if camera_scoring_on and camera_status:
             for row in s.scalars(select(CameraSighting).where(
-                    CameraSighting.stand_id.in_(list(camera_status)))).all():
+                    CameraSighting.stand_id.in_(list(camera_status)), CameraSighting.is_animal == 1)).all():
                 sightings_by_stand.setdefault(row.stand_id, []).append(
                     {"timestamp": row.timestamp, "confidence_score": row.confidence_score,
                      "species": row.species})

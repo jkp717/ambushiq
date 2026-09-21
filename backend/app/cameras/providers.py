@@ -10,7 +10,8 @@ mobile app's traffic (e.g. with mitmproxy) and filling in the endpoints/auth/
 response mapping in the marked TODO sections.
 
 Providers return a list of "photo" dicts:
-    {"url": str, "taken_at": iso8601 str, "camera_ref": str}
+    {"url": str, "taken_at": iso8601 str, "camera_ref": str, "id": str | None}
+("id" is the provider's own photo id when it has one; the sync engine falls back to the URL.)
 The caller downloads images, runs detection, and records sightings.
 
 NOTHING here is verified against a live account in the build sandbox (no network).
@@ -56,8 +57,10 @@ class CameraProvider:
         "unknown, assume healthy" rather than a failure."""
         raise NotImplementedProvider(f"{self.brand} camera listing not implemented yet")
 
-    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
-        """Return recent photos as [{url, taken_at, camera_ref}, ...]."""
+    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None,
+                                  camera_ref: Optional[str] = None) -> list[dict]:
+        """Return recent photos as [{url, taken_at, camera_ref, id}, ...]. `camera_ref`, when given,
+        limits the request to that one camera where the provider supports it (callers still filter)."""
         raise NotImplementedProvider(f"{self.brand} photo fetch not implemented yet")
 
 
@@ -123,7 +126,38 @@ class SpyPointProvider(CameraProvider):
                 })
             return out
 
-    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
+    PHOTO_LIMIT = 500                              # the API returns at most this many photos per request
+    MIN_WINDOW = _dt.timedelta(hours=1)            # smallest date window worth splitting further
+
+    @staticmethod
+    def _iso(dt: _dt.datetime) -> str:
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=_dt.timezone.utc)
+        return dt.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    async def _photos_between(self, client: httpx.AsyncClient, headers: dict, cam_ids: list,
+                              begin: _dt.datetime, end: _dt.datetime) -> list[dict]:
+        """All photos for `cam_ids` between two moments. One request returns at most PHOTO_LIMIT photos
+        and does not say what it left out, so a full response is treated as possibly truncated and the
+        window is halved and re-requested until each piece comes back under the limit."""
+        payload = {"camera": cam_ids, "dateBegin": self._iso(begin), "dateEnd": self._iso(end),
+                   "limit": self.PHOTO_LIMIT}
+        log.info("SpyPoint: fetching photos with payload %s", payload)
+        resp = await client.post(f"{self.BASE}/api/v3/photo/all", headers=headers, timeout=30, json=payload)
+        resp.raise_for_status()
+        photos = resp.json().get("photos", [])
+        if len(photos) < self.PHOTO_LIMIT:
+            return photos
+        if end - begin <= self.MIN_WINDOW:
+            log.warning("SpyPoint: %d photos in a window of %s (%s to %s) — some may be missing",
+                        len(photos), end - begin, payload["dateBegin"], payload["dateEnd"])
+            return photos
+        mid = begin + (end - begin) / 2
+        log.info("SpyPoint: response hit the %d-photo limit — splitting the window", self.PHOTO_LIMIT)
+        return (await self._photos_between(client, headers, cam_ids, begin, mid)
+                + await self._photos_between(client, headers, cam_ids, mid, end))
+
+    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None,
+                                  camera_ref: Optional[str] = None) -> list[dict]:
         out: list[dict] = []
         async with httpx.AsyncClient() as client:
             log.info("SpyPoint: logging in as %s", self.credentials.get("username"))
@@ -136,28 +170,22 @@ class SpyPointProvider(CameraProvider):
             cam_ids = [c.get("id") for c in cam_list if c.get("id")]
             log.info("SpyPoint: found %d camera(s) on account: %s",
                      len(cam_ids), [c.get("config", {}).get("name", c.get("id")) for c in cam_list])
+            if camera_ref:
+                # Ask for just this camera: on a shared request a busy camera can use up the photo limit
+                # and push a quiet camera's photos out of the response.
+                cam_ids = [c for c in cam_ids if str(c) == str(camera_ref)]
             if not cam_ids:
-                log.warning("SpyPoint: no cameras on account — nothing to fetch")
+                log.warning("SpyPoint: no matching camera on account — nothing to fetch")
                 return out
-            payload: dict = {
-                "camera": cam_ids,
-                "dateEnd": "2100-01-01T00:00:00.000Z",
-                "limit": 500,
-            }
-            if since:
-                # Ensure UTC-aware; format as the SpyPoint API expects.
-                since_utc = since if since.tzinfo else since.replace(tzinfo=_dt.timezone.utc)
-                payload["dateBegin"] = since_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            log.info("SpyPoint: fetching photos with payload %s", payload)
-            resp = await client.post(f"{self.BASE}/api/v3/photo/all", headers=headers,
-                                     timeout=30, json=payload)
-            resp.raise_for_status()
-            raw_photos = resp.json().get("photos", [])
+            now = _dt.datetime.now(_dt.timezone.utc)
+            begin = since if since else now - _dt.timedelta(days=7)
+            raw_photos = await self._photos_between(client, headers, cam_ids, begin, now + _dt.timedelta(days=1))
             log.info("SpyPoint: API returned %d photo(s)", len(raw_photos))
             # Log the first raw photo in full so we can see the actual field structure
             if raw_photos:
                 log.info("SpyPoint: first raw photo keys=%s full=%s",
                          list(raw_photos[0].keys()), raw_photos[0])
+            seen: set = set()
             for p in raw_photos:
                 # Spypoint returns large/medium/small as top-level keys, each a dict
                 # with {host, path} pointing to a pre-signed S3 URL.
@@ -169,11 +197,14 @@ class SpyPointProvider(CameraProvider):
                         url = f"https://{img['host']}/{img['path']}"
                         break
                 taken = p.get("date") or p.get("originDate")
-                log.info("SpyPoint: photo cam=%s taken=%s size_used=%s url=%s",
-                         p.get("camera"), taken,
-                         next((s for s in ("large","medium","small") if isinstance(p.get(s), dict) and p.get(s,{}).get("host")), None),
-                         url[:80] if url else None)
-                out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("camera"))})
+                photo_id = p.get("id") or p.get("_id")
+                key = photo_id or url
+                if key in seen:
+                    continue            # a photo on the boundary of two split windows
+                seen.add(key)
+                log.info("SpyPoint: photo cam=%s taken=%s url=%s", p.get("camera"), taken, url[:80] if url else None)
+                out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("camera")),
+                            "id": str(photo_id) if photo_id else None})
         log.info("SpyPoint: returning %d photo(s) to sync engine", len(out))
         return out
 
@@ -262,8 +293,10 @@ class RevealProvider(CameraProvider):
                 })
             return out
 
-    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None) -> list[dict]:
-        """Return recent photos as [{url, taken_at, camera_ref}, ...].
+    async def fetch_recent_photos(self, since: Optional[_dt.datetime] = None,
+                                  camera_ref: Optional[str] = None) -> list[dict]:
+        """Return recent photos as [{url, taken_at, camera_ref, id}, ...].
+        (`camera_ref` is accepted for interface parity; this endpoint lists the whole account.)
         Reveal's /photos endpoint (unlike SpyPoint's single date-ranged request)
         only offers size/page paging with no documented date filter, so this
         walks pages newest-first (the reverse-engineered integration's own
@@ -301,7 +334,9 @@ class RevealProvider(CameraProvider):
                     url = p.get("photoUrl")
                     if not url:
                         continue
-                    out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("cameraId"))})
+                    photo_id = p.get("photoId") or p.get("id")
+                    out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("cameraId")),
+                                "id": str(photo_id) if photo_id else None})
                 if len(photos) < 100 or not page_has_newer:
                     break
                 page += 1

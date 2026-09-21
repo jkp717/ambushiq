@@ -81,14 +81,16 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
           const confCls = conf >= 0.7 ? "conf-high" : conf >= 0.4 ? "conf-med" : "conf-low";
           return (
             <div key={s.id} className="sighting-card" onClick={() => s.image_url && setViewImg(s.image_url)}>
-              {s.species && <span className="sighting-species">{s.species}</span>}
+              {!s.is_animal
+                ? <span className="sighting-species sighting-empty">No animal detected</span>
+                : s.species && <span className="sighting-species">{s.species}</span>}
               {s.image_url
                 ? <img src={s.image_url} alt="sighting" className="sighting-thumb" loading="lazy" />
                 : <div className="sighting-nophoto"><Camera size={22} color="var(--bord2)" /></div>}
               <div className="sighting-cam" title={s.camera_name}>{s.camera_name}</div>
               <div className="sighting-meta">
                 <span className="sighting-ts">{formatDateTime(s.timestamp)}</span>
-                <span className={"conf-badge " + confCls}>{Math.round(conf * 100)}%</span>
+                {s.is_animal && <span className={"conf-badge " + confCls}>{Math.round(conf * 100)}%</span>}
               </div>
             </div>
           );

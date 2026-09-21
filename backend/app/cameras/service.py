@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -65,12 +67,12 @@ def _to_utc_iso(ts_str: str, prop_tz_name: str) -> str:
         return s
 
 
-async def _sync_one_camera_task(camera_id: int) -> None:
+async def _sync_one_camera_task(camera_id: int, since_days: Optional[int] = None) -> None:
     """Background-task wrapper: sync one camera, then release the detection
     models from memory — this box has limited RAM, so we don't keep
     MegaDetector + the species classifier resident between manual syncs."""
     try:
-        await _sync_one_camera(camera_id)
+        await _sync_one_camera(camera_id, since_days=since_days)
     finally:
         detection_mod.unload_models()
 
@@ -114,61 +116,95 @@ async def _backfill_species_task(sighting_ids: list[int]) -> None:
               len(sighting_ids), reclassified, missing_file, errors)
 
 
-async def _sync_one_camera(camera_id: int) -> dict:
-    """Fetch recent photos for a camera, run detection, record positive sightings.
-    Returns a summary dict: {new, fetched, skipped_non_animal, detection_errors}.
-    Best-effort: never raises to the scheduler."""
+SYNC_OVERLAP = timedelta(days=3)     # each sync re-lists this much history so late-uploaded photos are caught
+RETRY_HORIZON = timedelta(days=7)    # a photo that keeps failing to download is retried this long, then given up on
+
+
+def _parse_iso(raw: Optional[str]) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).astimezone(timezone.utc)
+
+
+def _photo_key(p: dict) -> Optional[str]:
+    """Stable identity for a provider photo: its own id, else the host + path of its URL (the signed
+    query string changes on every request, the path does not). Two photos stamped in the same second
+    therefore stay distinct, which a timestamp-based check could not tell apart."""
+    if p.get("id"):
+        return f"id:{p['id']}"[:400]
+    url = p.get("url")
+    if not url:
+        return None
+    parts = urlsplit(url)
+    return f"url:{parts.netloc}{parts.path}"[:400]
+
+
+async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> dict:
+    """Fetch recent photos for a camera, run detection, and record every photo: animal photos as
+    sightings, photos with no animal kept but flagged (is_animal=0).
+
+    Photos are fetched from `sync_cursor_at` minus SYNC_OVERLAP rather than from the last sync time:
+    cellular cameras upload late, so a photo taken before the last sync can still show up after it.
+    Repeats are skipped by photo identity, so the overlap costs one listing call, not re-downloads.
+    The cursor only moves forward past photos that were handled; a failed download holds it back
+    (up to RETRY_HORIZON) so the photo is retried. `since_days` forces a re-import of that many days.
+
+    Returns {new, fetched, no_animal, detection_errors, failed}. Best-effort: never raises to the scheduler."""
+    empty = {"new": 0, "fetched": 0, "no_animal": 0, "detection_errors": 0, "failed": 0}
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if not cam or not cam.is_active or cam.is_deleted:
-            return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
+            return empty
         creds = decrypt_credentials(cam.credentials_json)
         brand, camera_name, stand_id, cid = cam.brand, cam.name, cam.stand_id, cam.id
         region_id = cam.region_id
         cam_provider_ref = cam.provider_ref  # Spypoint cam ID for photo filtering
-        last_sync = cam.last_sync_at
-        # Deduplication: timestamps already recorded for this camera (incl. non-animal skips)
-        existing_timestamps = set(
-            s.scalars(
-                select(CameraSighting.timestamp).where(CameraSighting.camera_id == cid)
-            ).all()
-        )
+        cursor = _parse_iso(cam.sync_cursor_at or cam.last_sync_at)
+        # What we already have for this camera, by photo identity. Rows from before photo ids were
+        # stored are matched by timestamp instead and adopt the id of the photo that matches them.
+        known: set[str] = set()
+        legacy_by_ts: dict[str, list[int]] = defaultdict(list)
+        for rid, ts, pid in s.execute(select(CameraSighting.id, CameraSighting.timestamp,
+                                              CameraSighting.provider_photo_id)
+                                       .where(CameraSighting.camera_id == cid)).all():
+            if pid:
+                known.add(pid)
+            else:
+                legacy_by_ts[ts].append(rid)
 
     # Resolve the property timezone (now a per-region field) once for taken_at
     # normalization below.
     region = get_region_dict(region_id)
     prop_tz_name = str(region.get("property_timezone") or "America/Chicago")
 
-    # Parse last_sync_at into a timezone-aware datetime to send as `since` to the provider.
-    # First sync (last_sync_at is None): use camera_backfill_days so we fetch recent history
-    # without pulling every photo ever on the account. Subsequent syncs are incremental.
+    sync_started = datetime.now(timezone.utc)
     backfill_days = int(get_settings().get("camera_backfill_days", 7) or 7)
-    since_dt = None
-    if last_sync:
-        try:
-            since_dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
-            if since_dt.tzinfo is None:
-                since_dt = since_dt.replace(tzinfo=timezone.utc)
-        except Exception:
-            pass  # malformed timestamp; fall back to backfill window
-    if since_dt is None:
+    if since_days:
+        since_dt = sync_started - timedelta(days=since_days)
+        log.info("cam %s (%s): re-importing the last %d day(s)", camera_id, brand, since_days)
+    elif cursor:
+        since_dt = cursor - SYNC_OVERLAP
+    else:
         # First sync — start from backfill_days ago instead of the beginning of time.
-        since_dt = datetime.now(timezone.utc) - timedelta(days=backfill_days)
+        since_dt = sync_started - timedelta(days=backfill_days)
         log.info("cam %s (%s): first sync — backfilling %d day(s)", camera_id, brand, backfill_days)
 
-    log.info("cam %s (%s): starting sync — since=%s existing_ts=%d",
-             camera_id, brand, since_dt.isoformat(), len(existing_timestamps))
+    log.info("cam %s (%s): starting sync — since=%s known=%d",
+             camera_id, brand, since_dt.isoformat(), len(known) + sum(len(v) for v in legacy_by_ts.values()))
 
     try:
         prov = cameras_mod.get_provider(brand, creds)
         if not prov.implemented:
             log.warning("cam %s (%s): provider not implemented — skipping", camera_id, brand)
-            return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
+            return empty
         log.info("cam %s (%s): calling fetch_recent_photos ...", camera_id, brand)
-        photos = await prov.fetch_recent_photos(since=since_dt)
+        photos = await prov.fetch_recent_photos(since=since_dt, camera_ref=cam_provider_ref)
         log.info("cam %s (%s): provider returned %d photo(s)", camera_id, brand, len(photos))
         # Filter to only this camera's photos using provider_ref (Spypoint cam ID).
-        # Without this, the API returns photos from ALL cameras on the account.
         if cam_provider_ref:
             before = len(photos)
             photos = [p for p in photos if p.get("camera_ref") == cam_provider_ref]
@@ -176,8 +212,8 @@ async def _sync_one_camera(camera_id: int) -> dict:
                      camera_id, brand, cam_provider_ref, before, len(photos))
     except Exception as exc:
         log.warning("cam %s (%s): fetch_recent_photos failed: %s: %s",
-                    camera_id, brand if 'brand' in dir() else "?", type(exc).__name__, exc)
-        return {"new": 0, "fetched": 0, "skipped_non_animal": 0, "detection_errors": 0}
+                    camera_id, brand, type(exc).__name__, exc)
+        return empty   # cursor untouched: the next sync starts from the same place
 
     # Refresh provider-reported health (last check-in, photo quota) so the
     # camera-penalty health gate stays current. Best-effort — a failure here
@@ -200,124 +236,115 @@ async def _sync_one_camera(camera_id: int) -> dict:
     # User-defined directory structure: [User defined directory]/region_{id}/[Camera Brand]/[Camera Name]/
     cam_dir = get_camera_dir(brand, camera_name, region_id)
     os.makedirs(cam_dir, exist_ok=True)
-    new = 0
-    skipped_non_animal = 0
-    detection_errors = 0
-    fetched = 0
+    new = no_animal = detection_errors = fetched = saved = 0
+    failed_at: list[datetime] = []      # taken-times of photos we couldn't get, so the cursor can hold back
+
+    def record(taken_at: str, key: Optional[str], fpath: str, *, animal: bool, conf: float,
+               species: Optional[str] = None, species_conf: Optional[float] = None) -> None:
+        with Session(engine) as s:
+            s.add(CameraSighting(
+                stand_id=stand_id, camera_id=cid, timestamp=taken_at, confidence_score=conf,
+                species=species, species_confidence=species_conf, image_path=fpath,
+                provider_photo_id=key, is_animal=1 if animal else 0,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ))
+            s.commit()
+        if key:
+            known.add(key)
+
     async with httpx.AsyncClient() as client:
         for idx, p in enumerate(photos):
             url = p.get("url")
-            if not url:
-                log.warning("cam %s (%s): photo[%d] has no URL — skipped (raw=%s)",
-                            cid, brand, idx, p)
-                continue
-
             raw_taken = p.get("taken_at")
             taken_at = _to_utc_iso(str(raw_taken), prop_tz_name) if raw_taken else None
-
             if not taken_at:
-                log.warning("cam %s (%s): photo[%d] url=%s has no taken_at timestamp — skipped",
-                            cid, brand, idx, url[:80])
+                log.warning("cam %s (%s): photo[%d] has no taken_at timestamp — skipped (raw=%s)", cid, brand, idx, p)
+                continue
+            taken_dt = _parse_iso(taken_at)
+            if not url:
+                log.warning("cam %s (%s): photo[%d] taken_at=%s has no URL — will retry", cid, brand, idx, taken_at)
+                if taken_dt:
+                    failed_at.append(taken_dt)
                 continue
 
-            if taken_at in existing_timestamps:
-                log.debug("cam %s (%s): photo[%d] taken_at=%s already in DB — skipped",
-                          cid, brand, idx, taken_at)
+            key = _photo_key(p)
+            if key in known:
+                continue
+            if legacy_by_ts.get(taken_at):
+                # An older row (saved before photo ids were kept) already stands for this photo.
+                rid = legacy_by_ts[taken_at].pop()
+                with Session(engine) as s:
+                    row = s.get(CameraSighting, rid)
+                    if row:
+                        row.provider_photo_id = key
+                        s.commit()
+                known.add(key)
                 continue
 
-            log.info("cam %s (%s): photo[%d] taken_at=%s — downloading %s",
-                     cid, brand, idx, taken_at, url[:100])
-            fetched += 1
-
-            # download
+            log.info("cam %s (%s): photo[%d] taken_at=%s — downloading %s", cid, brand, idx, taken_at, url[:100])
             try:
                 r = await client.get(url, timeout=60)
                 if r.status_code != 200:
-                    log.warning("cam %s (%s): photo[%d] download HTTP %d — skipped",
-                                cid, brand, idx, r.status_code)
-                    fetched -= 1
+                    log.warning("cam %s (%s): photo[%d] download HTTP %d — will retry", cid, brand, idx, r.status_code)
+                    if taken_dt:
+                        failed_at.append(taken_dt)
                     continue
-                log.info("cam %s (%s): photo[%d] downloaded %d bytes", cid, brand, idx, len(r.content))
             except Exception as exc:
-                log.warning("cam %s (%s): photo[%d] download error: %s: %s",
+                log.warning("cam %s (%s): photo[%d] download error: %s: %s — will retry",
                             cid, brand, idx, type(exc).__name__, exc)
-                fetched -= 1
+                if taken_dt:
+                    failed_at.append(taken_dt)
                 continue
+            fetched += 1
 
-            fname = f"cam{cid}_{int(datetime.now(timezone.utc).timestamp()*1000)}_{new}.jpg"
+            saved += 1
+            fname = f"cam{cid}_{int(datetime.now(timezone.utc).timestamp()*1000)}_{saved}.jpg"
             fpath = os.path.join(cam_dir, fname)
             try:
                 with open(fpath, "wb") as f:
                     f.write(r.content)
-                log.info("cam %s (%s): photo[%d] saved to %s", cid, brand, idx, fpath)
             except Exception as exc:
-                log.warning("cam %s (%s): photo[%d] save failed: %s: %s",
+                log.warning("cam %s (%s): photo[%d] save failed: %s: %s — will retry",
                             cid, brand, idx, type(exc).__name__, exc)
-                fetched -= 1
+                if taken_dt:
+                    failed_at.append(taken_dt)
                 continue
 
             # offload CPU-bound ML detection to a worker thread so event loop remains non-blocking
-            log.info("cam %s (%s): photo[%d] running animal detection ...", cid, brand, idx)
             det = await asyncio.to_thread(detection_mod.detect_animal, fpath)
-            log.info("cam %s (%s): photo[%d] detection result: is_animal=%s conf=%.3f detector=%s",
+            log.info("cam %s (%s): photo[%d] detection: is_animal=%s conf=%.3f detector=%s",
                      cid, brand, idx, det.get("is_animal"), det.get("confidence", 0.0), det.get("detector"))
 
-            detector = det.get("detector", "")
-            if detector.startswith("error"):
-                # Detection threw an exception (model missing, PyTorch error, bad image, etc.).
-                # Record the sighting at confidence 0.0 so the user can see their photo — hiding
-                # it because the detector is broken would be worse than a false positive.
-                log.warning("cam %s (%s): photo[%d] detector error (%s) — saving sighting at conf=0",
-                            cid, brand, idx, detector)
+            if str(det.get("detector", "")).startswith("error"):
+                # Detection threw (model missing, PyTorch error, bad image, ...). Record the photo at
+                # confidence 0 so the user still sees it — hiding it because the detector is broken
+                # would be worse than a false positive.
                 detection_errors += 1
-                with Session(engine) as s:
-                    s.add(CameraSighting(
-                        stand_id=stand_id, camera_id=cid,
-                        timestamp=taken_at,
-                        confidence_score=0.0,
-                        image_path=fpath, created_at=datetime.now(timezone.utc).isoformat(),
-                    ))
-                    s.commit()
-                existing_timestamps.add(taken_at)
+                record(taken_at, key, fpath, animal=True, conf=0.0)
                 new += 1
-                continue
+            elif not det.get("is_animal"):
+                # Nothing found: keep the photo (the detector can miss night or partial shots) but flag it
+                # so it stays out of scoring and the activity graph.
+                no_animal += 1
+                record(taken_at, key, fpath, animal=False, conf=det.get("confidence", 0.0))
+            else:
+                record(taken_at, key, fpath, animal=True, conf=det.get("confidence", 0.0),
+                       species=det.get("species"), species_conf=det.get("species_confidence"))
+                new += 1
 
-            if not det.get("is_animal"):
-                # Detector ran successfully but found no animal — discard the file and mark
-                # the timestamp as seen so this photo is never re-downloaded on the next sync.
-                log.info("cam %s (%s): photo[%d] no animal detected (conf=%.3f) — discarding",
-                         cid, brand, idx, det.get("confidence", 0.0))
-                try:
-                    os.remove(fpath)
-                except OSError:
-                    pass
-                existing_timestamps.add(taken_at)
-                skipped_non_animal += 1
-                continue
+    log.info("cam %s (%s): sync complete — downloaded=%d animals=%d no_animal=%d det_errors=%d failed=%d",
+             cid, brand, fetched, new, no_animal, detection_errors, len(failed_at))
 
-            log.info("cam %s (%s): photo[%d] animal confirmed (conf=%.3f species=%s) — recording sighting",
-                     cid, brand, idx, det.get("confidence", 0.0), det.get("species"))
-            with Session(engine) as s:
-                s.add(CameraSighting(
-                    stand_id=stand_id, camera_id=cid,
-                    timestamp=taken_at,
-                    confidence_score=det.get("confidence", 0.0),
-                    species=det.get("species"), species_confidence=det.get("species_confidence"),
-                    image_path=fpath, created_at=datetime.now(timezone.utc).isoformat(),
-                ))
-                s.commit()
-            existing_timestamps.add(taken_at)
-            new += 1
-
-    log.info("cam %s (%s): sync complete — fetched=%d new=%d non_animal=%d det_errors=%d",
-             cid, brand, fetched, new, skipped_non_animal, detection_errors)
-
-    # Record sync completion timestamp on camera
+    # Move the cursor to when this sync began — unless a download failed, in which case hold it just
+    # before the earliest failure (within the retry horizon) so the next sync tries again.
+    retry = [t for t in failed_at if t > sync_started - RETRY_HORIZON]
+    cursor_new = (min(retry) - timedelta(seconds=1)) if retry else sync_started
     with Session(engine) as s:
         cam2 = s.get(Camera, cid)
         if cam2:
             cam2.last_sync_at = datetime.now(timezone.utc).isoformat()
+            cam2.sync_cursor_at = cursor_new.isoformat()
             s.commit()
 
-    return {"new": new, "fetched": fetched,
-            "skipped_non_animal": skipped_non_animal, "detection_errors": detection_errors}
+    return {"new": new, "fetched": fetched, "no_animal": no_animal,
+            "detection_errors": detection_errors, "failed": len(failed_at)}

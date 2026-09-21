@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, RefreshCw, Camera, AlertTriangle, CheckCircle2, ImageIcon, Edit3, Trash2, MapPin } from "lucide-react";
+import { Plus, RefreshCw, Camera, AlertTriangle, CheckCircle2, ImageIcon, Edit3, Trash2, MapPin, History } from "lucide-react";
 import { api } from "../../services/api.js";
 import { formatRelTime } from "../../utils/formatters.js";
 import { BRAND_LABELS, BRAND_COLORS } from "../../utils/cameraBrands.js";
@@ -40,6 +40,19 @@ function CameraSetupTab({ cameras, providers, stands, reload, onViewPhotos }) {
       alert("Sync started — photos will appear shortly. Check the Gallery in a moment.");
       reload();
     } catch (e) { alert(`Sync failed: ${e.message}`); }
+    finally { setSyncing((s) => ({ ...s, [cam.id]: false })); }
+  }
+  async function reimport(cam) {
+    const raw = window.prompt(`Re-import how many days of photos for ${cam.name}? (1-90)\n\nPhotos already stored are skipped; missing ones (including ones with no animal detected) are added.`, "30");
+    if (raw === null) return;
+    const days = Math.max(1, Math.min(90, parseInt(raw, 10) || 0));
+    if (!days) { alert("Enter a number of days between 1 and 90."); return; }
+    setSyncing((s) => ({ ...s, [cam.id]: true }));
+    try {
+      await api(`/cameras/${cam.id}/sync?days=${days}`, { method: "POST" });
+      alert(`Re-importing the last ${days} day(s) in the background. Check the Gallery in a few minutes.`);
+      reload();
+    } catch (e) { alert(`Re-import failed: ${e.message}`); }
     finally { setSyncing((s) => ({ ...s, [cam.id]: false })); }
   }
   async function backfillSpecies() {
@@ -114,6 +127,7 @@ function CameraSetupTab({ cameras, providers, stands, reload, onViewPhotos }) {
                   <button className="icon-btn" title="Sync now" disabled={!!syncing[cam.id]} onClick={() => syncNow(cam)}>
                     <RefreshCw size={15} className={syncing[cam.id] ? "spin" : ""} />
                   </button>
+                  <button className="icon-btn" title="Re-import past photos" disabled={!!syncing[cam.id]} onClick={() => reimport(cam)}><History size={15} /></button>
                 </>}
                 <button className="icon-btn" title="View photos" onClick={() => onViewPhotos(cam)}><ImageIcon size={15} /></button>
                 <button className="icon-btn" title="Edit" onClick={() => setEditingCam(cam)}><Edit3 size={15} /></button>
