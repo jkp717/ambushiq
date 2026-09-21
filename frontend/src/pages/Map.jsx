@@ -7,7 +7,6 @@ import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M } from "../utils/geo.js";
 import Banner from "../components/ui/Banner.jsx";
-import Empty from "../components/ui/Empty.jsx";
 import LayerChip from "../components/ui/LayerChip.jsx";
 import BottomSheet from "../components/ui/BottomSheet.jsx";
 import LocationEdgeIndicator from "../components/LocationEdgeIndicator.jsx";
@@ -182,8 +181,10 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
   useEffect(() => { if (relocateRequest) { setRelocating(relocateRequest); setDrawMode("relocate"); setDraftPoints([]); clearRelocateRequest(); } }, [relocateRequest, clearRelocateRequest]);
 
+  // Forecast hours drive the time controls. They don't need a stand: the backend falls back to the region's
+  // own location, so a brand-new region gets a working map straight away. Re-fetched when the first stand
+  // appears, since the forecast location moves from the region center to that stand.
   useEffect(() => {
-    if (!stands.length) return;
     apiRetry("/hours").then((j) => {
       setDays(j.days || []);
       setStaleAt(j.stale ? j.fetched_at ?? null : null);
@@ -201,7 +202,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
         if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi * 4); break; }
       }
     }).catch(() => setErr("Couldn't load forecast."));
-  }, [stands.length]);
+  }, [stands.length, activeRegion?.id]);
 
   const curDay     = days[dayIdx];
   const maxHour    = (curDay?.hours.length || 1) - 1;
@@ -445,18 +446,6 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     } finally {
       setScoutAnalyzing(false); setScoutDraft(null); setDrawMode(null);
     }
-  }
-
-  // Don't block the map when the user is actively trying to place their
-  // first stand (or draw a zone/corridor before any stand exists) — this
-  // gate previously fired unconditionally, which meant clicking "Add first
-  // stand" from the Today page navigated here and immediately dead-ended,
-  // since drawMode was set but the map that would let you click-to-place
-  // never rendered. A brand-new region always starts at zero stands, so
-  // this is now a guaranteed dead-end on region creation rather than a rare
-  // edge case, hence catching it here rather than leaving it as pre-existing.
-  if (!stands.length && !drawMode) {
-    return <div style={{ padding: 16 }}><Empty>Add a stand first to use the map.</Empty></div>;
   }
 
   return (

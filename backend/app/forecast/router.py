@@ -26,6 +26,7 @@ from app.forecast.service import (
     format_hour_label,
     get_forecast,
 )
+from app.regions.models import Region
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 from app.stands.models import Stand
@@ -69,12 +70,17 @@ def _score_view(det: dict) -> dict:
     }
 
 
-def _first_stand_location(region_id: int) -> tuple[float, float]:
+def _forecast_location(region_id: int) -> tuple[float, float]:
+    """Where to fetch weather for a region: its first stand, or - so the map works on a brand-new region -
+    the region's own location. A region still at the 0,0 placeholder has no usable location."""
     with Session(engine) as s:
         first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
-        if not first:
-            raise HTTPException(400, "add a stand first")
-        return first.lat, first.lon
+        if first:
+            return first.lat, first.lon
+        region = s.get(Region, region_id)
+        if region and (region.lat or region.lon):
+            return region.lat, region.lon
+    raise HTTPException(400, "set this region's location or add a stand first")
 
 
 def _active_stands(region_id: int) -> list[dict]:
@@ -92,7 +98,7 @@ def weather_providers(_=Depends(require_token)):
 @router.get("/api/forecast")
 async def forecast_endpoint(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     region = get_region_dict(region_id)
-    lat, lon = _first_stand_location(region_id)
+    lat, lon = _forecast_location(region_id)
     try:
         fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
     except Exception as e:
@@ -106,7 +112,7 @@ async def rank_sit(body: SitRankIn, region_id: int = Depends(get_active_region_i
     over the sit window (day_ranked, by contrast, reports each period's best hour)."""
     region = get_region_dict(region_id)
     stands = _active_stands(region_id)
-    lat, lon = _first_stand_location(region_id)
+    lat, lon = _forecast_location(region_id)
     fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
     h = fc["hourly"]
     temp_swing = _temp_swing_rolling(h)
@@ -154,7 +160,7 @@ def rank_manual(body: ManualRankIn, region_id: int = Depends(get_active_region_i
 async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """Forecast hours grouped by day, for the day picker + hourly slider."""
     region = get_region_dict(region_id)
-    lat, lon = _first_stand_location(region_id)
+    lat, lon = _forecast_location(region_id)
     try:
         fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     except Exception as e:
@@ -204,7 +210,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     from the same ScoringContext as /api/day/ranked, so the two views always agree."""
     region = get_region_dict(region_id)
     stands = _active_stands(region_id)
-    lat, lon = _first_stand_location(region_id)
+    lat, lon = _forecast_location(region_id)
     fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
     temp_swing = _temp_swing_rolling(h)
@@ -257,7 +263,7 @@ async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region
     any period it wins."""
     region = get_region_dict(region_id)
     stands = _active_stands(region_id)
-    lat, lon = _first_stand_location(region_id)
+    lat, lon = _forecast_location(region_id)
     fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
     temp_swing = _temp_swing_rolling(h)

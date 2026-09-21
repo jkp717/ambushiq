@@ -17,7 +17,9 @@ from app.stands.models import Stand
 from app.zones.models import Zone
 from app.corridors.models import Corridor
 from app.deer_sign.models import DeerSign
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
+from fastapi import HTTPException
 
 DAYS = ["2025-11-10", "2025-11-11"]
 
@@ -136,3 +138,40 @@ def test_deer_ratings_endpoint_uses_sea_level_pressure_and_full_scale(seeded):
         assert 1 <= r["rating"] <= 5
         assert 29.9 < r["inputs"]["pressure_inhg"] < 30.2      # 1016 hPa MSL ≈ 30.0 inHg
     assert out["previous_day"] is None
+
+
+# ---------- a brand-new region has no stands yet, but its map still needs weather ----------
+
+@pytest.fixture()
+def no_stands(seeded):
+    with Session(engine) as s:
+        s.execute(delete(Stand))
+        s.commit()
+
+
+def test_a_region_with_no_stands_still_gets_forecast_hours_and_an_empty_map(no_stands):
+    hours = run(fc_router.list_hours(region_id=1, _=None))
+    assert [d["day"] for d in hours["days"]] == DAYS
+    conditions = run(fc_router.map_conditions(HourRankIn(time_index=7), region_id=1, _=None))
+    assert conditions["stands"] == [] and conditions["ranked"] == []
+    assert conditions["time"]["wind_speed"] is not None                 # the weather card still has data
+
+
+def test_the_forecast_location_is_the_first_stand_else_the_region(seeded):
+    assert fc_router._forecast_location(1) == (34.701, -92.301)            # "Bare" sorts first, so it is the first stand
+    with Session(engine) as s:
+        s.execute(delete(Stand))
+        region = s.get(Region, 1)
+        region.lat, region.lon = 35.25, -93.5
+        s.commit()
+    assert fc_router._forecast_location(1) == (35.25, -93.5)
+
+
+def test_a_region_at_the_placeholder_location_with_no_stands_is_rejected(no_stands):
+    with Session(engine) as s:
+        region = s.get(Region, 1)
+        region.lat = region.lon = 0.0
+        s.commit()
+    with pytest.raises(HTTPException) as e:
+        run(fc_router.list_hours(region_id=1, _=None))
+    assert e.value.status_code == 400
