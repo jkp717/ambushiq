@@ -660,6 +660,9 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             height="100%" />
         </div>
         <div className="layer-overlay">
+          <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
+            <Plus size={16} />
+          </button>
           {layersOpen && (
             <div className="layer-chips-panel">
               <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
@@ -691,9 +694,6 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             onClick={toggleLocation} aria-pressed={locationOn}
             title={locationOn ? "Hide my location" : "Show my location"}>
             <Navigation2 size={16} fill={locationOn ? "currentColor" : "none"} />
-          </button>
-          <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
-            <Plus size={16} />
           </button>
         </div>
         <LocationEdgeIndicator getMap={() => huntMapRef.current?.getMap?.() ?? null} location={userLocation} />

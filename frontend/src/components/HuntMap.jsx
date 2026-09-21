@@ -49,12 +49,18 @@ function landStyle(p, interactive) {
 }
 
 function landPopup(p) {
+  const agfc = p.source === "AGFC";   // official Arkansas Game & Fish boundary, so no "likely"
+  const kind = agfc ? "Wildlife management area" : LAND_KIND_LABEL[p.kind] || LAND_KIND_LABEL.other;
+  const note = agfc
+    ? "Boundary published by the Arkansas Game & Fish Commission (via the Arkansas GIS Office) for reference purposes only. WMAs usually need a hunting license and follow their own rules. Verify seasons, permits and boundaries with the AGFC."
+    : `Shows who manages the land and its general public access, not hunting rules. ${p.kind === "wildlife" ? "Wildlife areas usually need a hunting license and follow their own rules. " : ""}Verify seasons, permits and boundaries with the managing agency.`;
   return `<div class="feat-popup">
     <div class="feat-popup-title">${escHtml(p.name)}</div>
-    <div class="feat-popup-sub">${escHtml(LAND_KIND_LABEL[p.kind] || LAND_KIND_LABEL.other)} · ${escHtml(p.designation)}</div>
+    <div class="feat-popup-sub">${escHtml(kind)} · ${escHtml(p.designation)}</div>
     <div class="land-row"><b>Manager:</b> ${escHtml(p.manager)}</div>
     <div class="land-row"><b>Public access:</b> ${escHtml(LAND_ACCESS_LABEL[p.access] || LAND_ACCESS_LABEL.unknown)}</div>
-    <div class="land-note">Shows who manages the land and its general public access, not hunting rules. ${p.kind === "wildlife" ? "Wildlife areas usually need a hunting license and follow their own rules. " : ""}Verify seasons, permits and boundaries with the managing agency.</div>
+    <div class="land-row"><b>Source:</b> ${escHtml(agfc ? "Arkansas Game & Fish Commission" : "USGS PAD-US")}</div>
+    <div class="land-note">${note}</div>
   </div>`;
 }
 

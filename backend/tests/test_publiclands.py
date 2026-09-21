@@ -14,6 +14,7 @@ from app.publiclands import router as pl_router, service
 from app.publiclands.models import PublicLandCell
 
 BOX = dict(south=34.69, west=-92.31, north=34.71, east=-92.29, zoom=13)        # inside one grid cell
+TEXAS = dict(south=30.20, west=-97.80, north=30.30, east=-97.70, zoom=13)      # outside Arkansas
 WIDE = dict(south=34.60, west=-92.40, north=34.80, east=-92.20, zoom=13)       # spans several cells
 
 
@@ -36,9 +37,15 @@ def env(monkeypatch):
     service._mem.clear()
     service._inflight.clear()
     monkeypatch.setattr(service.asyncio, "sleep", lambda *_a, **_k: _instant())
-    state = {"requests": [], "features": [feature(1)], "status": 200, "pages": None}
+    state = {"requests": [], "features": [feature(1)], "status": 200, "pages": None,
+             "agfc": [], "agfc_requests": [], "agfc_status": 200}
 
     def handler(request):
+        if request.url.host == "gis.arkansas.gov":            # the Arkansas Game & Fish WMA layer
+            state["agfc_requests"].append(dict(request.url.params))
+            if state["agfc_status"] != 200:
+                return httpx.Response(state["agfc_status"], json={})
+            return httpx.Response(200, json={"type": "FeatureCollection", "features": state["agfc"]})
         state["requests"].append(dict(request.url.params))
         if state["status"] != 200:
             return httpx.Response(state["status"], json={})
@@ -143,7 +150,8 @@ def test_features_are_normalized_with_readable_labels():
     raw = feature(7, "Bayou Meto", "SFW", "STAT", "SCA", "RA")
     out = service.normalize_feature(raw, service.tolerance_deg(12, 34.7), 34.7)
     assert out["properties"] == {"name": "Bayou Meto", "manager": "State fish & wildlife agency",
-                                 "designation": "State Conservation Area", "access": "restricted", "kind": "wildlife"}
+                                 "designation": "State Conservation Area", "access": "restricted", "kind": "wildlife",
+                                 "source": "USGS PAD-US"}
     unknown = service.normalize_feature(feature(8, None, "ZZZ", "STAT", "QQQ", "??"), 0.0001, 34.7)["properties"]
     assert unknown["access"] == "unknown" and unknown["manager"] == "ZZZ" and unknown["designation"] == "QQQ"
     assert unknown["name"] == "Unnamed public land"
@@ -207,3 +215,112 @@ def test_concurrent_views_share_one_upstream_fetch(env):
         return await asyncio.gather(*[service.public_lands(**BOX) for _ in range(5)])
     outs = asyncio.run(scenario())
     assert len(env["requests"]) == 1 and all(len(o["features"]) == 1 for o in outs)
+
+
+# ---------- Arkansas Game & Fish WMA layer ----------
+
+def agfc_feature(fid=81, name="Maumelle River WMA", x=-92.30, y=34.70, size=0.01):
+    return {"type": "Feature", "id": fid,
+            "properties": {"objectid": fid, "fname": name, "flabel": name, "wma": name},
+            "geometry": {"type": "MultiPolygon", "coordinates": [square(x, y, size), square(x + 0.02, y, size)]}}
+
+
+def test_agfc_is_only_asked_about_cells_in_arkansas(env):
+    run(**TEXAS)
+    assert env["requests"] and env["agfc_requests"] == []
+    run(**BOX)
+    assert len(env["agfc_requests"]) >= 1 and env["agfc_requests"][0]["where"] == "1=1"
+
+
+def test_agfc_wmas_are_added_as_exact_wildlife_areas(env):
+    env["agfc"] = [agfc_feature()]
+    out = run(**BOX)
+    wma = next(f for f in out["features"] if f["properties"]["source"] == "AGFC")
+    assert wma["id"] == "agfc-81" and wma["geometry"]["type"] == "MultiPolygon"
+    assert wma["properties"] == {"name": "Maumelle River WMA", "manager": "Arkansas Game & Fish Commission",
+                                 "designation": "Wildlife Management Area", "access": "restricted",
+                                 "kind": "wildlife", "source": "AGFC"}
+    assert "Arkansas Game & Fish Commission" in out["attribution"]
+    assert "Arkansas Game" not in run(**TEXAS)["attribution"]                  # only credited where it was used
+
+
+def test_pad_us_wildlife_already_covered_by_agfc_is_not_drawn_twice(env):
+    covered = feature(10, "Bayou Meto", "SFW", "STAT", "SCA", "RA",
+                      {"type": "Polygon", "coordinates": square(-92.298, 34.702, 0.004)})      # inside the AGFC polygon
+    elsewhere = feature(11, "Some Other WMA", "SFW", "STAT", "SCA", "RA",
+                        {"type": "Polygon", "coordinates": square(-92.28, 34.72, 0.004)})      # AGFC doesn't have it
+    forest = feature(12, "Ouachita National Forest", "USFS", "FED", "NF", "OA",
+                     {"type": "Polygon", "coordinates": square(-92.298, 34.702, 0.004)})       # overlaps, but isn't a WMA
+    env["features"] = [covered, elsewhere, forest]
+    env["agfc"] = [agfc_feature()]
+    ids = {f["id"] for f in run(**BOX)["features"]}
+    assert ids == {11, 12, "agfc-81"}                                            # 10 was the duplicate
+
+
+def test_without_agfc_data_pad_us_wildlife_is_kept(env):
+    env["features"] = [feature(10, "Bayou Meto", "SFW", "STAT", "SCA", "RA")]
+    assert [f["id"] for f in run(**BOX)["features"]] == [10]
+
+
+def test_agfc_outage_leaves_pad_us_intact_and_flags_partial(env):
+    env["agfc_status"] = 503
+    env["features"] = [feature(10, "Bayou Meto", "SFW", "STAT", "SCA", "RA")]
+    out = run(**BOX)
+    assert [f["id"] for f in out["features"]] == [10] and out["partial"] is True
+
+
+def test_pad_us_outage_still_shows_the_agfc_wmas(env):
+    env["status"] = 503
+    env["agfc"] = [agfc_feature()]
+    out = run(**BOX)
+    assert [f["id"] for f in out["features"]] == ["agfc-81"] and out["partial"] is True
+
+
+def test_point_in_polygon_respects_holes():
+    outer, hole = square(0, 0, 10)[0], square(4, 4, 2)[0]
+    rings = [outer, hole]
+    assert service._in_polygon(1, 1, rings) and not service._in_polygon(5, 5, rings) and not service._in_polygon(11, 5, rings)
+
+
+# ---------- cache lifetime ----------
+
+def test_empty_cells_are_rechecked_after_a_day_but_full_ones_are_not(env):
+    env["features"] = []
+    run(**TEXAS)
+    n = len(env["requests"])
+    for k, (ts, feats) in list(service._mem.items()):
+        service._mem[k] = (ts - service.EMPTY_CELL_TTL_S - 60, feats)
+    run(**TEXAS)
+    assert len(env["requests"]) == 2 * n                                         # empty cells: every one fetched again
+
+    env["features"] = [feature(1)]
+    run(**BOX)
+    m = len(env["requests"])
+    for k, (ts, feats) in list(service._mem.items()):
+        service._mem[k] = (ts - 2 * service.EMPTY_CELL_TTL_S, feats)
+    run(**BOX)
+    assert len(env["requests"]) == m                                             # non-empty: still fresh (30 days)
+
+
+def test_old_cells_are_pruned_and_recent_ones_kept(env):
+    now = time.time()
+    service._db_store("plands:v1:old", now - service.PRUNE_AFTER_S - 100, [])
+    service._db_store("plands:v1:new", now - 100, [])
+    service._mem["plands:v1:old"] = (now - service.PRUNE_AFTER_S - 100, [])
+    service._mem["plands:v1:new"] = (now - 100, [])
+    assert service.prune_cache() == 1
+    assert service._db_load("plands:v1:old") is None and service._db_load("plands:v1:new") is not None
+    assert "plands:v1:old" not in service._mem and "plands:v1:new" in service._mem
+
+
+def test_a_duplicate_with_the_same_boundary_is_still_recognised(env):
+    same = feature(10, "Bayou Meto", "SFW", "STAT", "SCA", "RA",
+                   {"type": "Polygon", "coordinates": square(-92.30, 34.70, 0.01)})       # outline exactly on the AGFC edge
+    partly = feature(11, "Half Covered", "SFW", "STAT", "SCA", "RA",
+                     {"type": "Polygon", "coordinates": square(-92.305, 34.70, 0.01)})     # ~50% overlapped
+    barely = feature(12, "Mostly Elsewhere", "SFW", "STAT", "SCA", "RA",
+                     {"type": "Polygon", "coordinates": square(-92.295, 34.70, 0.02)})     # AGFC covers ~1/3 of it
+    env["features"] = [same, partly, barely]
+    env["agfc"] = [{**agfc_feature(), "geometry": {"type": "Polygon", "coordinates": square(-92.30, 34.70, 0.01)}}]
+    ids = {f["id"] for f in run(**BOX)["features"]}
+    assert 10 not in ids and 12 in ids

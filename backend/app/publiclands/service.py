@@ -7,7 +7,9 @@ weeks, and the cells covering the box are merged into one GeoJSON FeatureCollect
 PAD-US says who manages a piece of land and the general level of public access. It does not say whether
 hunting is allowed, in season or needs a permit, so every feature carries that caveat in the UI. State
 wildlife management areas are in the data but have no dedicated code: they are recognised heuristically
-(see `classify`)."""
+(see `classify`), and PAD-US misses some (e.g. Arkansas' Maumelle River WMA). Where a state agency publishes
+its own WMA boundaries they are layered in as a second, exact source; Arkansas (AGFC) is the first, and the
+PAD-US wildlife features they cover are dropped so the same land isn't drawn twice."""
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +21,7 @@ import time
 from typing import Optional
 
 import httpx
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
@@ -29,6 +32,11 @@ log = logging.getLogger(__name__)
 SERVICE_URL = ("https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/"
                "Public_Access/FeatureServer/0/query")
 ATTRIBUTION = "Public land: USGS PAD-US 3.0 (Protected Areas Database of the United States)"
+AGFC_ATTRIBUTION = "Arkansas wildlife management areas: Arkansas Game & Fish Commission via the Arkansas GIS Office"
+AGFC_URL = ("https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Boundaries/FeatureServer/37/query")
+AGFC_FIELDS = "objectid,fname,flabel,wma"
+AGFC_PAGE_SIZE = 200                       # the layer's maxRecordCount (it holds ~140 WMAs in total)
+ARKANSAS_BBOX = (-94.7, 33.0, -89.6, 36.6)  # west, south, east, north: cells outside this never ask AGFC
 OUT_FIELDS = "Unit_Nm,Mang_Name,Mang_Type,Des_Tp,Pub_Access"
 # City, county and regional-district parks are not hunting land and dominate urban areas, so leave them out.
 WHERE = "Mang_Type NOT IN ('LOC','DIST')"
@@ -39,6 +47,8 @@ PAGE_SIZE = 2000
 MAX_PAGES = 5
 REQUEST_TIMEOUT_S = 25
 CELL_TTL_S = 30 * 24 * 3600
+EMPTY_CELL_TTL_S = 24 * 3600      # an empty answer is re-checked daily: it may be a real gap or a glitch
+PRUNE_AFTER_S = 180 * 24 * 3600   # cells not refreshed in this long are dropped to keep the cache bounded
 CACHE_SCHEMA = "v1"      # bump when the stored feature shape or filters change
 
 ACCESS = {"OA": "open", "RA": "restricted", "XA": "closed", "UK": "unknown"}
@@ -199,19 +209,47 @@ def normalize_feature(raw: dict, tol: float, lat: float) -> Optional[dict]:
             "designation": DESIGNATIONS.get(des, des or "Unknown"),
             "access": ACCESS.get(props.get("Pub_Access"), "unknown"),
             "kind": classify(props),
+            "source": "USGS PAD-US",
         },
     }
 
 
-async def _query_pages(client: httpx.AsyncClient, bbox: tuple[float, float, float, float]) -> list[dict]:
+def normalize_agfc_feature(raw: dict, tol: float, lat: float) -> Optional[dict]:
+    """An Arkansas Game & Fish Commission WMA polygon. The layer only lists WMAs, so the kind is exact."""
+    props = raw.get("properties") or {}
+    geom = simplify_geometry(raw.get("geometry"), tol, lat)
+    if not geom:
+        return None
+    name = (props.get("fname") or props.get("flabel") or props.get("wma") or "").strip() or "Wildlife Management Area"
+    fid = raw.get("id")
+    if fid is None:
+        fid = props.get("objectid") if props.get("objectid") is not None else name
+    return {
+        "type": "Feature", "id": f"agfc-{fid}", "geometry": geom,
+        "properties": {
+            "name": name, "manager": "Arkansas Game & Fish Commission", "designation": "Wildlife Management Area",
+            "access": "restricted",       # public hunting with a license and the WMA's own rules
+            "kind": "wildlife", "source": "AGFC",
+        },
+    }
+
+
+def _page_size(source: str) -> int:
+    return PAGE_SIZE if source == "padus" else AGFC_PAGE_SIZE
+
+
+async def _query_pages(client: httpx.AsyncClient, bbox: tuple[float, float, float, float],
+                       source: str = "padus") -> list[dict]:
     west, south, east, north = bbox
+    url, where, fields = (SERVICE_URL, WHERE, OUT_FIELDS) if source == "padus" else (AGFC_URL, "1=1", AGFC_FIELDS)
+    size = _page_size(source)
     raw: list[dict] = []
     for page in range(MAX_PAGES):
-        r = await client.get(SERVICE_URL, params={
-            "where": WHERE, "geometry": f"{west},{south},{east},{north}", "geometryType": "esriGeometryEnvelope",
-            "inSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": OUT_FIELDS,
+        r = await client.get(url, params={
+            "where": where, "geometry": f"{west},{south},{east},{north}", "geometryType": "esriGeometryEnvelope",
+            "inSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": fields,
             "returnGeometry": "true", "outSR": 4326, "geometryPrecision": 5, "f": "geojson",
-            "resultOffset": page * PAGE_SIZE, "resultRecordCount": PAGE_SIZE,
+            "resultOffset": page * size, "resultRecordCount": size,
         }, timeout=REQUEST_TIMEOUT_S)
         r.raise_for_status()
         data = r.json()
@@ -220,14 +258,15 @@ async def _query_pages(client: httpx.AsyncClient, bbox: tuple[float, float, floa
         feats = data.get("features") or []
         raw.extend(feats)
         exceeded = data.get("exceededTransferLimit") or (data.get("properties") or {}).get("exceededTransferLimit")
-        if not (exceeded or len(feats) >= PAGE_SIZE):
+        if not (exceeded or len(feats) >= size):
             break
     else:
-        log.warning("public lands: hit the %d-page limit for bbox %s; some features may be missing", MAX_PAGES, bbox)
+        log.warning("public lands (%s): hit the %d-page limit for bbox %s; some features may be missing",
+                    source, MAX_PAGES, bbox)
     return raw
 
 
-async def _fetch_cell(tz: int, ix: int, iy: int) -> list[dict]:
+async def _fetch_cell(source: str, tz: int, ix: int, iy: int) -> list[dict]:
     size = cell_deg(tz)
     west, south = ix * size - 180, iy * size - 90
     bbox = (west, south, west + size, south + size)
@@ -237,17 +276,19 @@ async def _fetch_cell(tz: int, ix: int, iy: int) -> list[dict]:
     for attempt in range(2):
         try:
             async with httpx.AsyncClient() as client:
-                raw = await _query_pages(client, bbox)
+                raw = await _query_pages(client, bbox, source)
             break
         except (httpx.HTTPError, ValueError) as e:
             last = e
             if attempt == 0:
                 await asyncio.sleep(1.0)
     else:
-        raise PublicLandsUnavailable(f"USGS public land service unreachable: {last}") from last
+        who = "USGS public land" if source == "padus" else "Arkansas wildlife area"
+        raise PublicLandsUnavailable(f"{who} service unreachable: {last}") from last
     # simplifying tens of thousands of vertices is CPU-bound: keep it off the event loop
-    feats = await asyncio.to_thread(lambda: [f for f in (normalize_feature(x, tol, lat_c) for x in raw) if f])
-    log.info("public lands: cell %d/%d/%d -> %d of %d features kept", tz, ix, iy, len(feats), len(raw))
+    normalize = normalize_feature if source == "padus" else normalize_agfc_feature
+    feats = await asyncio.to_thread(lambda: [f for f in (normalize(x, tol, lat_c) for x in raw) if f])
+    log.info("public lands (%s): cell %d/%d/%d -> %d of %d features kept", source, tz, ix, iy, len(feats), len(raw))
     return feats
 
 
@@ -280,27 +321,31 @@ def _db_store(key: str, ts: float, feats: list) -> None:
         log.warning("could not persist public land cell %s", key, exc_info=True)
 
 
-async def _refresh_cell(key: str, tz: int, ix: int, iy: int) -> list:
-    feats = await _fetch_cell(tz, ix, iy)
+async def _refresh_cell(key: str, source: str, tz: int, ix: int, iy: int) -> list:
+    feats = await _fetch_cell(source, tz, ix, iy)
     now = time.time()
     _mem[key] = (now, feats)
     _db_store(key, now, feats)
     return feats
 
 
-async def get_cell(tz: int, ix: int, iy: int) -> tuple[list, bool]:
-    """(features, fresh). A cell newer than CELL_TTL_S is returned as-is; an older one is refetched, and if
-    USGS is down the old copy is served instead (fresh=False). Raises PublicLandsUnavailable when there is
-    nothing to fall back on."""
-    key = f"plands:{CACHE_SCHEMA}:{tz}:{ix}:{iy}"
+def _ttl(feats: list) -> float:
+    return CELL_TTL_S if feats else EMPTY_CELL_TTL_S
+
+
+async def get_cell(source: str, tz: int, ix: int, iy: int) -> tuple[list, bool]:
+    """(features, fresh). A cell younger than its TTL is returned as-is (30 days; an empty cell only 1 day, so a
+    glitchy empty answer can't hide land for a month); an older one is refetched, and if the service is down the
+    old copy is served instead (fresh=False). Raises PublicLandsUnavailable when there is nothing to fall back on."""
+    key = f"plands:{CACHE_SCHEMA}:{tz}:{ix}:{iy}" if source == "padus" else f"plands:{CACHE_SCHEMA}:agfc:{tz}:{ix}:{iy}"
     entry = _mem.get(key) or _db_load(key)
     if entry:
         _mem[key] = entry
-        if time.time() - entry[0] < CELL_TTL_S:
+        if time.time() - entry[0] < _ttl(entry[1]):
             return entry[1], True
     task = _inflight.get(key)
     if task is None or task.done():
-        task = asyncio.ensure_future(_refresh_cell(key, tz, ix, iy))
+        task = asyncio.ensure_future(_refresh_cell(key, source, tz, ix, iy))
         _inflight[key] = task
 
         def _cleanup(t: asyncio.Future, key: str = key) -> None:
@@ -318,8 +363,88 @@ async def get_cell(tz: int, ix: int, iy: int) -> tuple[list, bool]:
         raise
 
 
+def prune_cache(max_age_s: float = PRUNE_AFTER_S) -> int:
+    """Drop cells nobody has needed for a long time (from memory and Postgres); returns how many rows went."""
+    cutoff = time.time() - max_age_s
+    for k in [k for k, (ts, _f) in _mem.items() if ts < cutoff]:
+        del _mem[k]
+    try:
+        with Session(engine) as s:
+            n = s.execute(delete(PublicLandCell).where(PublicLandCell.fetched_at < cutoff)).rowcount or 0
+            s.commit()
+        return n
+    except Exception:
+        log.debug("public land cache prune failed", exc_info=True)
+        return 0
+
+
 class BadBounds(ValueError):
     """The requested map area is invalid, too zoomed out, or too large."""
+
+
+def _polygons(geom: dict) -> list:
+    return [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
+
+
+def _in_polygon(x: float, y: float, rings: list) -> bool:
+    """Even-odd ray casting over a polygon's outer ring and holes."""
+    inside = False
+    for ring in rings:
+        j = len(ring) - 1
+        for i in range(len(ring)):
+            xi, yi, xj, yj = ring[i][0], ring[i][1], ring[j][0], ring[j][1]
+            if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+                inside = not inside
+            j = i
+    return inside
+
+
+def _agfc_index(agfc_feats: list) -> list:
+    index = []
+    for f in agfc_feats:
+        for poly in _polygons(f["geometry"]):
+            xs = [p[0] for p in poly[0]]
+            ys = [p[1] for p in poly[0]]
+            index.append(((min(xs), min(ys), max(xs), max(ys)), poly))
+    return index
+
+
+def _covered_share(feature: dict, index: list, grid: int = 10) -> float:
+    """Roughly what share of this feature's area lies inside AGFC polygons, from a grid of interior sample
+    points. (Sampling the outline instead would be useless here: when two agencies draw the same boundary,
+    outline points sit right on the AGFC edge and land inside or outside at random.)"""
+    polys = _polygons(feature["geometry"])
+    xs = [p[0] for poly in polys for p in poly[0]]
+    ys = [p[1] for poly in polys for p in poly[0]]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    samples = []
+    for i in range(grid):
+        for j in range(grid):
+            x, y = x0 + (i + 0.5) * (x1 - x0) / grid, y0 + (j + 0.5) * (y1 - y0) / grid
+            if any(_in_polygon(x, y, poly) for poly in polys):
+                samples.append((x, y))
+    if not samples:                                  # a sliver too thin for the grid: use one vertex-average point
+        ring = polys[0][0]
+        samples = [(sum(p[0] for p in ring) / len(ring), sum(p[1] for p in ring) / len(ring))]
+    hits = sum(1 for x, y in samples
+               if any(b[0] <= x <= b[2] and b[1] <= y <= b[3] and _in_polygon(x, y, poly) for b, poly in index))
+    return hits / len(samples)
+
+
+def drop_covered_wildlife(padus_feats: list, agfc_feats: list) -> list:
+    """PAD-US wildlife features that AGFC polygons mostly cover (half or more of their area) are duplicates
+    (drawn twice, slightly off); keep the exact AGFC outline and any PAD-US wildlife unit AGFC doesn't have."""
+    if not agfc_feats:
+        return padus_feats
+    index = _agfc_index(agfc_feats)
+    return [f for f in padus_feats if f["properties"]["kind"] != "wildlife" or _covered_share(f, index) < 0.5]
+
+
+def _touches_arkansas(tz: int, ix: int, iy: int) -> bool:
+    size = cell_deg(tz)
+    west, south = ix * size - 180, iy * size - 90
+    aw, as_, ae, an = ARKANSAS_BBOX
+    return west < ae and west + size > aw and south < an and south + size > as_
 
 
 async def public_lands(south: float, west: float, north: float, east: float, zoom: int) -> dict:
@@ -333,19 +458,25 @@ async def public_lands(south: float, west: float, north: float, east: float, zoo
     if len(cells) > MAX_CELLS:
         raise BadBounds("map area is too large; zoom in")
 
-    results = await asyncio.gather(*(get_cell(tz, x, y) for x, y in cells), return_exceptions=True)
-    features: dict = {}
+    jobs = [("padus", x, y) for x, y in cells] + [("agfc", x, y) for x, y in cells if _touches_arkansas(tz, x, y)]
+    results = await asyncio.gather(*(get_cell(src, tz, x, y) for src, x, y in jobs), return_exceptions=True)
+    padus: dict = {}
+    agfc: dict = {}
     partial = False
-    failures = [r for r in results if isinstance(r, Exception)]
-    for res in results:
+    failures = []
+    for (src, _x, _y), res in zip(jobs, results):
         if isinstance(res, Exception):
             partial = True
+            failures.append(res)
             continue
         feats, fresh = res
         partial = partial or not fresh
+        target = padus if src == "padus" else agfc
         for f in feats:
-            features.setdefault(f["id"], f)
+            target.setdefault(f["id"], f)
+
+    features = drop_covered_wildlife(list(padus.values()), list(agfc.values())) + list(agfc.values())
     if failures and not features:
         raise failures[0] if isinstance(failures[0], PublicLandsUnavailable) else PublicLandsUnavailable(str(failures[0]))
-    return {"type": "FeatureCollection", "features": list(features.values()),
-            "attribution": ATTRIBUTION, "partial": partial}
+    attribution = ATTRIBUTION + ("; " + AGFC_ATTRIBUTION if any(src == "agfc" for src, _x, _y in jobs) else "")
+    return {"type": "FeatureCollection", "features": features, "attribution": attribution, "partial": partial}
