@@ -79,7 +79,11 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   // Re-run the bootstrap load whenever the active region changes — this is
   // what makes "switch region" actually refresh the map/stands/zones/etc,
   // since regionStore.set() already changed what header future api() calls carry.
-  useEffect(() => { loadAll(); }, [loadAll, activeRegion?.id]);
+  // The previous region's features are cleared first so they can't be drawn (or framed) under the new one.
+  useEffect(() => {
+    setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]);
+    loadAll();
+  }, [loadAll, activeRegion?.id]);
 
   const editFeature = useCallback((kind, id) => {
     if (kind === "stand") { const s = stands.find((x) => x.id === id); if (s) setEditingStand(s); }

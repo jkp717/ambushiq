@@ -118,12 +118,36 @@ function standIcon(vectors, rank, selected = false) {
   return L.divIcon({ html, className: "stand-div-icon", iconSize: [dotPx, dotPx], iconAnchor: [dotHalf, dotHalf] });
 }
 
+// The point to show for a corridor: halfway along its length (a corridor has no single location).
+function pathMidpoint(points) {
+  if (!points || !points.length) return null;
+  const k = Math.cos((points[0][0] * Math.PI) / 180);
+  const seg = (a, b) => Math.hypot((b[1] - a[1]) * k, b[0] - a[0]);
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += seg(points[i - 1], points[i]);
+  let left = total / 2;
+  for (let i = 1; i < points.length; i++) {
+    const d = seg(points[i - 1], points[i]);
+    if (left <= d && d > 0) {
+      const t = left / d;
+      return { lat: points[i - 1][0] + (points[i][0] - points[i - 1][0]) * t, lon: points[i - 1][1] + (points[i][1] - points[i - 1][1]) * t };
+    }
+    left -= d;
+  }
+  return { lat: points[0][0], lon: points[0][1] };
+}
+
 // Build a popup with edit/delete buttons and wire them up after it opens.
+// `position` ({lat, lon, label}) adds a "Location / Center  lat, lon" line so every user-placed item shows where it is.
 function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
-                                    dismissed, onDismiss }) {
+                                    dismissed, onDismiss, position }) {
+  const posHtml = position && position.lat != null && position.lon != null
+    ? `<div class="feat-popup-pos"><span>${position.label || "Location"}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
+    : "";
   let html = `<div class="feat-popup">
     <div class="feat-popup-title">${title || "(unnamed)"}</div>
     ${subtitle ? `<div class="feat-popup-sub">${subtitle}</div>` : ""}
+    ${posHtml}
   `;
 
   if (kind === "stand") {
@@ -193,7 +217,7 @@ const HuntMap = forwardRef(function HuntMap({
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null, onPublicLandStatus,
+  userLocation = null, onPublicLandStatus, regionId,
   height = 420,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -275,23 +299,41 @@ const HuntMap = forwardRef(function HuntMap({
     return () => { map.off("click", handler); };
   }, [drawMode, onMapClick]);
 
-  // fit bounds to all features once when stands first arrive
+  // Framing. A region's map is fitted to its features once they have loaded, or centered on the region's own
+  // location when it has none. Switching regions starts over: recenter on the new region straight away and
+  // fit its features when they arrive. The fit waits a moment so stands, zones and corridors (which load
+  // separately) are all in before it frames them.
   const fitted = useRef(false);
+  const seenRegion = useRef(regionId);
+  useEffect(() => {
+    if (seenRegion.current === regionId) return;
+    seenRegion.current = regionId;
+    fitted.current = false;
+    const map = mapRef.current;
+    if (map && center && center.lat != null) map.setView([center.lat, center.lon], 13);
+  }, [regionId]);
+
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || fitted.current) return;
+    if (!ready || !map || fitted.current) return undefined;
     const pts = [...stands.map((s) => [s.lat, s.lon]), ...zones.map((z) => [z.lat, z.lon])];
     corridors.forEach((c) => c.points.forEach((p) => pts.push(p)));
-    if (pts.length) { map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 }); fitted.current = true; }
-  }, [stands, zones, corridors]);
+    if (!pts.length) return undefined;
+    const t = setTimeout(() => {
+      if (fitted.current) return;
+      map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+      fitted.current = true;
+    }, 300);
+    return () => clearTimeout(t);
+  }, [ready, regionId, stands, zones, corridors]);
 
-  // when there are no features to fit, follow the active region's center
+  // With no features to fit, sit on the region's location. Keyed on the coordinates themselves (not the
+  // `center` object, which is a new object every render) so panning isn't undone by unrelated re-renders.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || fitted.current || !center || center.lat == null) return;
-    const hasFeatures = stands.length || zones.length || corridors.length;
-    if (!hasFeatures) map.setView([center.lat, center.lon], 13);
-  }, [center, stands.length, zones.length, corridors.length]);
+    if (!ready || !map || fitted.current || !center || center.lat == null) return;
+    if (!(stands.length || zones.length || corridors.length)) map.setView([center.lat, center.lon], 13);
+  }, [ready, center?.lat, center?.lon]);
 
   // render zones
   useEffect(() => {
@@ -316,6 +358,7 @@ const HuntMap = forwardRef(function HuntMap({
       else if (!drawMode) bindFeaturePopup(circle, {
         title: z.name || `${z.kind} zone`,
         subtitle: `${z.kind} · ${z.radius_m} m${active ? "" : " · inactive"}`,
+        position: { lat: z.lat, lon: z.lon, label: "Center" },
         kind: z.kind === "food" ? "food" : "bedding", id: z.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });
       circle.addTo(g);
@@ -335,6 +378,7 @@ const HuntMap = forwardRef(function HuntMap({
       if (selectMode) bindToggle(line, "corridor", c.id);
       else if (!drawMode) bindFeaturePopup(line, {
         title: c.name || "deer corridor", subtitle: `${c.points.length} points`,
+        position: (() => { const m = pathMidpoint(c.points); return m && { ...m, label: "Center" }; })(),
         kind: "corridor", id: c.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });
       line.addTo(g);
@@ -361,7 +405,7 @@ const HuntMap = forwardRef(function HuntMap({
       } else if (!drawMode) {
         bindFeaturePopup(m, {
           title: sg.name,
-          subtitle: `${sg.kind} · ${(+sg.lat).toFixed(4)}, ${(+sg.lon).toFixed(4)}`,
+          subtitle: sg.kind, position: { lat: sg.lat, lon: sg.lon },
           kind: sg.kind, id: sg.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
         });
       }
@@ -422,7 +466,7 @@ const HuntMap = forwardRef(function HuntMap({
       } else if (!drawMode) {
         bindFeaturePopup(circle, {
           title: `Scouting suggestion (${Math.round(sg.score)}/100)`,
-          subtitle: sg.reasoning?.text || "",
+          subtitle: sg.reasoning?.text || "", position: { lat: sg.lat, lon: sg.lon, label: "Center" },
           kind: "suggestion", id: sg.id,
           dismissed, onDismiss: onDismissSuggestion, onDelete: onDeleteFeature,
         });
@@ -713,7 +757,7 @@ const HuntMap = forwardRef(function HuntMap({
           m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection instead
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+            title: s.name, subtitle, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
         }
       } else {
@@ -729,7 +773,7 @@ const HuntMap = forwardRef(function HuntMap({
           // no popup while selecting
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+            title: s.name, subtitle, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
         }
         m.addTo(g);

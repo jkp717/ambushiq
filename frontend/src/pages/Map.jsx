@@ -645,7 +645,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
-            userLocation={userLocation} onPublicLandStatus={setLandStatus}
+            userLocation={userLocation} onPublicLandStatus={setLandStatus} regionId={activeRegion.id}
             height="100%" />
         </div>
         <div className="layer-overlay">

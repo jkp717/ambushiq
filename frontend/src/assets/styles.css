@@ -777,6 +777,8 @@ input[type="checkbox"], input[type="radio"] {
 /* feature popup styles (used by leaflet popups) */
 .feat-popup-title  { font-weight: 600; font-size: 13.5px; margin-bottom: 2px; }
 .feat-popup-sub    { font-size: 11.5px; color: #555; margin-bottom: 8px; }
+.feat-popup-pos    { font-size: 11.5px; color: #555; margin: -4px 0 8px; font-variant-numeric: tabular-nums; user-select: all; }
+.feat-popup-pos span { font-weight: 600; margin-right: 4px; }
 .feat-popup-actions { display: flex; gap: 6px; }
 .feat-popup-btn    { font-size: 12px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--bord2); background: var(--bg); color: var(--txt); cursor: pointer; }
 .feat-popup-btn:hover { background: var(--surf); }
