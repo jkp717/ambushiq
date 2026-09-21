@@ -180,10 +180,13 @@ class NWSProvider(WeatherProvider):
 
     async def fetch(self, lat: float, lon: float, days: int, property_tz_name: str) -> dict:
         headers = {"User-Agent": "(AmbushIQ, https://github.com/jkp717/ambushiq)"}
-        async with httpx.AsyncClient(headers=headers, timeout=20) as client:
-            pts = await client.get(f"https://api.weather.gov/points/{lat},{lon}")
-            if pts.status_code != 200:
-                raise WeatherError(f"NWS points lookup failed ({pts.status_code}) — likely outside US coverage")
+        # api.weather.gov answers a /points request with more than 4 decimal places with a 301 to the
+        # 4-decimal URL (httpx doesn't follow redirects by default), so send 4 decimals and follow any redirect.
+        async with httpx.AsyncClient(headers=headers, timeout=20, follow_redirects=True) as client:
+            pts = await client.get(f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}")
+            if pts.status_code == 404:
+                raise WeatherError("NWS has no forecast for this location — likely outside US coverage")
+            pts.raise_for_status()   # 5xx is retried by the caller; other errors surface with their status
             pts_j = pts.json()["properties"]
             tz_name = pts_j.get("timeZone") or property_tz_name
             grid_url = pts_j["forecastGridData"]
