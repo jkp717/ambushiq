@@ -3,10 +3,11 @@ import { Navigation2 } from "lucide-react";
 import { placeEdgeArrow } from "../utils/edgeIndicator.js";
 
 // Map controls the arrow must not sit on (looked up inside the map page each time, so panels that open
-// or close are respected).
+// or close are respected). The bottom time-sheet tab is handled separately: a strip along the bottom edge
+// is reserved for it, so an arrow for a device due south sits above the tab instead of being pushed aside.
 const OBSTACLES = [
   ".layer-overlay", ".map-weather-card", ".map-scout-progress", ".map-add-btn",
-  ".leaflet-control-zoom", ".leaflet-control-layers", ".bottom-sheet-tab",
+  ".leaflet-control-zoom", ".leaflet-control-layers",
 ].join(",");
 
 /* A small arrow on the edge of the map pointing at the device's location whenever that location is
@@ -57,7 +58,9 @@ function LocationEdgeIndicator({ getMap, location }) {
         return { left: r.left - bodyRect.left - 6, top: r.top - bodyRect.top - 6, right: r.right - bodyRect.left + 6, bottom: r.bottom - bodyRect.top + 6 };
       }).filter((o) => o.right > o.left && o.bottom > o.top);
 
-      const next = placeEdgeArrow({ px, py, width: bodyRect.width, visHeight: bodyRect.height - covered, obstacles });
+      const tab = page && page.querySelector(".bottom-sheet-tab");
+      const reserveBottom = tab ? tab.getBoundingClientRect().height + 6 : 0;
+      const next = placeEdgeArrow({ px, py, width: bodyRect.width, visHeight: bodyRect.height - covered, obstacles, reserveBottom });
       setArrow((prev) => {
         if (!next || !prev) return next;
         return Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 && Math.abs(prev.angle - next.angle) < 0.5 ? prev : next;

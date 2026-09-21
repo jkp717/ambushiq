@@ -307,6 +307,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       denied: "Location permission was denied. Allow location for this site in your phone's settings to show your position.",
       unavailable: "This device or browser doesn't support location.",
       insecure: "Location needs a secure (HTTPS) connection.",
+      nofix: "Couldn't get a location fix. Turn on location services for this device and allow them for your browser.",
     }[geo.status];
     if (problem) { setLocationOn(false); setErr(problem); }
   }, [geo.status, locationOn]);
