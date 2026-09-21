@@ -107,7 +107,7 @@ function ActivityChart({ hours, onViewPhotos }) {
             {onViewPhotos && (
               <button type="button" className="act-tip-btn" disabled={shown.total === 0}
                 onClick={() => onViewPhotos(shown.hour)}>
-                <Images size={14} /> View photos
+                <Images size={11} /> View photos
               </button>
             )}
             {onViewPhotos && shown.total > 0 && <div className="act-tip-note">The gallery lists every photo, so it can show more than the count (a visit is counted once).</div>}
