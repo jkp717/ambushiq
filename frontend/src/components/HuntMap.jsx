@@ -235,6 +235,10 @@ const HuntMap = forwardRef(function HuntMap({
         return;
       }
       const map = L.map(mapEl.current, { zoomControl: true });
+      // Public land gets its own pane below the vector overlay pane (400). Leaflet stacks shapes in the order
+      // they were added, and the land arrives after your zones, corridors and suggestions have been drawn, so
+      // without this it would sit on top of them and swallow their clicks.
+      map.createPane("publicLandPane").style.zIndex = 380;
       // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
       // from IndexedDB when it's been downloaded for offline use, network otherwise.
       const topo = L.tileLayer.offline(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
@@ -248,7 +252,7 @@ const HuntMap = forwardRef(function HuntMap({
         imagery: { ...TILE_SOURCES.find((t) => t.id === "imagery"), layer: imagery },
       };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
-      // "publicLand" goes first so every other layer draws on top of the land tint
+      // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers
       // "location" (the device's blue dot) goes last so it draws above everything else
       ["publicLand", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
@@ -484,6 +488,7 @@ const HuntMap = forwardRef(function HuntMap({
     if (!features.length) return;
     const interactive = !drawMode && !selectMode;   // clicks must reach the map while drawing or selecting
     L.geoJSON({ type: "FeatureCollection", features }, {
+      pane: "publicLandPane",
       style: (f) => landStyle(f.properties, interactive),
       onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(landPopup(f.properties), { minWidth: 200 }); },
     }).addTo(g);
