@@ -10,7 +10,7 @@ function fmtDay(iso) {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, onGoSetup }) {
+function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, onViewPhotos }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -57,7 +57,7 @@ function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, onGoSe
                 {data.date_from === data.date_to ? fmtDay(data.date_from) : `${fmtDay(data.date_from)} - ${fmtDay(data.date_to)}`}
                 {" "}({data.days} day{data.days === 1 ? "" : "s"}) - {data.total} sighting{data.total === 1 ? "" : "s"}
               </div>
-              <ActivityChart hours={data.hours} />
+              <ActivityChart hours={data.hours} onViewPhotos={onViewPhotos} />
             </>
       )}
 

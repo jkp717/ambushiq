@@ -42,6 +42,12 @@ function CamerasPage({ stands }) {
     setGalleryFilters(prune);
   }, [cameras]);
 
+  // From an activity-chart bar: the Gallery with the same filters plus that hour of the day.
+  function viewHourPhotos(hour) {
+    setGalleryFilters({ ...activityFilters, hourFrom: hour, hourTo: hour + 1, includeEmpty: false });
+    setTab("gallery");
+  }
+
   function viewPhotos(cam) {
     setGalleryFilters({ ...EMPTY_FILTERS, cameraIds: [cam.id] });
     setTab("gallery");
@@ -59,7 +65,7 @@ function CamerasPage({ stands }) {
       </div>
 
       {tab === "activity" && (
-        <DailyActivityTab cameras={cameras} speciesOptions={speciesOptions}
+        <DailyActivityTab cameras={cameras} speciesOptions={speciesOptions} onViewPhotos={viewHourPhotos}
           filters={activityFilters} setFilters={setActivityFilters} onGoSetup={() => setTab("setup")} />
       )}
       {tab === "gallery" && (
