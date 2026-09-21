@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { TILE_SOURCES } from "../utils/tileSources.js";
 import { clamp } from "../utils/geo.js";
+import { api } from "../services/api.js";
 
 /* global L */
 
@@ -22,6 +23,40 @@ const COLORS = {
   selected: "#F5A300",
   userLocation: "#4285F4",   // Google's location blue
 };
+
+// Public land (USGS PAD-US via /api/public-lands). Outline + tint by kind of land; closed land is a red dashed outline.
+const PUBLIC_LAND_MIN_ZOOM = 11;
+const LAND_COLORS = {
+  wildlife: "#D81B60", forest: "#2E8B57", refuge: "#1976D2", federal: "#B8860B", state: "#5C6BC0", other: "#757575",
+};
+const LAND_KIND_LABEL = {
+  wildlife: "State wildlife area (likely a WMA)", forest: "National forest / Forest Service land",
+  refuge: "National wildlife refuge", federal: "Federal land", state: "State land", other: "Other protected land",
+};
+const LAND_ACCESS_LABEL = {
+  open: "Open to the public", restricted: "Restricted (permit, season or other limits)",
+  closed: "Closed to the public", unknown: "Unknown",
+};
+const escHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function landStyle(p, interactive) {
+  const closed = p.access === "closed";
+  return {
+    color: closed ? "#C62828" : LAND_COLORS[p.kind] || LAND_COLORS.other,
+    weight: p.kind === "wildlife" ? 2.5 : 1.5, dashArray: closed ? "6 5" : null,
+    fillColor: LAND_COLORS[p.kind] || LAND_COLORS.other, fillOpacity: 0.14, interactive,
+  };
+}
+
+function landPopup(p) {
+  return `<div class="feat-popup">
+    <div class="feat-popup-title">${escHtml(p.name)}</div>
+    <div class="feat-popup-sub">${escHtml(LAND_KIND_LABEL[p.kind] || LAND_KIND_LABEL.other)} · ${escHtml(p.designation)}</div>
+    <div class="land-row"><b>Manager:</b> ${escHtml(p.manager)}</div>
+    <div class="land-row"><b>Public access:</b> ${escHtml(LAND_ACCESS_LABEL[p.access] || LAND_ACCESS_LABEL.unknown)}</div>
+    <div class="land-note">Shows who manages the land and its general public access, not hunting rules. ${p.kind === "wildlife" ? "Wildlife areas usually need a hunting license and follow their own rules. " : ""}Verify seasons, permits and boundaries with the managing agency.</div>
+  </div>`;
+}
 
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
 function standIcon(vectors, rank, selected = false) {
@@ -152,7 +187,7 @@ const HuntMap = forwardRef(function HuntMap({
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null,
+  userLocation = null, onPublicLandStatus,
   height = 420,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -207,9 +242,10 @@ const HuntMap = forwardRef(function HuntMap({
         imagery: { ...TILE_SOURCES.find((t) => t.id === "imagery"), layer: imagery },
       };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
+      // "publicLand" goes first so every other layer draws on top of the land tint
       // "scent" is added before "stands" so cones render below stand markers
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -427,6 +463,60 @@ const HuntMap = forwardRef(function HuntMap({
       else { beam.style.display = "block"; beam.style.transform = `rotate(${userLocation.heading}deg)`; }
     }
   }, [userLocation, ready]);
+
+  // Public land: fetch the boundaries for the visible area whenever the map settles (debounced) and draw them
+  // as GeoJSON. The fetched features are kept in a ref so switching draw / select mode only restyles them.
+  const landData = useRef({ key: "", features: [] });
+  const landStatusCb = useRef(onPublicLandStatus);
+  landStatusCb.current = onPublicLandStatus;
+  const drawLandRef = useRef(() => {});
+  drawLandRef.current = () => {
+    const g = layerGroups.current.publicLand;
+    if (!g) return;
+    g.clearLayers();
+    const { features } = landData.current;
+    if (!features.length) return;
+    const interactive = !drawMode && !selectMode;   // clicks must reach the map while drawing or selecting
+    L.geoJSON({ type: "FeatureCollection", features }, {
+      style: (f) => landStyle(f.properties, interactive),
+      onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(landPopup(f.properties), { minWidth: 200 }); },
+    }).addTo(g);
+  };
+  useEffect(() => { if (ready) drawLandRef.current(); }, [ready, drawMode, selectMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const say = (s) => landStatusCb.current && landStatusCb.current(s);
+    const reset = () => { landData.current = { key: "", features: [] }; drawLandRef.current(); };
+    if (!layers.publicLand) { reset(); say("off"); return undefined; }
+
+    let timer = null, ctrl = null, seq = 0;
+    const load = async () => {
+      const zoom = map.getZoom();
+      if (zoom < PUBLIC_LAND_MIN_ZOOM) { if (ctrl) ctrl.abort(); reset(); say("zoom"); return; }
+      const b = map.getBounds();
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+      const mine = ++seq;
+      say("loading");
+      try {
+        const q = new URLSearchParams({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(), zoom });
+        const j = await api(`/public-lands?${q}`, { signal: ctrl.signal });
+        if (mine !== seq) return;
+        const key = j.features.map((f) => f.id).sort().join(",");
+        if (key !== landData.current.key) { landData.current = { key, features: j.features }; drawLandRef.current(); }
+        say(j.partial ? "partial" : "ok");
+      } catch (e) {
+        if (e.name === "AbortError" || mine !== seq) return;
+        say("error");
+      }
+    };
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(load, 450); };
+    map.on("moveend", schedule);
+    schedule();
+    return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
+  }, [ready, layers.publicLand]);
 
   // Select mode box tool: drag a rectangle (desktop: hold Shift; touch: turn the Box tool on) and
   // report the keys of every visible feature it covers. Uses raw pointer events on the map

@@ -80,6 +80,17 @@ function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
   );
 }
 
+const LAND_HINTS = {
+  zoom: "Zoom in to see public land",
+  loading: "Loading public land...",
+  error: "Public land is unavailable right now",
+  partial: "Showing saved public land data",
+};
+const LAND_LEGEND = [
+  ["#D81B60", "State wildlife area (WMA)"], ["#2E8B57", "National forest"], ["#1976D2", "Wildlife refuge"],
+  ["#B8860B", "Other federal"], ["#5C6BC0", "State land"], ["#C62828", "Closed to public", true],
+];
+
 function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
@@ -97,7 +108,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true });
   const [layersOpen, setLayersOpen] = useState(false);
 
   // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
@@ -117,6 +128,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
 
   const [pendingName, setPendingName] = useState(null);
   const [err, setErr] = useState(null);
+  const [landStatus, setLandStatus] = useState("off");   // public land layer: off | zoom | loading | ok | partial | error
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
@@ -644,7 +656,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
-            userLocation={userLocation}
+            userLocation={userLocation} onPublicLandStatus={setLandStatus}
             height="100%" />
         </div>
         <div className="layer-overlay">
@@ -655,6 +667,17 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
               <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
+              <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} color="#D81B60" label="Public land" />
+              {layers.publicLand && (
+                <div className="land-legend">
+                  {LAND_HINTS[landStatus] && <div className="land-hint">{LAND_HINTS[landStatus]}</div>}
+                  {LAND_LEGEND.map(([color, label, dashed]) => (
+                    <div key={label} className="land-legend-row">
+                      <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />{label}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
