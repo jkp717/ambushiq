@@ -222,7 +222,7 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
 _fc_cache: dict[str, tuple[float, dict]] = {}
 FC_TTL = 3600              # a forecast younger than this is served as-is
 FC_MAX_STALE = 24 * 3600   # older than FC_TTL but younger than this: served at once while a refresh runs behind it
-FC_SCHEMA = "v2"           # bump when the normalized forecast shape changes so persisted old-shape rows are ignored
+FC_SCHEMA = "v3"           # bump when the normalized forecast shape changes so persisted old-shape rows are ignored
 PERSIST_MAX_AGE = 7 * 24 * 3600   # persisted rows older than this are pruned
 _inflight: dict[str, asyncio.Future] = {}
 
