@@ -34,9 +34,8 @@ class SettingsIn(BaseModel):
     thermal_wind_exponent: float | None = None
     thermal_midday_discount: float | None = None
     weather_provider: str | None = None
-    weather_provider_api_key: str | None = None
     weather_secondary_provider: str | None = None
-    weather_secondary_provider_api_key: str | None = None
+    weather_provider_api_keys: dict[str, str] | None = None
     scout_radius_default_m: float | None = None
     scout_radius_min_m: float | None = None
     scout_radius_max_m: float | None = None

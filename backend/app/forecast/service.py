@@ -442,13 +442,13 @@ async def _fetch_and_store(key: str, lat: float, lon: float, days: int, tz_name:
     """One real upstream fetch (primary + optional solar backfill), gap-filled and cached in memory and Postgres."""
     primary_id = str(settings.get("weather_provider") or "open_meteo")
     secondary_id = str(settings.get("weather_secondary_provider") or "")
-    primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get("weather_provider_api_key")))
+    primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get(f"weather_api_key__{primary_id}")))
     t0 = time.monotonic()
     forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
     log.info("weather fetched from %s in %.1fs (%d days)", primary_id, time.monotonic() - t0, days)
 
     if not primary.has_solar and secondary_id and secondary_id != primary_id:
-        secondary = get_weather_provider(secondary_id, decrypt_settings_key(settings.get("weather_secondary_provider_api_key")))
+        secondary = get_weather_provider(secondary_id, decrypt_settings_key(settings.get(f"weather_api_key__{secondary_id}")))
         try:
             secondary_forecast = await asyncio.wait_for(secondary.fetch(lat, lon, days, tz_name), ATTEMPT_TIMEOUT_S)
             _backfill_from_secondary(forecast["hourly"], secondary_forecast["hourly"])

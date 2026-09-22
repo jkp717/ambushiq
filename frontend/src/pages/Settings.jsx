@@ -11,8 +11,7 @@ import InfoTip from "../components/ui/InfoTip.jsx";
 function SettingsPage() {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
   const [weatherProviders, setWeatherProviders] = useState([]);
-  const [weatherKeyInput, setWeatherKeyInput] = useState("");
-  const [weatherSecondaryKeyInput, setWeatherSecondaryKeyInput] = useState("");
+  const [weatherKeyInputs, setWeatherKeyInputs] = useState({}); // { [providerId]: typedKey }
   const { canInstall, promptInstall, installed, isIOS } = useInstallPrompt();
   const [showIOSHelp, setShowIOSHelp] = useState(false);
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn't load settings.")); }, []);
@@ -21,15 +20,15 @@ function SettingsPage() {
   async function save() {
     try {
       const body = { ...s };
-      if (weatherKeyInput) body.weather_provider_api_key = weatherKeyInput;
-      if (weatherSecondaryKeyInput) body.weather_secondary_provider_api_key = weatherSecondaryKeyInput;
+      const keys = Object.fromEntries(Object.entries(weatherKeyInputs).filter(([, v]) => v));
+      if (Object.keys(keys).length) body.weather_provider_api_keys = keys;
       const r = await api("/settings", { method: "PUT", body: JSON.stringify(body) });
-      setS(r); setWeatherKeyInput(""); setWeatherSecondaryKeyInput("");
+      setS(r); setWeatherKeyInputs({});
       setSaved(true); setTimeout(() => setSaved(false), 1800);
     } catch { setErr("Couldn't save settings."); }
   }
-  async function clearWeatherKey(field) {
-    try { const r = await api("/settings", { method: "PUT", body: JSON.stringify({ [field]: "" }) }); setS(r); }
+  async function clearWeatherKey(providerId) {
+    try { const r = await api("/settings", { method: "PUT", body: JSON.stringify({ weather_provider_api_keys: { [providerId]: "" } }) }); setS(r); }
     catch { setErr("Couldn't clear key."); }
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80, scent_gate_floor: 0.4, rut_weight_strength: 1.0 }); }
@@ -88,11 +87,12 @@ function SettingsPage() {
         {selectedProvider?.needs_key && (
           <div style={{ marginTop: 10 }}>
             <Field label={s.weather_provider_api_key_set ? "API key (already set — leave blank to keep)" : "API key"}>
-              <input type="password" value={weatherKeyInput} onChange={(e) => setWeatherKeyInput(e.target.value)}
+              <input type="password" value={weatherKeyInputs[selectedProvider.id] || ""}
+                onChange={(e) => setWeatherKeyInputs({ ...weatherKeyInputs, [selectedProvider.id]: e.target.value })}
                 placeholder={s.weather_provider_api_key_set ? "••••••••" : `${selectedProvider.label} API key`} />
             </Field>
             {s.weather_provider_api_key_set && (
-              <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey("weather_provider_api_key")}>Clear stored key</button>
+              <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey(selectedProvider.id)}>Clear stored key</button>
             )}
           </div>
         )}
@@ -112,11 +112,12 @@ function SettingsPage() {
             {selectedSecondary?.needs_key && (
               <div style={{ marginTop: 10 }}>
                 <Field label={s.weather_secondary_provider_api_key_set ? "Secondary API key (already set — leave blank to keep)" : "Secondary API key"}>
-                  <input type="password" value={weatherSecondaryKeyInput} onChange={(e) => setWeatherSecondaryKeyInput(e.target.value)}
+                  <input type="password" value={weatherKeyInputs[selectedSecondary.id] || ""}
+                    onChange={(e) => setWeatherKeyInputs({ ...weatherKeyInputs, [selectedSecondary.id]: e.target.value })}
                     placeholder={s.weather_secondary_provider_api_key_set ? "••••••••" : `${selectedSecondary.label} API key`} />
                 </Field>
                 {s.weather_secondary_provider_api_key_set && (
-                  <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey("weather_secondary_provider_api_key")}>Clear stored key</button>
+                  <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey(selectedSecondary.id)}>Clear stored key</button>
                 )}
               </div>
             )}
