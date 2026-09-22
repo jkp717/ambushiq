@@ -163,6 +163,45 @@ def test_extend_with_secondary_fills_all_fields_not_just_hard_required():
     assert forecast["hourly"]["cloud_cover"][-1] == 55.0
 
 
+def _partial_day_hourly(start_hour, n_hours, day="2025-11-08"):
+    n = n_hours
+    return {
+        "time": [f"{day}T{start_hour + i:02d}:00" for i in range(n)],
+        "wind_speed_10m": [5.0] * n,
+        "wind_direction_10m": [180.0] * n,
+        "wind_gusts_10m": [8.0] * n,
+        "shortwave_radiation": [100.0] * n,
+        "temperature_2m": [10.0] * n,
+    }
+
+
+def test_pad_to_local_midnight_prepends_none_rows_before_first_hour():
+    hourly = _partial_day_hourly(14, 10)
+    service._pad_to_local_midnight(hourly)
+    assert len(hourly["time"]) == 24
+    assert hourly["time"][0] == "2025-11-08T00:00"
+    assert hourly["time"][14] == "2025-11-08T14:00"
+    assert all(v is None for v in hourly["wind_speed_10m"][:14])
+    assert hourly["wind_speed_10m"][14] == 5.0
+
+
+def test_pad_to_local_midnight_is_noop_when_already_at_midnight():
+    hourly = _hourly(24)
+    original = {k: list(v) for k, v in hourly.items()}
+    service._pad_to_local_midnight(hourly)
+    assert hourly == original
+
+
+def test_pad_to_local_midnight_then_safety_defaults_fills_leading_gap():
+    hourly = _partial_day_hourly(14, 10)
+    service._pad_to_local_midnight(hourly)
+    fc = {"hourly": hourly, "daily": {"sunrise": ["2025-11-08T06:30"], "sunset": ["2025-11-08T18:00"]}}
+    service._apply_safety_defaults(fc)
+    assert None not in hourly["wind_speed_10m"] and None not in hourly["wind_direction_10m"]
+    assert None not in hourly["temperature_2m"] and None not in hourly["shortwave_radiation"]
+    assert hourly["wind_speed_10m"][0] == 5.0  # leading gap carried back from first known hour
+
+
 def test_nws_interval_precip_is_split_across_hours():
     start = datetime(2025, 11, 8, 0, tzinfo=timezone.utc)
     raw = [{"validTime": "2025-11-08T00:00:00+00:00/PT6H", "value": 6.0}]

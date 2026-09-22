@@ -330,6 +330,27 @@ def _fill_gaps(vals: list, default: Optional[float], interpolate: bool = False) 
                 vals[i] = vals[a]
 
 
+def _pad_to_local_midnight(hourly: dict) -> None:
+    """Some providers (Tomorrow.io, NWS) start their hourly timeline at the
+    request time rather than local midnight, since forecast APIs are
+    inherently forward-looking. Prepend None-valued hours from local
+    midnight up to the first hour actually returned, so "today" always has
+    a full 00:00-23:00 grid; _apply_safety_defaults then fills the gap."""
+    times = hourly.get("time", [])
+    if not times:
+        return
+    first = datetime.fromisoformat(times[0])
+    if first.hour == 0 and first.minute == 0:
+        return
+    day_start = first.replace(hour=0, minute=0, second=0, microsecond=0)
+    missing = [(day_start + timedelta(hours=h)).isoformat(timespec="minutes") for h in range(first.hour)]
+    n = len(missing)
+    hourly["time"][0:0] = missing
+    for field in hourly:
+        if field != "time":
+            hourly[field][0:0] = [None] * n
+
+
 _HARD_REQUIRED_HOURLY_FIELDS = ("wind_direction_10m", "wind_speed_10m", "wind_gusts_10m",
                                 "shortwave_radiation", "temperature_2m")
 
@@ -490,6 +511,7 @@ async def _fetch_and_store(key: str, lat: float, lon: float, days: int, tz_name:
     primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get(f"weather_api_key__{primary_id}")))
     t0 = time.monotonic()
     forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
+    _pad_to_local_midnight(forecast["hourly"])
     forecast["daily"]["source"] = [primary.label] * len(forecast["daily"].get("sunrise", []))
     covered_days = _hourly_day_count(forecast["hourly"])
     log.info("weather fetched from %s in %.1fs (%d/%d days covered)",

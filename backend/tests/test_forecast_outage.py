@@ -180,6 +180,27 @@ def test_extension_failure_falls_back_to_primary_only(setup, monkeypatch):
     assert out["tag"] == "short"
 
 
+def test_primary_starting_mid_day_is_padded_to_local_midnight(setup, monkeypatch):
+    monkeypatch.setattr(service, "get_settings", lambda: {"weather_provider": "open_meteo"})
+    partial = {
+        "hourly": {
+            "time": [f"2025-11-10T{h:02d}:00" for h in range(14, 24)],
+            "wind_direction_10m": [180.0] * 10, "wind_speed_10m": [5.0] * 10,
+            "wind_gusts_10m": [7.0] * 10, "shortwave_radiation": [0.0] * 10,
+            "temperature_2m": [8.0] * 10,
+        },
+        "daily": {"sunrise": ["2025-11-10T06:30"], "sunset": ["2025-11-10T18:00"]},
+        "utc_offset_seconds": -21600, "tag": "partial",
+    }
+    setup(FlakyProvider([partial]))
+
+    out = run(service.get_forecast(LAT, LON, days=14))
+
+    assert out["hourly"]["time"][0] == "2025-11-10T00:00"
+    assert None not in out["hourly"]["wind_speed_10m"]
+    assert service._hourly_day_count(out["hourly"]) == 1
+
+
 def test_fresh_cache_is_served_without_a_fetch(setup):
     prov = setup(FlakyProvider([_forecast("one"), _forecast("two")]))
     run(service.get_forecast(LAT, LON, days=14))
