@@ -88,6 +88,33 @@ function trailPopup(p) {
   </div>`;
 }
 
+// General roads (USGS National Map transportation) via /api/roads. Drawn above the public-land tint
+// and the MVUM forest-roads-only Trails layer so roads stay legible regardless of what else is on.
+const ROADS_MIN_ZOOM = 11;
+const ROAD_STYLES = {
+  highway:   { color: "#B71C1C", weight: 3 },
+  secondary: { color: "#D84315", weight: 2.5 },
+  connector: { color: "#616161", weight: 1.5 },
+  local:     { color: "#9E9E9E", weight: 1 },
+};
+const ROAD_KIND_LABEL = {
+  highway: "Controlled-access highway", secondary: "Secondary highway",
+  connector: "Local connecting road", local: "Local road",
+};
+
+function roadStyle(p, interactive) {
+  const s = ROAD_STYLES[p.kind] || ROAD_STYLES.local;
+  return { ...s, opacity: 0.9, interactive };
+}
+
+function roadPopup(p) {
+  return `<div class="feat-popup">
+    <div class="feat-popup-title">${escHtml(p.name)}</div>
+    <div class="feat-popup-sub">${escHtml(ROAD_KIND_LABEL[p.kind] || "Road")}</div>
+    <div class="land-note">USGS National Map road data.</div>
+  </div>`;
+}
+
 // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas) via /api/recreation-sites.
 const RECSITES_MIN_ZOOM = 11;
 const RECSITE_COLORS = { trailhead: "#8D6E00", campground: "#2E7D32", picnic: "#EF6C00", day_use: "#1565C0" };
@@ -267,7 +294,7 @@ const HuntMap = forwardRef(function HuntMap({
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, regionId,
+  userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
   height = 420,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -316,6 +343,8 @@ const HuntMap = forwardRef(function HuntMap({
       // Trails sit above the public-land tint but still below the default overlay pane (400), for
       // the same reason: they're fetched/added after user-drawn features and shouldn't swallow clicks.
       map.createPane("trailsPane").style.zIndex = 390;
+      // Roads sit above both the public-land tint and the MVUM (forest-only) trails/roads layer.
+      map.createPane("roadsPane").style.zIndex = 395;
       // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
       // from IndexedDB when it's been downloaded for offline use, network otherwise.
       const topo = L.tileLayer.offline(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
@@ -332,7 +361,7 @@ const HuntMap = forwardRef(function HuntMap({
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "trails", "roads", "recSites", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -679,6 +708,60 @@ const HuntMap = forwardRef(function HuntMap({
     schedule();
     return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
   }, [ready, layers.trails]);
+
+  // General roads: same fetch/draw pattern as trails/public land, drawn in the higher roadsPane.
+  const roadData = useRef({ key: "", features: [] });
+  const roadsStatusCb = useRef(onRoadsStatus);
+  roadsStatusCb.current = onRoadsStatus;
+  const drawRoadsRef = useRef(() => {});
+  drawRoadsRef.current = () => {
+    const g = layerGroups.current.roads;
+    if (!g) return;
+    g.clearLayers();
+    const { features } = roadData.current;
+    if (!features.length) return;
+    const interactive = !drawMode && !selectMode;
+    L.geoJSON({ type: "FeatureCollection", features }, {
+      pane: "roadsPane",
+      style: (f) => roadStyle(f.properties, interactive),
+      onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(roadPopup(f.properties), { minWidth: 200 }); },
+    }).addTo(g);
+  };
+  useEffect(() => { if (ready) drawRoadsRef.current(); }, [ready, drawMode, selectMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const say = (s) => roadsStatusCb.current && roadsStatusCb.current(s);
+    const reset = () => { roadData.current = { key: "", features: [] }; drawRoadsRef.current(); };
+    if (!layers.roads) { reset(); say("off"); return undefined; }
+
+    let timer = null, ctrl = null, seq = 0;
+    const load = async () => {
+      const zoom = map.getZoom();
+      if (zoom < ROADS_MIN_ZOOM) { if (ctrl) ctrl.abort(); reset(); say("zoom"); return; }
+      const b = map.getBounds();
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+      const mine = ++seq;
+      say("loading");
+      try {
+        const q = new URLSearchParams({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(), zoom });
+        const j = await api(`/roads?${q}`, { signal: ctrl.signal });
+        if (mine !== seq) return;
+        const key = j.features.map((f) => f.id).sort().join(",");
+        if (key !== roadData.current.key) { roadData.current = { key, features: j.features }; drawRoadsRef.current(); }
+        say(j.partial ? "partial" : "ok");
+      } catch (e) {
+        if (e.name === "AbortError" || mine !== seq) return;
+        say("error");
+      }
+    };
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(load, 450); };
+    map.on("moveend", schedule);
+    schedule();
+    return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
+  }, [ready, layers.roads]);
 
   // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas): same fetch/draw pattern,
   // rendered as circle markers via pointToLayer instead of line/polygon styling.

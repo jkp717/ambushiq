@@ -27,6 +27,7 @@ from app.forecast.service import ForecastUnavailable
 from app.publiclands.router import router as publiclands_router
 from app.recsites.router import router as recsites_router
 from app.regions.router import router as regions_router
+from app.roads.router import router as roads_router
 from app.scheduler import start_scheduler
 from app.scouting.router import router as scouting_router
 from app.settings.router import router as settings_router
@@ -92,6 +93,7 @@ app.include_router(publiclands_router)
 app.include_router(trails_router)
 app.include_router(recsites_router)
 app.include_router(regions_router)
+app.include_router(roads_router)
 
 
 # ---------- static frontend ----------
