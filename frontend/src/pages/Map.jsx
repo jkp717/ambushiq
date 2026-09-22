@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
 import { api, apiRetry, tokenStore, regionStore } from "../services/api.js";
 import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
@@ -139,6 +139,8 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   // Updated global map layers (stand-specific elements removed)
   const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true });
   const [layersOpen, setLayersOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites } -> bool, default collapsed
+  const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
 
   // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
   // Selected items are "kind:id" keys (stand | zone | corridor | sign | suggestion).
@@ -694,8 +696,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
               <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
-              <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} color="#D81B60" label="Public land" />
-              {layers.publicLand && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} color="#D81B60" label="Public land" />
+                <button className="chip-expand-btn" onClick={() => toggleLegend("publicLand")}
+                  aria-label={legendOpen.publicLand ? "Collapse legend" : "Expand legend"}>
+                  {legendOpen.publicLand ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+              {legendOpen.publicLand && (
                 <div className="land-legend">
                   {LAND_HINTS[landStatus] && <div className="land-hint">{LAND_HINTS[landStatus]}</div>}
                   {LAND_LEGEND.map(([color, label, dashed]) => (
@@ -705,8 +713,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                   ))}
                 </div>
               )}
-              <LayerChip on={layers.trails} onClick={() => toggle("trails")} color="#8D6E00" label="Trails" />
-              {layers.trails && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <LayerChip on={layers.trails} onClick={() => toggle("trails")} color="#8D6E00" label="Trails" />
+                <button className="chip-expand-btn" onClick={() => toggleLegend("trails")}
+                  aria-label={legendOpen.trails ? "Collapse legend" : "Expand legend"}>
+                  {legendOpen.trails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+              {legendOpen.trails && (
                 <div className="land-legend">
                   {TRAILS_HINTS[trailsStatus] && <div className="land-hint">{TRAILS_HINTS[trailsStatus]}</div>}
                   {TRAILS_LEGEND.map(([color, label, dashed]) => (
@@ -716,8 +730,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                   ))}
                 </div>
               )}
-              <LayerChip on={layers.roads} onClick={() => toggle("roads")} color="#B71C1C" label="Roads" />
-              {layers.roads && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <LayerChip on={layers.roads} onClick={() => toggle("roads")} color="#B71C1C" label="Roads" />
+                <button className="chip-expand-btn" onClick={() => toggleLegend("roads")}
+                  aria-label={legendOpen.roads ? "Collapse legend" : "Expand legend"}>
+                  {legendOpen.roads ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+              {legendOpen.roads && (
                 <div className="land-legend">
                   {ROADS_HINTS[roadsStatus] && <div className="land-hint">{ROADS_HINTS[roadsStatus]}</div>}
                   {ROADS_LEGEND.map(([color, label]) => (
@@ -727,8 +747,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                   ))}
                 </div>
               )}
-              <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} color="#1565C0" dot label="Rec sites" />
-              {layers.recSites && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} color="#1565C0" dot label="Rec sites" />
+                <button className="chip-expand-btn" onClick={() => toggleLegend("recSites")}
+                  aria-label={legendOpen.recSites ? "Collapse legend" : "Expand legend"}>
+                  {legendOpen.recSites ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+              {legendOpen.recSites && (
                 <div className="land-legend">
                   {RECSITES_HINTS[recSitesStatus] && <div className="land-hint">{RECSITES_HINTS[recSitesStatus]}</div>}
                   {RECSITES_LEGEND.map(([color, label]) => (

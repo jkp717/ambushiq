@@ -570,6 +570,14 @@ input[type="checkbox"], input[type="radio"] {
   padding: 8px 6px; border-radius: 10px;
 }
 .layer-chips-panel .chip { background: var(--bg); font-size: 11.5px; }
+/* expand/collapse icon beside a chip that has a legend (public land, trails, roads, rec sites) */
+.chip-expand-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0;
+  border: 1px solid var(--bord); border-radius: 5px; cursor: pointer;
+  background: var(--bg); color: var(--sub);
+}
+.chip-expand-btn:hover { background: rgba(0,0,0,.06); }
 /* public land legend + status, inside the layer panel */
 .land-legend { display: flex; flex-direction: column; gap: 3px; padding: 4px 6px; border-radius: 8px; background: var(--bg); font-size: 11px; color: var(--sub); }
 .land-hint { color: var(--amber); font-weight: 600; }
