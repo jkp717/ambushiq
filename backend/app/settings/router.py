@@ -22,18 +22,14 @@ _WEATHER_KEY_PREFIX = "weather_api_key__"
 _LEGACY_API_KEY_FIELDS = ("weather_provider_api_key", "weather_secondary_provider_api_key")
 
 
-def _provider_key_set(settings: dict, provider_id: str) -> bool:
-    if not provider_id:
-        return False
-    return bool(decrypt_settings_key(settings.get(f"{_WEATHER_KEY_PREFIX}{provider_id}")))
-
-
 def _mask_api_keys(result: dict) -> dict:
-    primary_set = _provider_key_set(result, result.get("weather_provider") or "open_meteo")
-    secondary_set = _provider_key_set(result, result.get("weather_secondary_provider") or "")
+    keys_set = {
+        k[len(_WEATHER_KEY_PREFIX):]: True
+        for k, v in result.items()
+        if k.startswith(_WEATHER_KEY_PREFIX) and decrypt_settings_key(v)
+    }
     result = {k: v for k, v in result.items() if not k.startswith(_WEATHER_KEY_PREFIX) and k not in _LEGACY_API_KEY_FIELDS}
-    result["weather_provider_api_key_set"] = primary_set
-    result["weather_secondary_provider_api_key_set"] = secondary_set
+    result["weather_provider_api_keys_set"] = keys_set
     return result
 
 

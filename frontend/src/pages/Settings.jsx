@@ -67,6 +67,8 @@ function SettingsPage() {
   const needsSecondary = selectedProvider && !selectedProvider.has_solar;
   const secondaryOptions = weatherProviders.filter((p) => p.has_solar && p.id !== selectedProvider?.id);
   const selectedSecondary = weatherProviders.find((p) => p.id === s.weather_secondary_provider);
+  const primaryKeySet = !!s.weather_provider_api_keys_set?.[selectedProvider?.id];
+  const secondaryKeySet = !!s.weather_provider_api_keys_set?.[selectedSecondary?.id];
 
   return (
     <div className="settings-page">
@@ -86,12 +88,12 @@ function SettingsPage() {
         </Field>
         {selectedProvider?.needs_key && (
           <div style={{ marginTop: 10 }}>
-            <Field label={s.weather_provider_api_key_set ? "API key (already set — leave blank to keep)" : "API key"}>
+            <Field label={primaryKeySet ? "API key (already set — leave blank to keep)" : "API key"}>
               <input type="password" value={weatherKeyInputs[selectedProvider.id] || ""}
                 onChange={(e) => setWeatherKeyInputs({ ...weatherKeyInputs, [selectedProvider.id]: e.target.value })}
-                placeholder={s.weather_provider_api_key_set ? "••••••••" : `${selectedProvider.label} API key`} />
+                placeholder={primaryKeySet ? "••••••••" : `${selectedProvider.label} API key`} />
             </Field>
-            {s.weather_provider_api_key_set && (
+            {primaryKeySet && (
               <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey(selectedProvider.id)}>Clear stored key</button>
             )}
           </div>
@@ -111,12 +113,12 @@ function SettingsPage() {
             </Field>
             {selectedSecondary?.needs_key && (
               <div style={{ marginTop: 10 }}>
-                <Field label={s.weather_secondary_provider_api_key_set ? "Secondary API key (already set — leave blank to keep)" : "Secondary API key"}>
+                <Field label={secondaryKeySet ? "Secondary API key (already set — leave blank to keep)" : "Secondary API key"}>
                   <input type="password" value={weatherKeyInputs[selectedSecondary.id] || ""}
                     onChange={(e) => setWeatherKeyInputs({ ...weatherKeyInputs, [selectedSecondary.id]: e.target.value })}
-                    placeholder={s.weather_secondary_provider_api_key_set ? "••••••••" : `${selectedSecondary.label} API key`} />
+                    placeholder={secondaryKeySet ? "••••••••" : `${selectedSecondary.label} API key`} />
                 </Field>
-                {s.weather_secondary_provider_api_key_set && (
+                {secondaryKeySet && (
                   <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey(selectedSecondary.id)}>Clear stored key</button>
                 )}
               </div>
