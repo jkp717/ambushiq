@@ -202,6 +202,7 @@ function DayDetailPanel({ rating, prevRating, day, dayRanked, useProx, setUsePro
           <h2 style={{ fontSize: 16, margin: 0 }}>{day.label}</h2>
           <div className="day-detail-meta">
             <span>☀ {day.sunrise}</span><span>☾ {day.sunset}</span>
+            {day.source && <span style={{ opacity: 0.6 }}>· {day.source}</span>}
             {rating.confidence === "low" && <span className="low-badge">est.</span>}
           </div>
         </div>

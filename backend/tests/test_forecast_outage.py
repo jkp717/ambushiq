@@ -23,12 +23,31 @@ def _forecast(tag="fresh"):
             "daily": {"sunrise": [], "sunset": []}, "utc_offset_seconds": -21600, "tag": tag}
 
 
+def _multi_day_forecast(tag, n_days, start_day=10):
+    times = [f"2025-11-{start_day + d:02d}T{h:02d}:00" for d in range(n_days) for h in range(24)]
+    n = len(times)
+    hourly = {
+        "time": times,
+        "wind_direction_10m": [180.0] * n,
+        "wind_speed_10m": [5.0] * n,
+        "wind_gusts_10m": [7.0] * n,
+        "shortwave_radiation": [0.0] * n,
+        "temperature_2m": [8.0] * n,
+    }
+    daily = {
+        "sunrise": [f"2025-11-{start_day + d:02d}T06:30" for d in range(n_days)],
+        "sunset": [f"2025-11-{start_day + d:02d}T18:00" for d in range(n_days)],
+    }
+    return {"hourly": hourly, "daily": daily, "utc_offset_seconds": -21600, "tag": tag}
+
+
 def _timeouts(n):
     return [httpx.ReadTimeout("slow") for _ in range(n)]
 
 
 class FlakyProvider:
     has_solar = True
+    label = "Test"
 
     def __init__(self, outcomes, delay=0.0):
         self.outcomes, self.calls, self.delay = list(outcomes), 0, delay
@@ -58,6 +77,12 @@ def setup(monkeypatch):
     def install(provider):
         monkeypatch.setattr(service, "get_weather_provider", lambda *_a, **_k: provider)
         return provider
+
+    def install_by_id(providers_by_id):
+        monkeypatch.setattr(service, "get_weather_provider", lambda pid, *_a, **_k: providers_by_id[pid])
+        return providers_by_id
+
+    install.by_id = install_by_id
     return install
 
 
@@ -112,6 +137,47 @@ def test_provider_rejecting_the_key_is_not_retried(setup):
     with pytest.raises(service.ForecastUnavailable) as exc:
         run(service.get_forecast(LAT, LON, days=14))
     assert prov.calls == 1 and "rejected the API key" in str(exc.value)
+
+
+def test_short_primary_is_extended_with_secondary_when_secondary_configured(setup, monkeypatch):
+    monkeypatch.setattr(service, "get_settings", lambda: {
+        "weather_provider": "open_meteo", "weather_secondary_provider": "tomorrow_io",
+    })
+    primary = FlakyProvider([_multi_day_forecast("short", 3)])
+    primary.label = "Primary"
+    secondary = FlakyProvider([_multi_day_forecast("long", 14)])
+    secondary.label = "Secondary"
+    setup.by_id({"open_meteo": primary, "tomorrow_io": secondary})
+
+    out = run(service.get_forecast(LAT, LON, days=14))
+
+    assert service._hourly_day_count(out["hourly"]) == 14
+    assert len(out["daily"]["sunrise"]) == 14
+    assert out["daily"]["source"][:3] == ["Primary"] * 3
+    assert out["daily"]["source"][3:] == ["Secondary"] * 11
+
+
+def test_extension_is_skipped_when_secondary_is_none(setup, monkeypatch):
+    monkeypatch.setattr(service, "get_settings", lambda: {"weather_provider": "open_meteo"})
+    setup(FlakyProvider([_multi_day_forecast("short", 3)]))
+
+    out = run(service.get_forecast(LAT, LON, days=14))
+
+    assert service._hourly_day_count(out["hourly"]) == 3
+
+
+def test_extension_failure_falls_back_to_primary_only(setup, monkeypatch):
+    monkeypatch.setattr(service, "get_settings", lambda: {
+        "weather_provider": "open_meteo", "weather_secondary_provider": "tomorrow_io",
+    })
+    primary = FlakyProvider([_multi_day_forecast("short", 3)])
+    secondary = FlakyProvider([httpx.ReadTimeout("slow")])
+    setup.by_id({"open_meteo": primary, "tomorrow_io": secondary})
+
+    out = run(service.get_forecast(LAT, LON, days=14))
+
+    assert service._hourly_day_count(out["hourly"]) == 3
+    assert out["tag"] == "short"
 
 
 def test_fresh_cache_is_served_without_a_fetch(setup):

@@ -23,7 +23,7 @@ from app.deer_ratings.rating import phase_proximity_multipliers, rut_intensity
 from app.deer_sign.models import DeerSign
 from app.forecast import scoring
 from app.forecast.models import ForecastCache
-from app.forecast.providers import WeatherError, _sun_times_utc, get_weather_provider
+from app.forecast.providers import WeatherError, _empty_hourly, _sun_times_utc, get_weather_provider
 from app.regions.models import Region
 from app.settings.service import _thermal_params, get_settings
 from app.stands.models import Stand
@@ -222,7 +222,7 @@ def proximity_bonus(stand: dict, zones: list, corridors: list, settings: dict,
 _fc_cache: dict[str, tuple[float, dict]] = {}
 FC_TTL = 3600              # a forecast younger than this is served as-is
 FC_MAX_STALE = 24 * 3600   # older than FC_TTL but younger than this: served at once while a refresh runs behind it
-FC_SCHEMA = "v1"           # bump when the normalized forecast shape changes so persisted old-shape rows are ignored
+FC_SCHEMA = "v2"           # bump when the normalized forecast shape changes so persisted old-shape rows are ignored
 PERSIST_MAX_AGE = 7 * 24 * 3600   # persisted rows older than this are pruned
 _inflight: dict[str, asyncio.Future] = {}
 
@@ -350,6 +350,50 @@ def _backfill_from_secondary(hourly: dict, secondary_hourly: dict) -> None:
                 vals[i] = sec_vals[j]
 
 
+def _hourly_day_count(hourly: dict) -> int:
+    """Distinct local calendar dates actually present in hourly["time"] —
+    the primary provider's real day coverage, detected dynamically."""
+    return len({t[:10] for t in hourly.get("time", [])})
+
+
+def _extend_with_secondary(forecast: dict, secondary_forecast: dict, days: int, secondary_label: str) -> None:
+    """Append hourly rows (every field, not just the hard-required ones) plus matching
+    daily sunrise/sunset/source entries for dates the primary provider didn't cover at
+    all, sourced from the secondary provider for those same dates. Never duplicates a
+    date already present. If the secondary also falls short of `days`, the result is
+    simply left shorter than requested — no synthesized days."""
+    hourly, daily = forecast["hourly"], forecast["daily"]
+    sec_hourly = secondary_forecast.get("hourly") or {}
+    sec_daily = secondary_forecast.get("daily") or {}
+
+    covered_dates = {t[:10] for t in hourly.get("time", [])}
+    if len(covered_dates) >= days:
+        return
+
+    field_names = [f for f in _empty_hourly().keys() if f != "time"]
+    for field in field_names:
+        hourly.setdefault(field, [])
+
+    sec_daily_by_date = {s[:10]: i for i, s in enumerate(sec_daily.get("sunrise", []))}
+    for d in sorted({t[:10] for t in sec_hourly.get("time", [])}):
+        if len(covered_dates) >= days or d in covered_dates:
+            continue
+        for i, t in enumerate(sec_hourly.get("time", [])):
+            if t[:10] != d:
+                continue
+            hourly["time"].append(t)
+            for field in field_names:
+                vals = sec_hourly.get(field) or []
+                hourly[field].append(vals[i] if i < len(vals) else None)
+        covered_dates.add(d)
+        j = sec_daily_by_date.get(d)
+        sunset_list = sec_daily.get("sunset") or []
+        if j is not None and j < len(sunset_list):
+            daily.setdefault("sunrise", []).append(sec_daily["sunrise"][j])
+            daily.setdefault("sunset", []).append(sunset_list[j])
+            daily.setdefault("source", []).append(secondary_label)
+
+
 def _apply_safety_defaults(forecast: dict) -> None:
     """Last-resort fill for any hard-required hourly field still missing after
     the (optional) secondary-provider backfill, so the scoring engine — which
@@ -439,19 +483,28 @@ def _fc_key(lat: float, lon: float, days: int, settings: dict, tz_name: str) -> 
 
 
 async def _fetch_and_store(key: str, lat: float, lon: float, days: int, tz_name: str, settings: dict) -> dict:
-    """One real upstream fetch (primary + optional solar backfill), gap-filled and cached in memory and Postgres."""
+    """One real upstream fetch (primary + optional secondary solar backfill and/or
+    day-range extension), gap-filled and cached in memory and Postgres."""
     primary_id = str(settings.get("weather_provider") or "open_meteo")
     secondary_id = str(settings.get("weather_secondary_provider") or "")
     primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get(f"weather_api_key__{primary_id}")))
     t0 = time.monotonic()
     forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
-    log.info("weather fetched from %s in %.1fs (%d days)", primary_id, time.monotonic() - t0, days)
+    forecast["daily"]["source"] = [primary.label] * len(forecast["daily"].get("sunrise", []))
+    covered_days = _hourly_day_count(forecast["hourly"])
+    log.info("weather fetched from %s in %.1fs (%d/%d days covered)",
+             primary_id, time.monotonic() - t0, covered_days, days)
 
-    if not primary.has_solar and secondary_id and secondary_id != primary_id:
+    needs_solar = not primary.has_solar
+    needs_extension = covered_days < days
+    if secondary_id and secondary_id != primary_id and (needs_solar or needs_extension):
         secondary = get_weather_provider(secondary_id, decrypt_settings_key(settings.get(f"weather_api_key__{secondary_id}")))
         try:
             secondary_forecast = await asyncio.wait_for(secondary.fetch(lat, lon, days, tz_name), ATTEMPT_TIMEOUT_S)
-            _backfill_from_secondary(forecast["hourly"], secondary_forecast["hourly"])
+            if needs_solar:
+                _backfill_from_secondary(forecast["hourly"], secondary_forecast["hourly"])
+            if needs_extension:
+                _extend_with_secondary(forecast, secondary_forecast, days, secondary.label)
         except Exception:
             pass  # best-effort — the safety-net defaults below still cover any gaps
 

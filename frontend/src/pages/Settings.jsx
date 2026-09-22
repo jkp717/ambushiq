@@ -64,8 +64,7 @@ function SettingsPage() {
     + (s.scout_weight_camera ?? 0.15) + (s.scout_weight_unexplored ?? 0.10) || 1;
 
   const selectedProvider = weatherProviders.find((p) => p.id === (s.weather_provider || "open_meteo"));
-  const needsSecondary = selectedProvider && !selectedProvider.has_solar;
-  const secondaryOptions = weatherProviders.filter((p) => p.has_solar && p.id !== selectedProvider?.id);
+  const secondaryOptions = weatherProviders.filter((p) => p.id !== selectedProvider?.id);
   const selectedSecondary = weatherProviders.find((p) => p.id === s.weather_secondary_provider);
   const primaryKeySet = !!s.weather_provider_api_keys_set?.[selectedProvider?.id];
   const secondaryKeySet = !!s.weather_provider_api_keys_set?.[selectedSecondary?.id];
@@ -98,33 +97,31 @@ function SettingsPage() {
             )}
           </div>
         )}
-        {needsSecondary && (
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
-            <Field label={
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                Secondary provider (for solar radiation)
-                <InfoTip text={`${selectedProvider.label} doesn't report solar radiation, which the thermal model uses. Pick a secondary source just to backfill that one field, or leave it on "none" to use a rough daylight/cloud-cover estimate instead.`} />
-              </span>
-            }>
-              <select value={s.weather_secondary_provider ?? ""} onChange={(e) => setS({ ...s, weather_secondary_provider: e.target.value })}>
-                <option value="">None — estimate from daylight/cloud cover</option>
-                {secondaryOptions.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-              </select>
-            </Field>
-            {selectedSecondary?.needs_key && (
-              <div style={{ marginTop: 10 }}>
-                <Field label={secondaryKeySet ? "Secondary API key (already set — leave blank to keep)" : "Secondary API key"}>
-                  <input type="password" value={weatherKeyInputs[selectedSecondary.id] || ""}
-                    onChange={(e) => setWeatherKeyInputs({ ...weatherKeyInputs, [selectedSecondary.id]: e.target.value })}
-                    placeholder={secondaryKeySet ? "••••••••" : `${selectedSecondary.label} API key`} />
-                </Field>
-                {secondaryKeySet && (
-                  <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey(selectedSecondary.id)}>Clear stored key</button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
+          <Field label={
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              Secondary provider
+              <InfoTip text={`Optional. Fills in solar radiation if your primary provider doesn't report it, and extends the forecast if your primary provider returns fewer days than requested (some providers only return ~6-7 days). Leave on "None" to use only your primary provider's own range.`} />
+            </span>
+          }>
+            <select value={s.weather_secondary_provider ?? ""} onChange={(e) => setS({ ...s, weather_secondary_provider: e.target.value })}>
+              <option value="">None — use only the primary provider's own range</option>
+              {secondaryOptions.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </Field>
+          {selectedSecondary?.needs_key && (
+            <div style={{ marginTop: 10 }}>
+              <Field label={secondaryKeySet ? "Secondary API key (already set — leave blank to keep)" : "Secondary API key"}>
+                <input type="password" value={weatherKeyInputs[selectedSecondary.id] || ""}
+                  onChange={(e) => setWeatherKeyInputs({ ...weatherKeyInputs, [selectedSecondary.id]: e.target.value })}
+                  placeholder={secondaryKeySet ? "••••••••" : `${selectedSecondary.label} API key`} />
+              </Field>
+              {secondaryKeySet && (
+                <button className="btn" style={{ marginTop: 6 }} onClick={() => clearWeatherKey(selectedSecondary.id)}>Clear stored key</button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>

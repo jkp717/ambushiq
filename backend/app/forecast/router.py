@@ -171,18 +171,20 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
     for i in range(len(sun["sunrise"])):
         sr = datetime.fromisoformat(sun["sunrise"][i])
         ss = datetime.fromisoformat(sun["sunset"][i])
+        source = sun.get("source") or []
         sun_by_day[sun["sunrise"][i][:10]] = {
             "sunrise_h": sr.hour + sr.minute / 60,
             "sunset_h": ss.hour + ss.minute / 60,
             "sunrise": sun["sunrise"][i][11:16],
             "sunset": sun["sunset"][i][11:16],
+            "source": source[i] if i < len(source) else "",
         }
     days = {}
     for idx, tstr in enumerate(times):
         day = tstr[:10]
         days.setdefault(day, {"day": day,
                               "label": format_day_label(datetime.fromisoformat(day + "T12:00")),
-                              **sun_by_day.get(day, {"sunrise_h": 6.5, "sunset_h": 19, "sunrise": "", "sunset": ""}),
+                              **sun_by_day.get(day, {"sunrise_h": 6.5, "sunset_h": 19, "sunrise": "", "sunset": "", "source": ""}),
                               "hours": []})
         dt = datetime.fromisoformat(tstr)
         days[day]["hours"].append({"index": idx, "hour": dt.hour,

@@ -72,6 +72,97 @@ def test_pressure_series_prefers_msl_then_reduces_surface():
     assert service.pressure_msl_series(hourly, None)[1] is None
 
 
+def _multi_day_hourly(start_day, n_days, **field_overrides):
+    times = [f"2025-11-{start_day + d:02d}T{h:02d}:00" for d in range(n_days) for h in range(24)]
+    n = len(times)
+    base = {
+        "time": times,
+        "wind_speed_10m": [5.0] * n,
+        "wind_direction_10m": [180.0] * n,
+        "wind_gusts_10m": [8.0] * n,
+        "shortwave_radiation": [100.0] * n,
+        "temperature_2m": [10.0] * n,
+        "cloud_cover": [20.0] * n,
+        "surface_pressure": [1000.0] * n,
+        "pressure_msl": [1015.0] * n,
+        "precipitation": [0.0] * n,
+        "dew_point_2m": [5.0] * n,
+    }
+    base.update(field_overrides)
+    return base
+
+
+def _multi_day_daily(start_day, n_days):
+    return {
+        "sunrise": [f"2025-11-{start_day + d:02d}T06:30" for d in range(n_days)],
+        "sunset": [f"2025-11-{start_day + d:02d}T18:00" for d in range(n_days)],
+    }
+
+
+def test_hourly_day_count_counts_distinct_dates():
+    assert service._hourly_day_count(_multi_day_hourly(1, 3)) == 3
+
+
+def test_extend_with_secondary_appends_missing_trailing_days():
+    primary_hourly = _multi_day_hourly(1, 3)
+    original_times = list(primary_hourly["time"])
+    primary_daily = _multi_day_daily(1, 3)
+    primary_daily["source"] = ["Primary"] * 3
+    forecast = {"hourly": primary_hourly, "daily": primary_daily}
+    secondary_forecast = {"hourly": _multi_day_hourly(1, 6), "daily": _multi_day_daily(1, 6)}
+
+    service._extend_with_secondary(forecast, secondary_forecast, days=6, secondary_label="Secondary")
+
+    assert forecast["hourly"]["time"][:len(original_times)] == original_times
+    assert service._hourly_day_count(forecast["hourly"]) == 6
+    assert forecast["daily"]["source"] == ["Primary"] * 3 + ["Secondary"] * 3
+    assert len(forecast["daily"]["sunrise"]) == 6 and len(forecast["daily"]["sunset"]) == 6
+
+
+def test_extend_with_secondary_is_noop_when_primary_already_covers_days():
+    primary_hourly = _multi_day_hourly(1, 6)
+    primary_daily = _multi_day_daily(1, 6)
+    primary_daily["source"] = ["Primary"] * 6
+    forecast = {"hourly": primary_hourly, "daily": primary_daily}
+    secondary_forecast = {"hourly": _multi_day_hourly(1, 10), "daily": _multi_day_daily(1, 10)}
+    original_len = len(primary_hourly["time"])
+
+    service._extend_with_secondary(forecast, secondary_forecast, days=6, secondary_label="Secondary")
+
+    assert len(forecast["hourly"]["time"]) == original_len
+    assert len(forecast["daily"]["sunrise"]) == 6
+
+
+def test_extend_with_secondary_leaves_gap_when_secondary_also_short():
+    primary_hourly = _multi_day_hourly(1, 3)
+    primary_daily = _multi_day_daily(1, 3)
+    primary_daily["source"] = ["Primary"] * 3
+    forecast = {"hourly": primary_hourly, "daily": primary_daily}
+    secondary_forecast = {"hourly": _multi_day_hourly(1, 5), "daily": _multi_day_daily(1, 5)}
+
+    service._extend_with_secondary(forecast, secondary_forecast, days=14, secondary_label="Secondary")
+
+    assert service._hourly_day_count(forecast["hourly"]) == 5
+    assert len(forecast["daily"]["sunrise"]) == 5
+    assert forecast["daily"]["source"] == ["Primary"] * 3 + ["Secondary"] * 2
+
+
+def test_extend_with_secondary_fills_all_fields_not_just_hard_required():
+    primary_hourly = _multi_day_hourly(1, 1)
+    primary_daily = _multi_day_daily(1, 1)
+    primary_daily["source"] = ["Primary"]
+    forecast = {"hourly": primary_hourly, "daily": primary_daily}
+    secondary_forecast = {
+        "hourly": _multi_day_hourly(1, 2, dew_point_2m=[3.3] * 48, cloud_cover=[55.0] * 48),
+        "daily": _multi_day_daily(1, 2),
+    }
+
+    service._extend_with_secondary(forecast, secondary_forecast, days=2, secondary_label="Secondary")
+
+    assert forecast["hourly"]["dew_point_2m"][-1] == 3.3
+    assert forecast["hourly"]["cloud_cover"][-1] == 55.0
+
+
 def test_nws_interval_precip_is_split_across_hours():
     start = datetime(2025, 11, 8, 0, tzinfo=timezone.utc)
     raw = [{"validTime": "2025-11-08T00:00:00+00:00/PT6H", "value": 6.0}]
