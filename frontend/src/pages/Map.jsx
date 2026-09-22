@@ -90,6 +90,16 @@ const LAND_LEGEND = [
   ["#B8860B", "Other federal"], ["#5C6BC0", "State land"], ["#C62828", "Closed to public", true],
 ];
 
+const TRAILS_HINTS = {
+  zoom: "Zoom in to see trails",
+  loading: "Loading trails...",
+  error: "Trails are unavailable right now",
+  partial: "Showing saved trail data",
+};
+const TRAILS_LEGEND = [
+  ["#8D6E00", "OHV/ATV/motorcycle trail"], ["#6D4C1E", "Designated forest road", true],
+];
+
 function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
@@ -107,7 +117,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true });
   const [layersOpen, setLayersOpen] = useState(false);
 
   // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
@@ -128,6 +138,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [pendingName, setPendingName] = useState(null);
   const [err, setErr] = useState(null);
   const [landStatus, setLandStatus] = useState("off");   // public land layer: off | zoom | loading | ok | partial | error
+  const [trailsStatus, setTrailsStatus] = useState("off"); // trails layer: off | zoom | loading | ok | partial | error
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
@@ -645,7 +656,8 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
-            userLocation={userLocation} onPublicLandStatus={setLandStatus} regionId={activeRegion.id}
+            userLocation={userLocation} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus}
+            regionId={activeRegion.id}
             height="100%" />
         </div>
         <div className="layer-overlay">
@@ -664,6 +676,17 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                 <div className="land-legend">
                   {LAND_HINTS[landStatus] && <div className="land-hint">{LAND_HINTS[landStatus]}</div>}
                   {LAND_LEGEND.map(([color, label, dashed]) => (
+                    <div key={label} className="land-legend-row">
+                      <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />{label}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <LayerChip on={layers.trails} onClick={() => toggle("trails")} color="#8D6E00" label="Trails" />
+              {layers.trails && (
+                <div className="land-legend">
+                  {TRAILS_HINTS[trailsStatus] && <div className="land-hint">{TRAILS_HINTS[trailsStatus]}</div>}
+                  {TRAILS_LEGEND.map(([color, label, dashed]) => (
                     <div key={label} className="land-legend-row">
                       <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />{label}
                     </div>

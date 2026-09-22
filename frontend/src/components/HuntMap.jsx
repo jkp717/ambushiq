@@ -64,6 +64,30 @@ function landPopup(p) {
   </div>`;
 }
 
+// Off-road trails/roads (USFS MVUM via /api/trails). Designated-use lines only; National Forest land only.
+const TRAILS_MIN_ZOOM = 11;
+const TRAIL_COLORS = { trail: "#8D6E00", road: "#6D4C1E" };
+const TRAIL_KIND_LABEL = { trail: "OHV/ATV/motorcycle trail", road: "Designated forest road" };
+
+function trailStyle(p, interactive) {
+  return {
+    color: TRAIL_COLORS[p.kind] || TRAIL_COLORS.trail,
+    weight: p.kind === "road" ? 2 : 2.5,
+    dashArray: p.kind === "road" ? "5 4" : null,
+    opacity: 0.85, interactive,
+  };
+}
+
+function trailPopup(p) {
+  return `<div class="feat-popup">
+    <div class="feat-popup-title">${escHtml(p.name)}</div>
+    <div class="feat-popup-sub">${escHtml(TRAIL_KIND_LABEL[p.kind] || "Trail")} · ${escHtml(p.vehicle_class)}</div>
+    ${p.seasonal ? `<div class="land-row"><b>Season:</b> ${escHtml(p.seasonal)}</div>` : ""}
+    <div class="land-row"><b>Forest:</b> ${escHtml(p.forestname || "Unknown")}</div>
+    <div class="land-note">Designated-use data from the US Forest Service Motor Vehicle Use Map — National Forest land only. Verify current status before riding.</div>
+  </div>`;
+}
+
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
 function standIcon(vectors, rank, selected = false) {
   const size = 78, c = size / 2;
@@ -217,7 +241,7 @@ const HuntMap = forwardRef(function HuntMap({
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null, onPublicLandStatus, regionId,
+  userLocation = null, onPublicLandStatus, onTrailsStatus, regionId,
   height = 420,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -263,6 +287,9 @@ const HuntMap = forwardRef(function HuntMap({
       // they were added, and the land arrives after your zones, corridors and suggestions have been drawn, so
       // without this it would sit on top of them and swallow their clicks.
       map.createPane("publicLandPane").style.zIndex = 380;
+      // Trails sit above the public-land tint but still below the default overlay pane (400), for
+      // the same reason: they're fetched/added after user-drawn features and shouldn't swallow clicks.
+      map.createPane("trailsPane").style.zIndex = 390;
       // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
       // from IndexedDB when it's been downloaded for offline use, network otherwise.
       const topo = L.tileLayer.offline(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
@@ -279,7 +306,7 @@ const HuntMap = forwardRef(function HuntMap({
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "trails", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -572,6 +599,60 @@ const HuntMap = forwardRef(function HuntMap({
     schedule();
     return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
   }, [ready, layers.publicLand]);
+
+  // Off-road trails/roads: same fetch/draw pattern as public land above.
+  const trailData = useRef({ key: "", features: [] });
+  const trailsStatusCb = useRef(onTrailsStatus);
+  trailsStatusCb.current = onTrailsStatus;
+  const drawTrailsRef = useRef(() => {});
+  drawTrailsRef.current = () => {
+    const g = layerGroups.current.trails;
+    if (!g) return;
+    g.clearLayers();
+    const { features } = trailData.current;
+    if (!features.length) return;
+    const interactive = !drawMode && !selectMode;
+    L.geoJSON({ type: "FeatureCollection", features }, {
+      pane: "trailsPane",
+      style: (f) => trailStyle(f.properties, interactive),
+      onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(trailPopup(f.properties), { minWidth: 200 }); },
+    }).addTo(g);
+  };
+  useEffect(() => { if (ready) drawTrailsRef.current(); }, [ready, drawMode, selectMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const say = (s) => trailsStatusCb.current && trailsStatusCb.current(s);
+    const reset = () => { trailData.current = { key: "", features: [] }; drawTrailsRef.current(); };
+    if (!layers.trails) { reset(); say("off"); return undefined; }
+
+    let timer = null, ctrl = null, seq = 0;
+    const load = async () => {
+      const zoom = map.getZoom();
+      if (zoom < TRAILS_MIN_ZOOM) { if (ctrl) ctrl.abort(); reset(); say("zoom"); return; }
+      const b = map.getBounds();
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+      const mine = ++seq;
+      say("loading");
+      try {
+        const q = new URLSearchParams({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(), zoom });
+        const j = await api(`/trails?${q}`, { signal: ctrl.signal });
+        if (mine !== seq) return;
+        const key = j.features.map((f) => f.id).sort().join(",");
+        if (key !== trailData.current.key) { trailData.current = { key, features: j.features }; drawTrailsRef.current(); }
+        say(j.partial ? "partial" : "ok");
+      } catch (e) {
+        if (e.name === "AbortError" || mine !== seq) return;
+        say("error");
+      }
+    };
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(load, 450); };
+    map.on("moveend", schedule);
+    schedule();
+    return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
+  }, [ready, layers.trails]);
 
   // Select mode box tool: drag a rectangle (desktop: hold Shift; touch: turn the Box tool on) and
   // report the keys of every visible feature it covers. Uses raw pointer events on the map
