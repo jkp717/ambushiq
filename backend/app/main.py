@@ -25,6 +25,7 @@ from app.dependencies import require_token
 from app.forecast.router import router as forecast_router
 from app.forecast.service import ForecastUnavailable
 from app.publiclands.router import router as publiclands_router
+from app.recsites.router import router as recsites_router
 from app.regions.router import router as regions_router
 from app.scheduler import start_scheduler
 from app.scouting.router import router as scouting_router
@@ -89,6 +90,7 @@ app.include_router(scouting_router)
 app.include_router(bulk_router)
 app.include_router(publiclands_router)
 app.include_router(trails_router)
+app.include_router(recsites_router)
 app.include_router(regions_router)
 
 

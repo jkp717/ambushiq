@@ -100,6 +100,16 @@ const TRAILS_LEGEND = [
   ["#8D6E00", "OHV/ATV/motorcycle trail"], ["#6D4C1E", "Designated forest road", true],
 ];
 
+const RECSITES_HINTS = {
+  zoom: "Zoom in to see recreation sites",
+  loading: "Loading recreation sites...",
+  error: "Recreation sites are unavailable right now",
+  partial: "Showing saved recreation site data",
+};
+const RECSITES_LEGEND = [
+  ["#8D6E00", "Trailhead"], ["#2E7D32", "Campground"], ["#EF6C00", "Picnic site"], ["#1565C0", "Day-use area"],
+];
+
 function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
@@ -117,7 +127,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, recSites: true });
   const [layersOpen, setLayersOpen] = useState(false);
 
   // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
@@ -139,6 +149,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [err, setErr] = useState(null);
   const [landStatus, setLandStatus] = useState("off");   // public land layer: off | zoom | loading | ok | partial | error
   const [trailsStatus, setTrailsStatus] = useState("off"); // trails layer: off | zoom | loading | ok | partial | error
+  const [recSitesStatus, setRecSitesStatus] = useState("off"); // recreation sites layer: off | zoom | loading | ok | partial | error
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
@@ -657,6 +668,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
             userLocation={userLocation} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus}
+            onRecSitesStatus={setRecSitesStatus}
             regionId={activeRegion.id}
             height="100%" />
         </div>
@@ -689,6 +701,17 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
                   {TRAILS_LEGEND.map(([color, label, dashed]) => (
                     <div key={label} className="land-legend-row">
                       <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />{label}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} color="#1565C0" dot label="Rec sites" />
+              {layers.recSites && (
+                <div className="land-legend">
+                  {RECSITES_HINTS[recSitesStatus] && <div className="land-hint">{RECSITES_HINTS[recSitesStatus]}</div>}
+                  {RECSITES_LEGEND.map(([color, label]) => (
+                    <div key={label} className="land-legend-row">
+                      <span className="land-swatch" style={{ borderColor: color, background: color + "33" }} />{label}
                     </div>
                   ))}
                 </div>

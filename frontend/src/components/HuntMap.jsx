@@ -88,6 +88,32 @@ function trailPopup(p) {
   </div>`;
 }
 
+// Recreation sites (trailheads, campgrounds, picnic sites, day-use areas) via /api/recreation-sites.
+const RECSITES_MIN_ZOOM = 11;
+const RECSITE_COLORS = { trailhead: "#8D6E00", campground: "#2E7D32", picnic: "#EF6C00", day_use: "#1565C0" };
+const RECSITE_KIND_LABEL = { trailhead: "Trailhead", campground: "Campground", picnic: "Picnic site", day_use: "Day-use area" };
+
+function recSiteStyle(p, interactive) {
+  const color = RECSITE_COLORS[p.kind] || RECSITE_COLORS.trailhead;
+  return { radius: 6, color, fillColor: color, fillOpacity: 0.85, weight: 2, interactive };
+}
+
+function recSitePopup(p) {
+  return `<div class="feat-popup">
+    <div class="feat-popup-title">${escHtml(p.name)}</div>
+    <div class="feat-popup-sub">${escHtml(RECSITE_KIND_LABEL[p.kind] || "Recreation site")}${p.recarea ? " · " + escHtml(p.recarea) : ""}</div>
+    ${p.directions ? `<div class="land-row"><b>Directions:</b> ${escHtml(p.directions)}</div>` : ""}
+    ${p.season ? `<div class="land-row"><b>Season:</b> ${escHtml(p.season)}</div>` : ""}
+    ${p.fee ? `<div class="land-row"><b>Fee:</b> ${escHtml(p.fee)}</div>` : ""}
+    ${p.max_vehicles ? `<div class="land-row"><b>Vehicle capacity:</b> ${escHtml(p.max_vehicles)}</div>` : ""}
+    ${p.water ? `<div class="land-row"><b>Water:</b> ${escHtml(p.water)}</div>` : ""}
+    ${p.restroom ? `<div class="land-row"><b>Restroom:</b> ${escHtml(p.restroom)}</div>` : ""}
+    ${p.restrictions ? `<div class="land-row"><b>Restrictions:</b> ${escHtml(p.restrictions)}</div>` : ""}
+    ${p.accessible ? `<div class="land-row">ABA accessible</div>` : ""}
+    <div class="land-note">U.S. Forest Service recreation site data — National Forest land only. Verify current status before visiting.</div>
+  </div>`;
+}
+
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
 function standIcon(vectors, rank, selected = false) {
   const size = 78, c = size / 2;
@@ -241,7 +267,7 @@ const HuntMap = forwardRef(function HuntMap({
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null, onPublicLandStatus, onTrailsStatus, regionId,
+  userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, regionId,
   height = 420,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -306,7 +332,7 @@ const HuntMap = forwardRef(function HuntMap({
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "trails", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -653,6 +679,60 @@ const HuntMap = forwardRef(function HuntMap({
     schedule();
     return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
   }, [ready, layers.trails]);
+
+  // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas): same fetch/draw pattern,
+  // rendered as circle markers via pointToLayer instead of line/polygon styling.
+  const recSiteData = useRef({ key: "", features: [] });
+  const recSitesStatusCb = useRef(onRecSitesStatus);
+  recSitesStatusCb.current = onRecSitesStatus;
+  const drawRecSitesRef = useRef(() => {});
+  drawRecSitesRef.current = () => {
+    const g = layerGroups.current.recSites;
+    if (!g) return;
+    g.clearLayers();
+    const { features } = recSiteData.current;
+    if (!features.length) return;
+    const interactive = !drawMode && !selectMode;
+    L.geoJSON({ type: "FeatureCollection", features }, {
+      pointToLayer: (f, latlng) => L.circleMarker(latlng, recSiteStyle(f.properties, interactive)),
+      onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(recSitePopup(f.properties), { minWidth: 200 }); },
+    }).addTo(g);
+  };
+  useEffect(() => { if (ready) drawRecSitesRef.current(); }, [ready, drawMode, selectMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const say = (s) => recSitesStatusCb.current && recSitesStatusCb.current(s);
+    const reset = () => { recSiteData.current = { key: "", features: [] }; drawRecSitesRef.current(); };
+    if (!layers.recSites) { reset(); say("off"); return undefined; }
+
+    let timer = null, ctrl = null, seq = 0;
+    const load = async () => {
+      const zoom = map.getZoom();
+      if (zoom < RECSITES_MIN_ZOOM) { if (ctrl) ctrl.abort(); reset(); say("zoom"); return; }
+      const b = map.getBounds();
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+      const mine = ++seq;
+      say("loading");
+      try {
+        const q = new URLSearchParams({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(), zoom });
+        const j = await api(`/recreation-sites?${q}`, { signal: ctrl.signal });
+        if (mine !== seq) return;
+        const key = j.features.map((f) => f.id).sort().join(",");
+        if (key !== recSiteData.current.key) { recSiteData.current = { key, features: j.features }; drawRecSitesRef.current(); }
+        say(j.partial ? "partial" : "ok");
+      } catch (e) {
+        if (e.name === "AbortError" || mine !== seq) return;
+        say("error");
+      }
+    };
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(load, 450); };
+    map.on("moveend", schedule);
+    schedule();
+    return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
+  }, [ready, layers.recSites]);
 
   // Select mode box tool: drag a rectangle (desktop: hold Shift; touch: turn the Box tool on) and
   // report the keys of every visible feature it covers. Uses raw pointer events on the map
