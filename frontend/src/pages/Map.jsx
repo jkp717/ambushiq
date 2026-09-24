@@ -5,7 +5,7 @@ import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
 import { degToCompass } from "../utils/compass.js";
-import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M } from "../utils/geo.js";
+import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M, distanceM } from "../utils/geo.js";
 import Banner from "../components/ui/Banner.jsx";
 import LayerChip from "../components/ui/LayerChip.jsx";
 import BottomSheet from "../components/ui/BottomSheet.jsx";
@@ -121,7 +121,7 @@ const RECSITES_LEGEND = [
 ];
 
 function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
-                   reloadSuggestions, onDismissSuggestion,
+                   reloadSuggestions, onDismissSuggestion, onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
                    openStandEditor, onEditFeature, onDeleteFeature }) {
   const [days, setDays] = useState([]);
@@ -436,7 +436,12 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     const { lat, lon, radius_m } = scoutDraft;
     try {
       const res = await api(`/scouting/overlap?lat=${lat}&lon=${lon}&radius_m=${radius_m}`);
-      if (res.overlaps) setScoutOverlap({ lat, lon, radius_m, count: res.suggestions.length });
+      if (res.overlaps) {
+        // Override deletes the spots whose center is inside the circle; those with notes or a color lose them.
+        const annotated = res.suggestions.filter((sg) =>
+          (sg.color || sg.comments?.length) && distanceM(lat, lon, sg.lat, sg.lon) <= radius_m).length;
+        setScoutOverlap({ lat, lon, radius_m, count: res.suggestions.length, annotated });
+      }
       else await runScoutAnalysis(lat, lon, radius_m, null);
     } catch { setErr("Couldn't check for existing scouting suggestions."); }
   }
@@ -675,7 +680,8 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
-            onDismissSuggestion={onDismissSuggestion} center={{ lat: activeRegion.lat, lon: activeRegion.lon, set: true }}
+            onDismissSuggestion={onDismissSuggestion} onSuggestionColor={onSuggestionColor}
+            onAddSuggestionNote={onAddSuggestionNote} onDeleteSuggestionNote={onDeleteSuggestionNote} center={{ lat: activeRegion.lat, lon: activeRegion.lon, set: true }}
             scoutDraft={scoutDraft} onScoutRadiusChange={onScoutRadiusChange}
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
@@ -822,7 +828,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
         <OfflineMapsPanel mapApi={huntMapRef.current} activeRegion={activeRegion} onClose={() => setShowOfflinePanel(false)} />
       )}
       {scoutOverlap && (
-        <ScoutingOverlapPrompt count={scoutOverlap.count}
+        <ScoutingOverlapPrompt count={scoutOverlap.count} annotated={scoutOverlap.annotated}
           onOverride={() => runScoutAnalysis(scoutOverlap.lat, scoutOverlap.lon, scoutOverlap.radius_m, "override")}
           onMergeOnly={() => runScoutAnalysis(scoutOverlap.lat, scoutOverlap.lon, scoutOverlap.radius_m, "merge")}
           onCancel={() => setScoutOverlap(null)} />

@@ -250,10 +250,41 @@ function pathMidpoint(points) {
   return { lat: points[0][0], lon: points[0][1] };
 }
 
+// Colors a scouting spot can be given to organize them. The first is the default (stored as "no color");
+// none is amber/yellow, which is reserved for the multi-select highlight.
+const SCOUT_COLORS = ["#0E8A7D", "#D32F2F", "#EF6C00", "#1976D2", "#7B1FA2", "#D81B60", "#6D4C41", "#546E7A"];
+const fmtNoteTime = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+};
+
+// The color swatches + notes section of a scouting spot's popup (newest note first, list scrolls when long).
+function scoutExtrasHtml(color, comments) {
+  const cur = (color || SCOUT_COLORS[0]).toUpperCase();
+  const swatches = SCOUT_COLORS.map((c, i) =>
+    `<button type="button" class="scout-swatch${c.toUpperCase() === cur ? " on" : ""}" data-act="color" data-color="${i === 0 ? "" : c}"
+       style="background:${c}" title="${i === 0 ? "Default color" : "Use this color"}" aria-label="${i === 0 ? "Default color" : "Color " + c}"></button>`).join("");
+  const notes = [...comments].reverse().map((c) =>
+    `<div class="scout-note">
+       <div class="scout-note-hd"><span>${escHtml(fmtNoteTime(c.created_at))}</span>
+         <button type="button" class="scout-note-del" data-act="cdel" data-cid="${escHtml(c.id)}" title="Delete note" aria-label="Delete note">✕</button></div>
+       <div class="scout-note-txt">${escHtml(c.text)}</div>
+     </div>`).join("");
+  return `<div class="scout-colors">${swatches}</div>
+    <div class="scout-notes-hd"><b>Notes${comments.length ? ` (${comments.length})` : ""}</b>
+      <button type="button" class="feat-popup-btn" data-act="note-toggle">💬 Add note</button></div>
+    <div class="scout-note-form" hidden>
+      <textarea maxlength="2000" rows="3" placeholder="Add a note…"></textarea>
+      <div class="feat-popup-actions"><button type="button" class="feat-popup-btn" data-act="note-save">Save</button>
+        <button type="button" class="feat-popup-btn" data-act="note-cancel">Cancel</button></div>
+    </div>
+    ${comments.length ? `<div class="scout-notes">${notes}</div>` : ""}`;
+}
+
 // Build a popup with edit/delete buttons and wire them up after it opens.
 // `position` ({lat, lon, label}) adds a "Location / Center  lat, lon" line so every user-placed item shows where it is.
 function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
-                                    dismissed, onDismiss, position }) {
+                                    dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment }) {
   const posHtml = position && position.lat != null && position.lon != null
     ? `<div class="feat-popup-pos"><span>${position.label || "Location"}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
     : "";
@@ -277,6 +308,7 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
   }
 
   if (kind === "suggestion") {
+    html += scoutExtrasHtml(color, comments || []);
     html += `<div class="feat-popup-actions">
         <button data-act="dismiss" class="feat-popup-btn">${dismissed ? "↺ Restore" : "✕ Dismiss"}</button>
         <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
@@ -293,7 +325,9 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
   // Check if the popup is currently open before we overwrite it
   const isOpen = layer.isPopupOpen && layer.isPopupOpen();
   
-  layer.bindPopup(html, { closeButton: true, minWidth: 150 });
+  layer.bindPopup(html, kind === "suggestion"
+    ? { closeButton: true, minWidth: 230, maxWidth: 300 }
+    : { closeButton: true, minWidth: 150 });
 
   // Helper function to attach listeners so we can call it dynamically
   const attachListeners = (popupElement) => {
@@ -304,6 +338,26 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
     if (editBtn) editBtn.onclick = () => { layer.closePopup(); onEdit && onEdit(kind, id); };
     if (delBtn) delBtn.onclick = () => { layer.closePopup(); onDelete && onDelete(kind, id); };
     if (dismissBtn) dismissBtn.onclick = () => { layer.closePopup(); onDismiss && onDismiss(id, dismissed); };
+
+    if (kind === "suggestion") {
+      popupElement.querySelectorAll('[data-act="color"]').forEach((b) => {
+        b.onclick = () => onColor && onColor(id, b.dataset.color || null);
+      });
+      popupElement.querySelectorAll('[data-act="cdel"]').forEach((b) => {
+        b.onclick = () => onDeleteComment && onDeleteComment(id, b.dataset.cid);
+      });
+      const form = popupElement.querySelector(".scout-note-form");
+      const box = form && form.querySelector("textarea");
+      const toggle = popupElement.querySelector('[data-act="note-toggle"]');
+      const saveBtn = popupElement.querySelector('[data-act="note-save"]');
+      const cancelBtn = popupElement.querySelector('[data-act="note-cancel"]');
+      if (toggle && form) toggle.onclick = () => { form.hidden = !form.hidden; if (!form.hidden && box) box.focus(); };
+      if (cancelBtn && form) cancelBtn.onclick = () => { form.hidden = true; if (box) box.value = ""; };
+      if (saveBtn && box) saveBtn.onclick = () => {
+        const text = box.value.trim();
+        if (text && onAddComment) onAddComment(id, text);
+      };
+    }
 
     if (kind === "stand" && onToggleStandLayer) {
       popupElement.querySelectorAll('input[type="checkbox"][data-layer]').forEach(cb => {
@@ -327,7 +381,8 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
 const HuntMap = forwardRef(function HuntMap({
   stands, zones, corridors, sign, suggestions, conditions,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
-  layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion, center,
+  layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion,
+  onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
   userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
@@ -562,7 +617,10 @@ const HuntMap = forwardRef(function HuntMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, drawMode, scoutDraft?.lat, scoutDraft?.lon, scoutRadiusMin, scoutRadiusMax, onScoutRadiusChange]);
 
-  // render scouting suggestions
+  // render scouting suggestions. The layer is rebuilt whenever the list changes, which closes any open popup;
+  // after a color/note change the spot's popup is reopened so you can keep working in it.
+  const reopenSuggestion = useRef(null);
+  const reopenAfter = (fn) => (id, ...args) => { reopenSuggestion.current = id; return fn && fn(id, ...args); };
   useEffect(() => {
     if (!ready) return;
     const g = layerGroups.current.suggestions; g.clearLayers();
@@ -570,7 +628,7 @@ const HuntMap = forwardRef(function HuntMap({
     (suggestions || []).forEach((sg) => {
       const dismissed = sg.status === "dismissed";
       const selected = isSelected("suggestion", sg.id);
-      const color = selected ? COLORS.selected : COLORS.suggestion;
+      const color = selected ? COLORS.selected : (sg.color || COLORS.suggestion);
       const circle = L.circle([sg.lat, sg.lon], {
         radius: sg.radius_m,
         color, fillColor: color,
@@ -588,11 +646,21 @@ const HuntMap = forwardRef(function HuntMap({
           subtitle: sg.reasoning?.text || "", position: { lat: sg.lat, lon: sg.lon, label: "Center" },
           kind: "suggestion", id: sg.id,
           dismissed, onDismiss: onDismissSuggestion, onDelete: onDeleteFeature,
+          color: sg.color, comments: sg.comments || [],
+          onColor: reopenAfter(onSuggestionColor), onAddComment: reopenAfter(onAddSuggestionNote),
+          onDeleteComment: reopenAfter(onDeleteSuggestionNote),
         });
       }
       circle.addTo(g);
+      if (reopenSuggestion.current === sg.id) {
+        reopenSuggestion.current = null;
+        if (!selectMode && !drawMode) circle.openPopup(L.latLng(sg.lat, sg.lon));
+      }
     });
+    reopenSuggestion.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suggestions, ready, layers.suggestions, drawMode, onDismissSuggestion, onDeleteFeature,
+      onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote,
       selectMode, selectedKeys, boxTool, onToggleSelect]);
 
   // The device's location, drawn like Google Maps: blue dot with a white ring and pulsing halo, a

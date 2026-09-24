@@ -88,6 +88,13 @@ def init_db(retries: int = 30):
                     conn.commit()
                 except Exception:
                     pass
+                # v3.20: scouting spot color + notes
+                try:
+                    conn.execute(text("ALTER TABLE scouting_suggestions ADD COLUMN IF NOT EXISTS color VARCHAR(16)"))
+                    conn.execute(text("ALTER TABLE scouting_suggestions ADD COLUMN IF NOT EXISTS comments_json TEXT NOT NULL DEFAULT '[]'"))
+                    conn.commit()
+                except Exception:
+                    pass
                 # deer_sign table
                 try:
                     conn.execute(text("""

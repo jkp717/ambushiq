@@ -106,6 +106,21 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
     } catch {}
   }, [loadSuggestions]);
 
+  // Color and notes on a scouting spot. Each call returns the updated spot, which replaces it in place;
+  // on failure the list is reloaded so the map (and its reopened popup) matches the server again.
+  const updateSuggestion = useCallback(async (id, path, opts) => {
+    try {
+      const updated = await api(`/scouting/${id}${path}`, opts);
+      setSuggestions((list) => list.map((sg) => (sg.id === id ? updated : sg)));
+    } catch { await loadSuggestions(); }
+  }, [loadSuggestions]);
+  const setSuggestionColor = useCallback((id, color) =>
+    updateSuggestion(id, "/color", { method: "PUT", body: JSON.stringify({ color }) }), [updateSuggestion]);
+  const addSuggestionNote = useCallback((id, text) =>
+    updateSuggestion(id, "/comments", { method: "POST", body: JSON.stringify({ text }) }), [updateSuggestion]);
+  const deleteSuggestionNote = useCallback((id, commentId) =>
+    updateSuggestion(id, `/comments/${commentId}`, { method: "DELETE" }), [updateSuggestion]);
+
   function goDraw(kind) { setDrawRequest(kind); setView("map"); }
 
   function openStandEditor(coord) {
@@ -230,6 +245,8 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             activeRegion={activeRegion}
             reloadStands={loadStands} reloadZones={loadZones} reloadCorridors={loadCorridors} reloadSign={loadSign}
             reloadSuggestions={loadSuggestions} onDismissSuggestion={dismissSuggestion}
+            onSuggestionColor={setSuggestionColor} onAddSuggestionNote={addSuggestionNote}
+            onDeleteSuggestionNote={deleteSuggestionNote}
             drawRequest={drawRequest} clearDrawRequest={() => setDrawRequest(null)}
             relocateRequest={relocateRequest} clearRelocateRequest={() => setRelocateRequest(null)}
             openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature} />

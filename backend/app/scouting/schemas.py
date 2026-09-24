@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class ScoutingAnalyzeIn(BaseModel):
@@ -20,3 +20,20 @@ class ScoutingAnalyzeIn(BaseModel):
 
 class ScoutingStatusIn(BaseModel):
     status: Literal["new", "dismissed"]
+
+
+class ScoutingColorIn(BaseModel):
+    # "#RRGGBB", or null to go back to the default color
+    color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class ScoutingCommentIn(BaseModel):
+    text: str = Field(max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("comment can't be empty")
+        return v

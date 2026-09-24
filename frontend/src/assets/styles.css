@@ -791,6 +791,19 @@ input[type="checkbox"], input[type="radio"] {
 .feat-popup-btn    { font-size: 12px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--bord2); background: var(--bg); color: var(--txt); cursor: pointer; }
 .feat-popup-btn:hover { background: var(--surf); }
 .feat-popup-del    { color: var(--red); border-color: rgba(163,45,45,.4); }
+/* scouting spot popup: color swatches + notes (the notes list scrolls when it gets long) */
+.scout-colors { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+.scout-swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35); cursor: pointer; }
+.scout-swatch.on { box-shadow: 0 0 0 2px #222; }
+.scout-notes-hd { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 6px; }
+.scout-notes { max-height: 150px; overflow-y: auto; margin-bottom: 8px; border-top: 1px solid var(--bord); }
+.scout-note { padding: 6px 2px; border-bottom: 1px solid var(--bord); }
+.scout-note-hd { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #666; }
+.scout-note-del { border: none; background: none; color: var(--red); cursor: pointer; font-size: 12px; padding: 0 4px; }
+.scout-note-txt { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+.scout-note-form { margin-bottom: 8px; }
+.scout-note-form[hidden] { display: none; }
+.scout-note-form textarea { width: 100%; box-sizing: border-box; font-size: 13px; padding: 5px 7px; margin-bottom: 6px; resize: vertical; }
 
 /* range slider */
 input[type="range"] {

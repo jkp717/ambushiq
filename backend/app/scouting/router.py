@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,7 +16,7 @@ from app.dependencies import get_active_region_id, require_token
 from app.forecast.service import _haversine_m
 from app.scouting import service
 from app.scouting.models import ScoutingSuggestion
-from app.scouting.schemas import ScoutingAnalyzeIn, ScoutingStatusIn
+from app.scouting.schemas import ScoutingAnalyzeIn, ScoutingColorIn, ScoutingCommentIn, ScoutingStatusIn
 from app.settings.service import get_settings
 
 router = APIRouter(prefix="/api/scouting", tags=["scouting"])
@@ -82,6 +84,49 @@ def update_status(suggestion_id: int, body: ScoutingStatusIn, region_id: int = D
         if not row or row.region_id != region_id:
             raise HTTPException(404, "not found")
         row.status = body.status
+        s.commit()
+        s.refresh(row)
+        return row.to_dict()
+
+
+def _own_suggestion(s: Session, suggestion_id: int, region_id: int) -> ScoutingSuggestion:
+    row = s.get(ScoutingSuggestion, suggestion_id)
+    if not row or row.region_id != region_id:
+        raise HTTPException(404, "not found")
+    return row
+
+
+@router.put("/{suggestion_id}/color")
+def set_color(suggestion_id: int, body: ScoutingColorIn, region_id: int = Depends(get_active_region_id),
+              _=Depends(require_token)):
+    with Session(engine) as s:
+        row = _own_suggestion(s, suggestion_id, region_id)
+        row.color = body.color.upper() if body.color else None
+        s.commit()
+        s.refresh(row)
+        return row.to_dict()
+
+
+@router.post("/{suggestion_id}/comments")
+def add_comment(suggestion_id: int, body: ScoutingCommentIn, region_id: int = Depends(get_active_region_id),
+                _=Depends(require_token)):
+    with Session(engine) as s:
+        row = _own_suggestion(s, suggestion_id, region_id)
+        comments = row.comments()
+        comments.append({"id": uuid.uuid4().hex[:12], "text": body.text,
+                         "created_at": datetime.now(timezone.utc).isoformat()})
+        row.comments_json = json.dumps(comments)
+        s.commit()
+        s.refresh(row)
+        return row.to_dict()
+
+
+@router.delete("/{suggestion_id}/comments/{comment_id}")
+def delete_comment(suggestion_id: int, comment_id: str, region_id: int = Depends(get_active_region_id),
+                   _=Depends(require_token)):
+    with Session(engine) as s:
+        row = _own_suggestion(s, suggestion_id, region_id)
+        row.comments_json = json.dumps([c for c in row.comments() if c.get("id") != comment_id])
         s.commit()
         s.refresh(row)
         return row.to_dict()
