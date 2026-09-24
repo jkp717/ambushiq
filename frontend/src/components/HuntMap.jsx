@@ -89,7 +89,7 @@ function trailPopup(p) {
 }
 
 // General roads (USGS National Map transportation) via /api/roads. Drawn above the public-land tint
-// and the MVUM forest-roads-only Trails layer so roads stay legible regardless of what else is on.
+// so roads stay legible regardless of what else is on (and just below the MVUM forest trails/roads).
 const ROADS_MIN_ZOOM = 11;
 const ROAD_STYLES = {
   highway:   { color: "#B71C1C", weight: 3 },
@@ -113,6 +113,42 @@ function roadPopup(p) {
     <div class="feat-popup-sub">${escHtml(ROAD_KIND_LABEL[p.kind] || "Road")}</div>
     <div class="land-note">USGS National Map road data.</div>
   </div>`;
+}
+
+// Roads and trails are thin lines, and a line's own stroke is its click target, so a 1px local road is nearly
+// impossible to hit. Each feature is drawn twice: the visible line (not clickable) and, above it in the same
+// pane, a wide fully transparent copy that takes the clicks and popup. The visible line is highlighted while the
+// pointer is over it or its popup is open, which also gives touch screens (no hover) feedback on what was picked.
+const LINE_HIT_WEIGHT = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches ? 22 : 14;
+
+function addSelectableLines(group, features, { pane, styleFn, popupFn, interactive }) {
+  const fc = { type: "FeatureCollection", features };
+  const visible = new Map();
+  L.geoJSON(fc, {
+    pane,
+    style: (f) => styleFn(f.properties, false),
+    onEachFeature: (f, layer) => visible.set(f.id, layer),
+  }).addTo(group);
+  if (!interactive) return;   // while drawing or selecting, clicks must reach the map
+  L.geoJSON(fc, {
+    pane,
+    style: () => ({ weight: LINE_HIT_WEIGHT, opacity: 0, lineCap: "round", interactive: true }),
+    onEachFeature: (f, hit) => {
+      const line = visible.get(f.id);
+      if (!line) return;
+      const base = styleFn(f.properties, false);
+      let popupOpen = false;
+      const on = () => { line.setStyle({ color: COLORS.selected, weight: base.weight + 3, opacity: 1, dashArray: null }); line.bringToFront(); };
+      const off = () => {
+        if (!popupOpen) line.setStyle({ color: base.color, weight: base.weight, opacity: base.opacity, dashArray: base.dashArray ?? null });
+      };
+      hit.bindPopup(popupFn(f.properties), { minWidth: 200 });
+      hit.on("mouseover", on);
+      hit.on("mouseout", off);
+      hit.on("popupopen", () => { popupOpen = true; on(); });
+      hit.on("popupclose", () => { popupOpen = false; off(); });
+    },
+  }).addTo(group);
 }
 
 // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas) via /api/recreation-sites.
@@ -340,11 +376,12 @@ const HuntMap = forwardRef(function HuntMap({
       // they were added, and the land arrives after your zones, corridors and suggestions have been drawn, so
       // without this it would sit on top of them and swallow their clicks.
       map.createPane("publicLandPane").style.zIndex = 380;
-      // Trails sit above the public-land tint but still below the default overlay pane (400), for
-      // the same reason: they're fetched/added after user-drawn features and shouldn't swallow clicks.
-      map.createPane("trailsPane").style.zIndex = 390;
-      // Roads sit above both the public-land tint and the MVUM (forest-only) trails/roads layer.
-      map.createPane("roadsPane").style.zIndex = 395;
+      // Roads sit above the public-land tint but still below the default overlay pane (400), for the same
+      // reason: they're fetched/added after user-drawn features and shouldn't swallow clicks.
+      map.createPane("roadsPane").style.zIndex = 390;
+      // The MVUM forest trails/roads sit above the general roads: they draw many of the same physical roads,
+      // and their popup (vehicle class, seasonal dates) is the more useful one where the two overlap.
+      map.createPane("trailsPane").style.zIndex = 395;
       // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
       // from IndexedDB when it's been downloaded for offline use, network otherwise.
       const topo = L.tileLayer.offline(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
@@ -361,7 +398,7 @@ const HuntMap = forwardRef(function HuntMap({
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "trails", "roads", "recSites", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -666,12 +703,9 @@ const HuntMap = forwardRef(function HuntMap({
     g.clearLayers();
     const { features } = trailData.current;
     if (!features.length) return;
-    const interactive = !drawMode && !selectMode;
-    L.geoJSON({ type: "FeatureCollection", features }, {
-      pane: "trailsPane",
-      style: (f) => trailStyle(f.properties, interactive),
-      onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(trailPopup(f.properties), { minWidth: 200 }); },
-    }).addTo(g);
+    addSelectableLines(g, features, {
+      pane: "trailsPane", styleFn: trailStyle, popupFn: trailPopup, interactive: !drawMode && !selectMode,
+    });
   };
   useEffect(() => { if (ready) drawTrailsRef.current(); }, [ready, drawMode, selectMode]);
 
@@ -709,7 +743,7 @@ const HuntMap = forwardRef(function HuntMap({
     return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
   }, [ready, layers.trails]);
 
-  // General roads: same fetch/draw pattern as trails/public land, drawn in the higher roadsPane.
+  // General roads: same fetch/draw pattern as trails/public land, drawn in roadsPane.
   const roadData = useRef({ key: "", features: [] });
   const roadsStatusCb = useRef(onRoadsStatus);
   roadsStatusCb.current = onRoadsStatus;
@@ -720,12 +754,9 @@ const HuntMap = forwardRef(function HuntMap({
     g.clearLayers();
     const { features } = roadData.current;
     if (!features.length) return;
-    const interactive = !drawMode && !selectMode;
-    L.geoJSON({ type: "FeatureCollection", features }, {
-      pane: "roadsPane",
-      style: (f) => roadStyle(f.properties, interactive),
-      onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(roadPopup(f.properties), { minWidth: 200 }); },
-    }).addTo(g);
+    addSelectableLines(g, features, {
+      pane: "roadsPane", styleFn: roadStyle, popupFn: roadPopup, interactive: !drawMode && !selectMode,
+    });
   };
   useEffect(() => { if (ready) drawRoadsRef.current(); }, [ready, drawMode, selectMode]);
 
