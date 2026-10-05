@@ -1,5 +1,6 @@
 import { Plus, Mountain, Eye, EyeOff, Edit3, Trash2 } from "lucide-react";
 import { degToCompass } from "../utils/compass.js";
+import { fmtFt, fmtYd } from "../utils/units.js";
 import Empty from "../components/ui/Empty.jsx";
 import MiniMap from "../components/MiniMap.jsx";
 
@@ -24,10 +25,10 @@ function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
               </div>
               <div className="list-card-sub">
                 {(+s.lat).toFixed(4)}, {(+s.lon).toFixed(4)}
-                {s.terrain && <> · {s.terrain.elevation}m · {s.terrain.flat ? "flat ground" : <>drains {degToCompass(s.terrain.drainage_deg)}</>}</>}
+                {s.terrain && <> · {fmtFt(s.terrain.elevation)} · {s.terrain.flat ? "flat ground" : <>drains {degToCompass(s.terrain.drainage_deg)}</>}</>}
                 {!s.terrain && s.downhill_deg != null && <> · downhill {degToCompass(s.downhill_deg)}</>}
                 {s.deer_approach_deg != null && <> · deer from {degToCompass(s.deer_approach_deg)}</>}
-                {s.visibility_m ? <> · visibility {Math.round(s.visibility_m)}m</> : null}
+                {s.visibility_m ? <> · visibility {fmtYd(s.visibility_m)}</> : null}
               </div>
             </div>
             <div className="list-card-actions">

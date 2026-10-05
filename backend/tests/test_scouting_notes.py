@@ -105,3 +105,9 @@ def test_status_changes_and_bulk_delete_still_work_with_notes(spot):
     assert out["status"] == "dismissed" and len(out["comments"]) == 1
     bulk_router.bulk_update(BulkIn(items=[{"kind": "suggestion", "id": spot}], action="delete"), region_id=1, _=None)
     assert sr.list_suggestions(region_id=1, _=None) == []
+
+
+def test_nearest_sign_distance_is_in_yards():
+    from app.scouting.scoring import _nearest_feature_text
+    sign = [{"kind": "rub", "lat": 34.7009, "lon": -92.3}]   # ~100 m north
+    assert _nearest_feature_text(34.7, -92.3, [], [], sign) == "109 yd from a rub"

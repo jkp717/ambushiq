@@ -427,12 +427,11 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
     temp_swing = hour.get("temp_swing")
     if temp_swing is not None and temp_swing > 12:
         swing_f = round(temp_swing * 9 / 5, 1)
-        swing_c = round(temp_swing, 1)
         strength = "very strong" if temp_swing > 20 else "strong"
         breakdown.append({
             "factor": "Temperature swing",
             "value": min(1.0, (temp_swing - 12) / 12),
-            "text": f"{strength} day/night swing ({swing_f} °F / {swing_c} °C) — denser cold air amplifies thermal drainage"
+            "text": f"{strength} day/night swing ({swing_f} °F) — denser cold air amplifies thermal drainage"
         })
 
     total = base["conditions"]

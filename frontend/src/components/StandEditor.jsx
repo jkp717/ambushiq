@@ -4,6 +4,7 @@ import { tokenStore, regionStore, api } from "../services/api.js";
 import Field from "./ui/Field.jsx";
 import DirPicker from "./ui/DirPicker.jsx";
 import TerrainPanel from "./TerrainPanel.jsx";
+import { ydInput, ydFromInput } from "../utils/units.js";
 
 function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
   const [s, setS] = useState({ ...stand });
@@ -134,10 +135,10 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         <DirPicker label="Deer approach from (optional)" value={s.deer_approach_deg} onChange={(d) => setS({ ...s, deer_approach_deg: d })} allowNull />
       </div>
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
-        <Field label="Visibility / cover radius (m) — leave blank to use the corridor's or global falloff">
-          <input type="number" value={s.visibility_m ?? ""} min={0} max={500} step={10}
-            placeholder="e.g. 250 open hardwoods, 60 thick cover"
-            onChange={(e) => setS({ ...s, visibility_m: e.target.value === "" ? null : +e.target.value })} />
+        <Field label="Visibility / cover radius (yd) — leave blank to use the corridor's or global falloff">
+          <input type="number" value={ydInput(s.visibility_m)} min={0} max={550} step={10}
+            placeholder="e.g. 275 open hardwoods, 65 thick cover"
+            onChange={(e) => setS({ ...s, visibility_m: ydFromInput(e.target.value) })} />
         </Field>
       </div>
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>

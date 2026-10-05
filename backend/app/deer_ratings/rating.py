@@ -196,6 +196,11 @@ def score_out_of_5(score: float) -> float:
     return math.floor((1 + 4 * max(0.0, min(1.0, score))) * 10 + 0.5) / 10
 
 
+def _rain_in(rain_mm) -> str:
+    """Rain for display, in inches (the model works in mm)."""
+    return "N/A" if rain_mm is None else f"{rain_mm / 25.4:.2f} in"
+
+
 def rating_from_score(score: float) -> int:
     """Whole-number rating (deer icons, color) = the displayed 1-5 score rounded half-up,
     so a day shown as 2.6 is always a 3. Deriving it from the same rounded value the UI
@@ -278,7 +283,7 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
         {"factor": "Wind", "value": round(wf, 2),
          "impact": f"{_lbl(wf)} ({wx.get('wind_mph')} mph)", "weight": round(w['wind'], 2)},
         {"factor": "Rain", "value": round(rf, 2),
-         "impact": f"{_supp_lbl(1 - rf)} suppression ({wx.get('rain_mm')} mm)", "weight": round(w['rain'], 2)},
+         "impact": f"{_supp_lbl(1 - rf)} suppression ({_rain_in(wx.get('rain_mm'))})", "weight": round(w['rain'], 2)},
         {"factor": "Temperature shift", "value": round(tf, 2),
          "impact": f"{_lbl(tf)} daytime shift ({wx.get('day_high_f')}°F vs {wx.get('baseline_f')}°F baseline)",
          "weight": round(w['temp'], 2)},

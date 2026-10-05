@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Target, Plus, RefreshCw, AlertTriangle, Footprints, Wheat, Trees } from "lucide-react";
 import { api, apiRetry } from "../services/api.js";
 import { localDate, ratingScore5 } from "../utils/formatters.js";
+import { fmtRain } from "../utils/units.js";
 import { PERIOD_COLORS } from "../utils/periods.js";
 import Banner from "../components/ui/Banner.jsx";
 import PeriodKey from "../components/ui/PeriodKey.jsx";
@@ -131,7 +132,7 @@ function HeroCard({ rating, utcOffset = 0 }) {
         {inp.wind_mph     != null && <WeatherPill icon="💨" label={`${inp.wind_mph} mph wind`} />}
         {inp.pressure_inhg!= null && <WeatherPill icon="🔵" label={`${inp.pressure_inhg}″`} />}
         {inp.day_high_f   != null && <WeatherPill icon="🌡" label={`${inp.day_high_f}°F`} />}
-        {inp.rain_mm      != null && inp.rain_mm > 0 && <WeatherPill icon="🌧" label={`${inp.rain_mm} mm`} />}
+        {inp.rain_mm      != null && inp.rain_mm > 0 && <WeatherPill icon="🌧" label={fmtRain(inp.rain_mm)} />}
       </div>
     </div>
   );

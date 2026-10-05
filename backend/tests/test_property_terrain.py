@@ -67,6 +67,7 @@ def test_spread_out_stands_widen_the_box_up_to_the_cap(db):
 def test_job_stores_a_grid_that_covers_every_stand(db):
     run = _fetch()
     assert run["status"] == "success" and "covers 2 of 2 stands" in run["message"]
+    assert run["message"].startswith("3.1 mi box · 98 ft cells")
     grid = rt.load_grid(1)
     assert grid.dem.shape == (168, 168) and grid.cell_m == pytest.approx(5000 / 167)
     assert rt.covers(grid, LAT0, LON0)

@@ -79,3 +79,9 @@ def test_phase_labels_agree_with_the_curve():
 def test_heavy_rain_still_caps_the_score():
     wx = {**PERFECT, "rain_mm": 9.0}
     assert rating.rate_day(PEAK_RUT_DAY, wx)["score"] <= rating.HEAVY_RAIN_SCORE_CAP
+
+
+def test_rain_is_reported_in_inches():
+    wx = {**PERFECT, "rain_mm": 6.35}
+    rain = next(b for b in rating.rate_day(PEAK_RUT_DAY, wx)["breakdown"] if b["factor"] == "Rain")
+    assert rain["impact"].endswith("(0.25 in)")

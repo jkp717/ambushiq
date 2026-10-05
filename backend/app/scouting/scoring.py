@@ -95,7 +95,7 @@ def _nearest_feature_text(lat: float, lon: float, zones: list[dict], corridors: 
         d = _haversine_m(lat, lon, sg["lat"], sg["lon"])
         label = "a rub" if sg.get("kind") == "rub" else "a scrape"
         if best is None or d < best[0]:
-            best = (d, f"{round(d)}m from {label}")
+            best = (d, f"{round(d / 0.9144)} yd from {label}")
     for cr in corridors:
         pts = cr.get("points") or []
         if len(pts) < 2:

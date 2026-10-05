@@ -8,6 +8,7 @@ import Field from "../components/ui/Field.jsx";
 import SliderRow from "../components/ui/SliderRow.jsx";
 import InfoTip from "../components/ui/InfoTip.jsx";
 import JobsPanel from "../components/JobsPanel.jsx";
+import { mToYd, ydToM, fmtYd, fmtDist } from "../utils/units.js";
 
 function SettingsPage({ reloadStands }) {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
@@ -63,6 +64,9 @@ function SettingsPage({ reloadStands }) {
   const sum = RW.reduce((a, r) => a + (s[r.key] ?? 0), 0) || 1;
   const scoutWSum = (s.scout_weight_terrain ?? 0.55) + (s.scout_weight_proximity ?? 0.20)
     + (s.scout_weight_camera ?? 0.15) + (s.scout_weight_unexplored ?? 0.10) || 1;
+
+  // Distance settings are stored in metres but the sliders run in yards.
+  const ydSlider = (key, dflt) => ({ value: mToYd(s[key] ?? dflt), onChange: (v) => setS({ ...s, [key]: ydToM(v) }) });
 
   const selectedProvider = weatherProviders.find((p) => p.id === (s.weather_provider || "open_meteo"));
   const secondaryOptions = weatherProviders.filter((p) => p.id !== selectedProvider?.id);
@@ -129,12 +133,12 @@ function SettingsPage({ reloadStands }) {
       </div>
 
       <div className="settings-section-title">Proximity weights</div>
-      <p className="settings-desc">Stands near these features get a ranking boost. <b>Weight</b> = max bonus; <b>falloff</b> = meters beyond which a feature stops helping.</p>
+      <p className="settings-desc">Stands near these features get a ranking boost. <b>Weight</b> = max bonus; <b>falloff</b> = yards beyond which a feature stops helping.</p>
       {PROX_TYPES.map(({ key, label, icon: Icon, color }) => (
         <div key={key} className="settings-section">
           <div className="settings-section-hd"><Icon size={15} color={color} /><strong>{label}</strong></div>
           <SliderRow label="Weight (max bonus)" min={0} max={0.5} step={0.01} value={s[`weight_${key}`] ?? 0} display={(s[`weight_${key}`] ?? 0).toFixed(2)} onChange={(v) => setS({ ...s, [`weight_${key}`]: v })} />
-          <SliderRow label="Falloff distance" min={25} max={600} step={25} value={s[`falloff_${key}`] ?? 100} display={`${Math.round(s[`falloff_${key}`] ?? 100)} m`} onChange={(v) => setS({ ...s, [`falloff_${key}`]: v })} />
+          <SliderRow label="Falloff distance" min={25} max={650} step={25} {...ydSlider(`falloff_${key}`, 100)} display={fmtYd(s[`falloff_${key}`] ?? 100)} />
         </div>
       ))}
       <div className="settings-section">
@@ -269,18 +273,14 @@ function SettingsPage({ reloadStands }) {
         weight your own zones/corridors/sign/cameras carry versus the raw terrain model.
       </p>
       <div className="settings-section">
-        <SliderRow label="Default analysis radius" min={60} max={2400} step={20}
-          value={s.scout_radius_default_m ?? 800} display={`${Math.round(s.scout_radius_default_m ?? 800)} m`}
-          onChange={(v) => setS({ ...s, scout_radius_default_m: v })}
+        <SliderRow label="Default analysis radius" min={65} max={2625} step={25}
+          {...ydSlider("scout_radius_default_m", 800)} display={fmtDist(s.scout_radius_default_m ?? 800)}
           info="Starting circle size when you drop a new scouting-analysis point. You can still drag the edge to resize before running it." />
-        <SliderRow label="Minimum analysis radius" min={20} max={500} step={10}
-          value={s.scout_radius_min_m ?? 60} display={`${Math.round(s.scout_radius_min_m ?? 60)} m`}
-          onChange={(v) => setS({ ...s, scout_radius_min_m: v })}
+        <SliderRow label="Minimum analysis radius" min={20} max={550} step={10}
+          {...ydSlider("scout_radius_min_m", 60)} display={fmtYd(s.scout_radius_min_m ?? 60)}
           info="Smallest area you're allowed to analyze — keeps you from accidentally requesting a useless few-foot circle." />
-        <SliderRow label="Maximum analysis radius" min={500} max={8000} step={100}
-          value={s.scout_radius_max_m ?? 2400}
-          display={(s.scout_radius_max_m ?? 2400) >= 1000 ? `${((s.scout_radius_max_m ?? 2400) / 1609.34).toFixed(1)} mi` : `${Math.round(s.scout_radius_max_m ?? 2400)} m`}
-          onChange={(v) => setS({ ...s, scout_radius_max_m: v })}
+        <SliderRow label="Maximum analysis radius" min={550} max={8750} step={100}
+          {...ydSlider("scout_radius_max_m", 2400)} display={fmtDist(s.scout_radius_max_m ?? 2400)}
           info="Largest area you're allowed to analyze in one run. Raising this doesn't slow anything down by itself — see grid resolution below — but a bigger circle does mean coarser detail per cell." />
         <SliderRow label="Analysis grid resolution" min={20} max={100} step={5}
           value={s.scout_grid_n ?? 60} display={`${Math.round(s.scout_grid_n ?? 60)}×${Math.round(s.scout_grid_n ?? 60)}`}
@@ -290,24 +290,21 @@ function SettingsPage({ reloadStands }) {
           value={s.scout_steep_slope_pct ?? 20} display={`${Math.round(s.scout_steep_slope_pct ?? 20)}%`}
           onChange={(v) => setS({ ...s, scout_steep_slope_pct: v })}
           info="Slope grade treated as a 'wall' when detecting pinch points — a narrow gap between two of these counts as a terrain funnel." />
-        <SliderRow label="Max pinch-point width" min={30} max={300} step={10}
-          value={s.scout_max_pinch_width_m ?? 120} display={`${Math.round(s.scout_max_pinch_width_m ?? 120)} m`}
-          onChange={(v) => setS({ ...s, scout_max_pinch_width_m: v })}
+        <SliderRow label="Max pinch-point width" min={30} max={330} step={10}
+          {...ydSlider("scout_max_pinch_width_m", 120)} display={fmtYd(s.scout_max_pinch_width_m ?? 120)}
           info="Widest gap between two steep-slope walls that still counts as a funnel pinch point. Narrower = only tight, obvious funnels qualify." />
         <SliderRow label="Minimum suggestion score" min={0} max={100} step={5}
           value={s.scout_min_candidate_score ?? 40} display={`${Math.round(s.scout_min_candidate_score ?? 40)}`}
           onChange={(v) => setS({ ...s, scout_min_candidate_score: v })}
           info="A location has to score at least this high (of 100) before it's even considered as a candidate — raise it to see only your strongest suggestions." />
-        <SliderRow label="Minimum suggestion separation" min={50} max={500} step={25}
-          value={s.scout_min_separation_m ?? 150} display={`${Math.round(s.scout_min_separation_m ?? 150)} m`}
-          onChange={(v) => setS({ ...s, scout_min_separation_m: v })}
+        <SliderRow label="Minimum suggestion separation" min={50} max={550} step={25}
+          {...ydSlider("scout_min_separation_m", 150)} display={fmtYd(s.scout_min_separation_m ?? 150)}
           info="How close two candidate spots can be before they're merged into a single suggestion instead of two separate ones." />
         <SliderRow label="Max suggestions per run" min={1} max={20} step={1}
           value={s.scout_max_suggestions_per_run ?? 8} display={`${Math.round(s.scout_max_suggestions_per_run ?? 8)}`}
           onChange={(v) => setS({ ...s, scout_max_suggestions_per_run: v })} />
-        <SliderRow label="Suggestion marker size" min={20} max={200} step={10}
-          value={s.scout_suggestion_radius_m ?? 60} display={`${Math.round(s.scout_suggestion_radius_m ?? 60)} m`}
-          onChange={(v) => setS({ ...s, scout_suggestion_radius_m: v })}
+        <SliderRow label="Suggestion marker size" min={20} max={220} step={10}
+          {...ydSlider("scout_suggestion_radius_m", 60)} display={fmtYd(s.scout_suggestion_radius_m ?? 60)}
           info="Radius of the flagged area drawn on the map for each suggestion." />
         <SliderRow label="'Only show new ones' overlap threshold" min={0.1} max={0.9} step={0.05}
           value={s.scout_overlap_skip_threshold ?? 0.5} display={`${Math.round((s.scout_overlap_skip_threshold ?? 0.5) * 100)}%`}

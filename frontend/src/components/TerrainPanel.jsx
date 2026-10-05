@@ -1,5 +1,6 @@
 import { CheckCircle2, Waves } from "lucide-react";
 import { degToCompass } from "../utils/compass.js";
+import { fmtFt } from "../utils/units.js";
 
 function TerrainPanel({ t }) {
   return (
@@ -7,7 +8,7 @@ function TerrainPanel({ t }) {
       <TerrainMap t={t} />
       <div style={{ fontSize: 12.5, lineHeight: 1.6, flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--green)", marginBottom: 4 }}><CheckCircle2 size={13} /><span style={{ fontWeight: 500 }}>{t.source}</span></div>
-        <div style={{ color: "var(--sub)" }}>Elevation <b style={{ color: "var(--txt)" }}>{t.elevation} m</b> · relief <b style={{ color: "var(--txt)" }}>{t.relief} m</b></div>
+        <div style={{ color: "var(--sub)" }}>Elevation <b style={{ color: "var(--txt)" }}>{fmtFt(t.elevation)}</b> · relief <b style={{ color: "var(--txt)" }}>{fmtFt(t.relief)}</b></div>
         {t.flat ? (
           <>
             <div style={{ color: "var(--sub)" }}>Slope <b style={{ color: "var(--txt)" }}>{t.slope_pct}%</b> · <b style={{ color: "var(--txt)" }}>flat ground</b></div>

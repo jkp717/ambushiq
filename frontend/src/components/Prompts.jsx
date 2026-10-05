@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Save, X } from "lucide-react";
 import Modal from "./ui/Modal.jsx";
 import Field from "./ui/Field.jsx";
+import { ydToM, ydFromInput } from "../utils/units.js";
 
 function NamePrompt({ title, onConfirm, onCancel }) {
   const [name, setName] = useState("");
@@ -63,7 +64,7 @@ function FoodZonePrompt({ onConfirm, onCancel }) {
 function CorridorPrompt({ onConfirm, onCancel }) {
   const [name, setName] = useState("");
   const [usage, setUsage] = useState(5);
-  const [falloff, setFalloff] = useState(150);
+  const [falloff, setFalloff] = useState(165);   // yards (≈150 m default)
   const [width, setWidth] = useState("");
   const usageLabel = usage <= 2 ? "Rarely used" : usage <= 4 ? "Occasionally used" : usage <= 6 ? "Moderately used" : usage <= 8 ? "Frequently used" : "Heavily used";
   return (
@@ -75,7 +76,7 @@ function CorridorPrompt({ onConfirm, onCancel }) {
         </div>
         <Field label="Name (optional)">
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") onConfirm(name.trim(), usage, falloff, width === "" ? null : +width); }}
+            onKeyDown={(e) => { if (e.key === "Enter") onConfirm(name.trim(), usage, ydToM(falloff), ydFromInput(width)); }}
             placeholder="e.g. Ridge pinch point" />
         </Field>
         <div style={{ marginTop: 14 }}>
@@ -89,20 +90,20 @@ function CorridorPrompt({ onConfirm, onCancel }) {
           </div>
         </div>
         <div style={{ marginTop: 14 }}>
-          <Field label="Falloff distance (m) — how far the bonus extends from this corridor">
-            <input type="number" value={falloff} min={50} max={2000} step={25}
+          <Field label="Falloff distance (yd) — how far the bonus extends from this corridor">
+            <input type="number" value={falloff} min={50} max={2200} step={25}
               onChange={(e) => setFalloff(+e.target.value)} />
           </Field>
         </div>
         <div style={{ marginTop: 14 }}>
-          <Field label="Corridor width (m) — leave blank for a thin travel line">
-            <input type="number" value={width} min={0} max={400} step={10}
-              placeholder="e.g. 30 (creek bottom)"
+          <Field label="Corridor width (yd) — leave blank for a thin travel line">
+            <input type="number" value={width} min={0} max={440} step={10}
+              placeholder="e.g. 35 (creek bottom)"
               onChange={(e) => setWidth(e.target.value)} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button className="btn btn-primary" onClick={() => onConfirm(name.trim(), usage, falloff, width === "" ? null : +width)}><Save size={15} /> Save</button>
+          <button className="btn btn-primary" onClick={() => onConfirm(name.trim(), usage, ydToM(falloff), ydFromInput(width))}><Save size={15} /> Save</button>
           <button className="btn" onClick={onCancel}>Cancel</button>
         </div>
       </div>

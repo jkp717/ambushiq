@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { TILE_SOURCES } from "../utils/tileSources.js";
 import { clamp } from "../utils/geo.js";
+import { fmtYd } from "../utils/units.js";
 import { api } from "../services/api.js";
 
 /* global L */
@@ -573,7 +574,7 @@ const HuntMap = forwardRef(function HuntMap({
       if (selectMode) bindToggle(circle, "zone", z.id);
       else if (!drawMode) bindFeaturePopup(circle, {
         title: z.name || `${z.kind} zone`,
-        subtitle: `${z.kind} · ${z.radius_m} m${active ? "" : " · inactive"}`,
+        subtitle: `${z.kind} · ${fmtYd(z.radius_m)}${active ? "" : " · inactive"}`,
         position: { lat: z.lat, lon: z.lon, label: "Center" },
         kind: z.kind === "food" ? "food" : "bedding", id: z.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
       });

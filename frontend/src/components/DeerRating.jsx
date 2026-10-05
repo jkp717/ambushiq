@@ -1,6 +1,7 @@
 import { useState } from "react";
 import InfoTip from "./ui/InfoTip.jsx";
 import { ratingScore5 } from "../utils/formatters.js";
+import { fmtRain } from "../utils/units.js";
 
 function DeerRating({ rating, prevRating }) {
   const [open, setOpen] = useState(false);
@@ -47,14 +48,14 @@ function DeerRating({ rating, prevRating }) {
           {bar("Wind", fac?.wind, prevFac?.wind,
             "Moderate wind (5–15mph) helps deer scent danger and move confidently; dead calm or gusty wind suppresses it. 90+ = a ~9mph breeze, the sweet spot. 35 = wind above 25mph.")}
           {bar("Rain (1=dry)", fac?.rain, prevFac?.rain,
-            "Heavy rain is one of the strongest movement suppressors. 100 = dry. 55 = moderate rain (2.5–7.5mm). 25 = heavy rain (7.5mm+); high wind blunts the effect slightly.")}
+            "Heavy rain is one of the strongest movement suppressors. 100 = dry. 55 = moderate rain (0.1–0.3 in). 25 = heavy rain (0.3 in+); high wind blunts the effect slightly.")}
           {bar("Temp shift", fac?.temp_shift, prevFac?.temp_shift,
             "Deer don't move less in the cold, they move earlier: a colder day than recent baseline shifts activity into daylight; a warm spell shifts it to night. 100 = a sharp cool front (15°F+ below baseline). 25 = a big warm-up. High dew points lower it further.")}
           <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 8, lineHeight: 1.5 }}>
             {rating.inputs?.pressure_inhg != null && <>{rating.inputs.pressure_inhg}″ · </>}
             {rating.inputs?.wind_mph      != null && <>{rating.inputs.wind_mph} mph · </>}
             {rating.inputs?.day_high_f    != null && <>{rating.inputs.day_high_f}°F · </>}
-            {rating.inputs?.rain_mm       != null && <>{rating.inputs.rain_mm} mm rain</>}
+            {rating.inputs?.rain_mm       != null && <>{fmtRain(rating.inputs.rain_mm)} rain</>}
           </div>
           {(() => {
             const bd = rating.breakdown;

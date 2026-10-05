@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Wheat, Trees, Footprints, Target, Plus, Eye, EyeOff, Edit3, Trash2, MapPin, Save, X } from "lucide-react";
 import { api } from "../services/api.js";
 import { corridorLengthFt } from "../utils/formatters.js";
+import { fmtYd, ydInput, ydFromInput } from "../utils/units.js";
 import Empty from "../components/ui/Empty.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import Field from "../components/ui/Field.jsx";
@@ -96,7 +97,7 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
                 {!z.is_active && <span className="cam-stub-badge" style={{ marginLeft: 6 }}>inactive</span>}
               </div>
               <div className="list-card-sub">
-                {(+z.lat).toFixed(4)}, {(+z.lon).toFixed(4)} · {z.radius_m} m radius
+                {(+z.lat).toFixed(4)}, {(+z.lon).toFixed(4)} · {fmtYd(z.radius_m)} radius
                 {kind === "food" && <> · Quality {z.quality ?? 5}/10</>}
               </div>
             </div>
@@ -135,7 +136,7 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
               <span style={{ fontSize: 12, color: "var(--sub)", display: "block", marginBottom: 4 }}>Drag the center to move · drag the edge to resize</span>
               <MiniMap kind={kind} editable height={240} feature={{ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }} onChange={(g) => setGeom(g)} />
             </div>
-            {geom && <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{geom.lat.toFixed(5)}, {geom.lon.toFixed(5)} · {Math.round(geom.radius_m)} m radius</div>}
+            {geom && <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{geom.lat.toFixed(5)}, {geom.lon.toFixed(5)} · {fmtYd(geom.radius_m)} radius</div>}
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14 }}>
               <input type="checkbox" checked={editing.is_active !== false}
                 onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} />
@@ -162,8 +163,8 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
     if (editing) {
       setGeom({ points: editing.points });
       setEditUsage(editing.usage ?? 5);
-      setEditFalloff(editing.falloff_m != null ? editing.falloff_m : "");
-      setEditWidth(editing.width_m != null ? editing.width_m : "");
+      setEditFalloff(ydInput(editing.falloff_m));   // inputs are in yards
+      setEditWidth(ydInput(editing.width_m));
     }
   }, [editing && editing.id]);
   async function save() {
@@ -173,8 +174,8 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
         name: editing.name || null, points: pts,
         is_active: editing.is_active !== false,
         usage: editUsage,
-        falloff_m: editFalloff !== "" && editFalloff != null ? +editFalloff : null,
-        width_m: editWidth !== "" && editWidth != null ? +editWidth : null,
+        falloff_m: ydFromInput(editFalloff),
+        width_m: ydFromInput(editWidth),
       }) });
       setEditing(null); reload();
     } catch {}
@@ -209,8 +210,8 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
               </div>
               <div className="list-card-sub">
                 {corridorLengthFt(c.points).toLocaleString()} ft · Usage {c.usage ?? 5}/10
-                {c.falloff_m != null ? ` · ${Math.round(c.falloff_m)}m falloff` : " · global falloff"}
-                {c.width_m ? ` · ${Math.round(c.width_m)}m wide` : ""}
+                {c.falloff_m != null ? ` · ${fmtYd(c.falloff_m)} falloff` : " · global falloff"}
+                {c.width_m ? ` · ${fmtYd(c.width_m)} wide` : ""}
               </div>
             </div>
             <div className="list-card-actions">
@@ -245,17 +246,17 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
             </div>
             {/* Per-corridor falloff */}
             <div style={{ marginTop: 14 }}>
-              <Field label="Falloff distance (m) — leave blank to use global setting">
-                <input type="number" value={editFalloff} min={50} max={2000} step={25}
+              <Field label="Falloff distance (yd) — leave blank to use global setting">
+                <input type="number" value={editFalloff} min={50} max={2200} step={25}
                   placeholder="global default"
                   onChange={(e) => setEditFalloff(e.target.value)} />
               </Field>
             </div>
             {/* Corridor width */}
             <div style={{ marginTop: 14 }}>
-              <Field label="Corridor width (m) — leave blank for a thin travel line">
-                <input type="number" value={editWidth} min={0} max={400} step={10}
-                  placeholder="e.g. 30 (creek bottom)"
+              <Field label="Corridor width (yd) — leave blank for a thin travel line">
+                <input type="number" value={editWidth} min={0} max={440} step={10}
+                  placeholder="e.g. 35 (creek bottom)"
                   onChange={(e) => setEditWidth(e.target.value)} />
               </Field>
             </div>

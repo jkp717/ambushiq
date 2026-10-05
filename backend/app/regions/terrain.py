@@ -147,7 +147,8 @@ async def fetch_property_terrain(progress, region_id: int) -> str:
     grid = load_grid(region_id)
     pts = _stand_points(region_id)
     outside = [name for name, lat, lon in pts if not covers(grid, lat, lon)]
-    msg = f"{side / 1000:.1f} km box · {cell_m:.0f} m cells · covers {len(pts) - len(outside)} of {len(pts)} stands"
+    msg = (f"{side / 1609.344:.1f} mi box · {cell_m / 0.3048:.0f} ft cells · "
+           f"covers {len(pts) - len(outside)} of {len(pts)} stands")
     if outside:
         msg += f" ({', '.join(outside[:3])}{'…' if len(outside) > 3 else ''} too far out)"
     return msg

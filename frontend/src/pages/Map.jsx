@@ -4,6 +4,7 @@ import { api, apiRetry, tokenStore, regionStore } from "../services/api.js";
 import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
+import { fmtDist } from "../utils/units.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M, distanceM } from "../utils/geo.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -646,7 +647,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
           {drawMode === "corridor" && `Click points along the deer path (${draftPoints.length} set).`}
           {drawMode === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
           {drawMode === "scout" && !scoutDraft && "Click the map to drop the scouting-analysis area."}
-          {drawMode === "scout" && scoutDraft && `Drag the circle's edge to resize (${Math.round(scoutDraft.radius_m)} m).`}
+          {drawMode === "scout" && scoutDraft && `Drag the circle's edge to resize (${fmtDist(scoutDraft.radius_m)}).`}
           {drawMode === "scout" && scoutDraft && <button className="btn" style={{ marginLeft: 8 }} onClick={confirmScoutArea} disabled={scoutAnalyzing}>Scout this area</button>}
           {drawMode === "relocate" && relocating?.kind !== "corridor" && "Tap the map to move to the new location."}
           {drawMode === "relocate" && relocating?.kind === "corridor" && `Click new path points (${draftPoints.length} set).`}
