@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2 } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks } from "lucide-react";
 import { api } from "../services/api.js";
 import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -7,8 +7,9 @@ import Empty from "../components/ui/Empty.jsx";
 import Field from "../components/ui/Field.jsx";
 import SliderRow from "../components/ui/SliderRow.jsx";
 import InfoTip from "../components/ui/InfoTip.jsx";
+import JobsPanel from "../components/JobsPanel.jsx";
 
-function SettingsPage() {
+function SettingsPage({ reloadStands }) {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
   const [weatherProviders, setWeatherProviders] = useState([]);
   const [weatherKeyInputs, setWeatherKeyInputs] = useState({}); // { [providerId]: typedKey }
@@ -333,6 +334,16 @@ function SettingsPage() {
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={resetScouting}>Reset defaults</button>
       </div>
+
+      {/* ── Jobs ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
+        <ListChecks size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Jobs
+      </div>
+      <p className="settings-desc">
+        Background tasks — run any of them now, and see whether the last run worked. Terrain
+        re-analysis covers the stands in the current region.
+      </p>
+      <JobsPanel onTerrainDone={reloadStands} />
 
       {/* ── Install app ── */}
       {!installed && (canInstall || isIOS) && (

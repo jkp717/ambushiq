@@ -771,6 +771,23 @@ input[type="checkbox"], input[type="radio"] {
   margin: 0 0 12px; line-height: 1.55;
 }
 
+/* Settings → Jobs */
+.job-hd { display: flex; align-items: center; gap: 8px; font-size: 14.5px; }
+.job-run { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; font-size: 12.5px; }
+.job-desc { margin: 6px 0 4px; }
+.job-sched { font-size: 12px; color: var(--sub); margin-bottom: 8px; }
+.job-status { font-size: 12.5px; }
+.job-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.job-running { color: var(--navy); }
+.job-ok { color: var(--green); }
+.job-warn { color: var(--amber); }
+.job-fail { color: var(--red); }
+.job-never { color: var(--sub); }
+.job-bar { height: 4px; background: var(--surf); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.job-bar span { display: block; height: 100%; background: var(--navy); transition: width .3s; }
+.job-details { background: none; border: none; color: inherit; cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; }
+.job-errors { margin: 6px 0 0; padding-left: 18px; color: var(--txt); font-size: 12px; line-height: 1.5; }
+
 /* ══════════════════════════════════════
    PANELS (kept for any legacy use)
    ══════════════════════════════════════ */

@@ -264,7 +264,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             onMoveOnMap={requestRelocate} />
         )}
         {view === "cameras" && <CamerasPage stands={stands} />}
-        {view === "settings" && <SettingsPage />}
+        {view === "settings" && <SettingsPage reloadStands={loadStands} />}
       </main>
 
       {editingStand && (

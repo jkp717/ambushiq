@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.dependencies import get_active_region_id, require_token
-from app.stands import terrain as terrain_mod
+from app.stands.service import analyze_and_store
 from app.stands.models import Stand
 from app.stands.schemas import StandIn
 
@@ -70,7 +70,6 @@ async def analyze_stand_terrain(stand_id: int, region_id: int = Depends(get_acti
         st = s.get(Stand, stand_id)
         if not st or st.region_id != region_id:
             raise HTTPException(404, "not found")
-        lat, lon = st.lat, st.lon
 
     async def event_generator():
         try:
@@ -83,14 +82,8 @@ async def analyze_stand_terrain(stand_id: int, region_id: int = Depends(get_acti
             # Run fetch_terrain in background while draining the queue
             async def run_analysis():
                 try:
-                    terrain = await terrain_mod.fetch_terrain(lat, lon, progress_callback=cb)
-                    with Session(engine) as s:
-                        st = s.get(Stand, stand_id)
-                        st.terrain_json = json.dumps(terrain)
-                        st.downhill_deg = None if terrain.get("flat") else terrain["downhill_deg"]
-                        s.commit()
-                        s.refresh(st)
-                        await queue.put(json.dumps({"progress": 100, "complete": True, "terrain": st.to_dict()}) + "\n")
+                    stand = await analyze_and_store(stand_id, progress_callback=cb)
+                    await queue.put(json.dumps({"progress": 100, "complete": True, "terrain": stand}) + "\n")
                 except Exception as e:
                     await queue.put(json.dumps({"error": str(e)}) + "\n")
                 finally:

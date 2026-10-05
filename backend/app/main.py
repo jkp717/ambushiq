@@ -24,6 +24,8 @@ from app.deer_sign.router import router as deer_sign_router
 from app.dependencies import require_token
 from app.forecast.router import router as forecast_router
 from app.forecast.service import ForecastUnavailable
+from app.jobs.router import router as jobs_router
+from app.jobs.service import mark_interrupted
 from app.publiclands.router import router as publiclands_router
 from app.recsites.router import router as recsites_router
 from app.regions.router import router as regions_router
@@ -63,6 +65,7 @@ async def _forecast_unavailable(request: Request, exc: ForecastUnavailable):
 @app.on_event("startup")
 def _startup():
     init_db()
+    mark_interrupted()
     try:
         start_scheduler()
     except Exception:
@@ -94,6 +97,7 @@ app.include_router(trails_router)
 app.include_router(recsites_router)
 app.include_router(regions_router)
 app.include_router(roads_router)
+app.include_router(jobs_router)
 
 
 # ---------- static frontend ----------
