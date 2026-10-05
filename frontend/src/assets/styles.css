@@ -1066,6 +1066,16 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   transition: background .15s;
 }
 .lightbox-close:hover { background: rgba(255,255,255,.3); }
+.lightbox-nav {
+  position: fixed; top: 50%; transform: translateY(-50%);
+  background: rgba(255,255,255,.15); border: none; border-radius: 50%;
+  padding: 10px; cursor: pointer; color: #fff; display: flex;
+  transition: background .15s;
+}
+.lightbox-nav:hover { background: rgba(255,255,255,.3); }
+.lightbox-nav:disabled { opacity: .4; cursor: wait; }
+.lightbox-prev { left: 12px; }
+.lightbox-next { right: 12px; }
 
 .pixelated-overlay {
   image-rendering: pixelated;

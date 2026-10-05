@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { SlidersHorizontal, Camera, X } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
 import Banner from "../ui/Banner.jsx";
@@ -7,13 +7,18 @@ import CameraFilterModal from "./CameraFilterModal.jsx";
 import { activeFilterCount, filterParams } from "./filters.js";
 
 const PAGE = 48;
+const SWIPE_PX = 50;   // horizontal travel that counts as a swipe rather than a tap
 
 function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup }) {
   const [items, setItems] = useState([]);
   const [next, setNext] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
-  const [viewImg, setViewImg] = useState(null);
+  // Index into `items` of the photo open in the lightbox. Prev/next walk `items` itself, so they
+  // follow exactly what the gallery shows under the current filters.
+  const [viewIdx, setViewIdx] = useState(null);
+  const [pendingNext, setPendingNext] = useState(false);   // stepping past the loaded page
+  const touch = useRef(null);
   const [filtering, setFiltering] = useState(false);
   const query = filterParams(filters, { time: true }).toString();
   const count = activeFilterCount(filters, { time: true });
@@ -30,6 +35,7 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
     let cancel = false;
     setLoading(true);
     setItems([]);
+    setViewIdx(null);
     fetchPage(null)
       .then((j) => { if (!cancel) { setItems(j.items); setNext(j.next); setErr(null); } })
       .catch(() => { if (!cancel) setErr("Couldn't load photos."); })
@@ -46,6 +52,60 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
       setNext(j.next);
     } catch { setErr("Couldn't load more photos."); }
     finally { setLoading(false); }
+  }
+
+  // Nearest index from `from` in direction `dir` (±1) that has a photo to show, or -1.
+  const photoIdx = (from, dir) => {
+    for (let j = from + dir; j >= 0 && j < items.length; j += dir) if (items[j].image_url) return j;
+    return -1;
+  };
+  const hasPrev = viewIdx != null && photoIdx(viewIdx, -1) >= 0;
+  const hasNext = viewIdx != null && (photoIdx(viewIdx, 1) >= 0 || !!next);
+
+  const step = (dir) => {
+    if (viewIdx == null) return;
+    const j = photoIdx(viewIdx, dir);
+    if (j >= 0) setViewIdx(j);
+    else if (dir > 0 && next && !loading) { setPendingNext(true); loadMore(); }
+  };
+
+  // Finish a "next" that ran off the end of the loaded photos once the next page arrives
+  // (keeps paging if a whole page had no photos).
+  useEffect(() => {
+    if (!pendingNext || loading) return;
+    const j = viewIdx == null ? -1 : photoIdx(viewIdx, 1);
+    if (j >= 0) { setViewIdx(j); setPendingNext(false); }
+    else if (next) loadMore();
+    else setPendingNext(false);
+  }, [pendingNext, loading, items]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (viewIdx == null) return;
+    const onKey = (e) => {
+      if (e.key === "ArrowLeft") step(-1);
+      else if (e.key === "ArrowRight") step(1);
+      else if (e.key === "Escape") setViewIdx(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // Preload the neighbours so a swipe shows the next photo immediately.
+  useEffect(() => {
+    if (viewIdx == null) return;
+    [photoIdx(viewIdx, -1), photoIdx(viewIdx, 1)].forEach((j) => { if (j >= 0) new Image().src = items[j].image_url; });
+  }, [viewIdx, items]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function onTouchStart(e) {
+    const t = e.touches[0];
+    touch.current = { x: t.clientX, y: t.clientY };
+  }
+  function onTouchEnd(e) {
+    if (!touch.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touch.current.x, dy = t.clientY - touch.current.y;
+    touch.current = null;
+    if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
   }
 
   if (!cameras.length) {
@@ -80,7 +140,7 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
           const conf = s.confidence_score;
           const confCls = conf >= 0.7 ? "conf-high" : conf >= 0.4 ? "conf-med" : "conf-low";
           return (
-            <div key={s.id} className="sighting-card" onClick={() => s.image_url && setViewImg(s.image_url)}>
+            <div key={s.id} className="sighting-card" onClick={() => s.image_url && setViewIdx(items.indexOf(s))}>
               {!s.is_animal
                 ? <span className="sighting-species sighting-empty">No animal detected</span>
                 : s.species && <span className="sighting-species">{s.species}</span>}
@@ -104,10 +164,18 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
         </div>
       )}
 
-      {viewImg && (
-        <div className="lightbox" onClick={() => setViewImg(null)}>
-          <img src={viewImg} alt="full-size sighting" className="lightbox-img" onClick={(e) => e.stopPropagation()} />
-          <button className="lightbox-close" onClick={() => setViewImg(null)}><X size={20} /></button>
+      {viewIdx != null && items[viewIdx] && (
+        <div className="lightbox" onClick={() => setViewIdx(null)} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+          <img src={items[viewIdx].image_url} alt="full-size sighting" className="lightbox-img" onClick={(e) => e.stopPropagation()} />
+          <button className="lightbox-close" onClick={() => setViewIdx(null)}><X size={20} /></button>
+          {hasPrev && (
+            <button className="lightbox-nav lightbox-prev" aria-label="Previous photo"
+              onClick={(e) => { e.stopPropagation(); step(-1); }}><ChevronLeft size={26} /></button>
+          )}
+          {hasNext && (
+            <button className="lightbox-nav lightbox-next" aria-label="Next photo" disabled={pendingNext}
+              onClick={(e) => { e.stopPropagation(); step(1); }}><ChevronRight size={26} /></button>
+          )}
         </div>
       )}
 
