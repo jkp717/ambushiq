@@ -193,7 +193,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   // function to toggle individual stand layers
   const toggleStandLayer = useCallback((standId, layerKey) => {
     setStandLayers((prev) => {
-      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
       return { ...prev, [standId]: { ...current, [layerKey]: !current[layerKey] } };
     });
   }, []);

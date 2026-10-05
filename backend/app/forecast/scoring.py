@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import datetime as _dt  # module-level import (was incorrectly inside camera_boost)
 
+from app.forecast import eddy as eddy_mod
+
 DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
         "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 
@@ -128,6 +130,9 @@ def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = No
     # The thermal arrow is only meaningful when the drainage direction is known and the
     # phase actually has a coherent flow; in "neutral" hours the direction is noise.
     show_thermal = sc["thermal_known"] and sc["thermal_phase"] != "neutral"
+    # The lee-zone layer depends only on this hour's wind and the terrain, so it shows the
+    # eddy zones around the stand even when the stand itself sits outside them.
+    lee_zone = eddy_mod.lee_zone_mask(stand.get("terrain"), hour["wind_dir"], hour["wind_speed"], hour["gust"])
     return {
         "wind_to_deg": round(wind_to),
         "wind_from_deg": round(hour["wind_dir"]),
@@ -140,6 +145,8 @@ def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = No
         "scent_to_deg": sc["scent_to_deg"],
         "scent_score": sc["scent_score"],
         "total": sc["total"],
+        "lee_eddy": sc["lee_eddy"],
+        "lee_zone": lee_zone,
     }
 
 
@@ -150,6 +157,13 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
 
     ww = max(0.2, min(1.0, hour["wind_speed"] / 12))
+    # Lee eddy: the forecast wind is the flow over the ridge top; under a separating crest the
+    # near-ground air instead curls back upslope toward the crest, at reduced strength.
+    lee = eddy_mod.detect_lee_eddy(stand.get("terrain"), hour["wind_dir"], hour["wind_speed"], hour["gust"])
+    blend_wind_from = hour["wind_dir"]
+    if lee and lee["level"] == "likely":
+        blend_wind_from = (hour["wind_dir"] + 180) % 360
+        ww *= lee["speed_frac"]
     coherence = thermal_coherence(hour["wind_speed"], therm["phase"], therm["solar_frac"], thermal_params)
     if known:
         tw = therm["weight"] * coherence
@@ -159,11 +173,14 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
     else:
         tw = 0.0  # no reliable drainage direction → the scent vector is just the wind
 
-    scent_to = blend_scent_dir(hour["wind_dir"], ww, thermal_to, tw)
+    scent_to = blend_scent_dir(blend_wind_from, ww, thermal_to, tw)
 
     scent_score = 1.0
     if stand.get("deer_approach_deg") is not None:
         scent_score = angle_diff(scent_to, stand["deer_approach_deg"]) / 180
+        if lee:
+            # an eddy swirls, so the predicted direction is only partly trustworthy
+            scent_score = 0.5 + (scent_score - 0.5) * (1 - 0.5 * lee["strength"])
 
     gust_spread = max(0, hour["gust"] - hour["wind_speed"])
     steadiness = 1 - min(0.5, gust_spread / 20)
@@ -171,6 +188,8 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
         steadiness -= 0.35
     if hour["wind_speed"] > 18:
         steadiness -= 0.3
+    if lee:
+        steadiness -= 0.2 * lee["strength"]   # eddy air pulses and swirls with the gusts
     steadiness = max(0.0, steadiness)
 
     # "conditions" score: wind steadiness + thermal predictability (0..1).
@@ -200,6 +219,7 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
         "tw": round(tw, 3),
         "ww": round(ww, 3),
         "swing_factor": round(therm["swing_factor"], 2),
+        "lee_eddy": lee,
     }
 
 
@@ -397,6 +417,10 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
     else:
         breakdown.append({"factor": "Terrain / thermals", "value": 0.0,
                           "text": "no usable terrain analysis for this stand — thermals ignored, scent follows the wind"})
+
+    if base["lee_eddy"]:
+        breakdown.append({"factor": "Lee eddy", "value": base["lee_eddy"]["strength"],
+                          "text": f"{base['lee_eddy']['text']} {base['lee_eddy']['why']}"})
 
     temp_swing = hour.get("temp_swing")
     if temp_swing is not None and temp_swing > 12:

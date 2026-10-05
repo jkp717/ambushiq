@@ -15,6 +15,7 @@ const USGS_IMAGERY = TILE_SOURCES.find((t) => t.id === "imagery").url;
 const COLORS = {
   wind: "#0C447C",
   thermal: "#185FA5",
+  eddy: "#0E7C8A",          // lee-side eddy: curled near-ground arrow, badge, lee-zone shading
   deer: "#A35A1B",
   bedding: "#6B4FA0",
   food: "#3B6D11",
@@ -177,6 +178,24 @@ function recSitePopup(p) {
   </div>`;
 }
 
+// Plain-English lee-eddy explanation for the stand popup: what to expect, then the numbers behind it.
+function eddyNoteHtml(eddy, leeLayerOn) {
+  if (!eddy) return "";
+  return `<div style="font-size:12px; line-height:1.4; margin:4px 0 8px; padding:6px 8px; max-width:260px;
+      border-left:3px solid ${COLORS.eddy}; background:rgba(14,124,138,.08); border-radius:4px;">
+    <div>${escHtml(eddy.text)}</div>
+    <div style="color:#666; margin-top:4px;">${escHtml(eddy.why)}</div>
+    ${leeLayerOn ? "" : `<div style="color:#666; margin-top:4px; font-style:italic;">Turn on Lee Eddy Zone below to see the sheltered area on the map.</div>`}
+  </div>`;
+}
+
+// Geographic bounds of a stand-centred square terrain box (box_m metres on a side).
+function standBoxBounds(s, boxM) {
+  const halfLat = (boxM / 2) / 111320.0;
+  const halfLon = (boxM / 2) / (111320.0 * Math.cos(s.lat * Math.PI / 180));
+  return [[s.lat - halfLat, s.lon - halfLon], [s.lat + halfLat, s.lon + halfLon]];
+}
+
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
 function standIcon(vectors, rank, selected = false) {
   const size = 78, c = size / 2;
@@ -184,7 +203,7 @@ function standIcon(vectors, rank, selected = false) {
   // wind by speed (mph), thermal by its blended weight (0..1).
   const windLen = Math.max(16, Math.min(34, 14 + (vectors.wind_speed ?? 6) * 1.5));
   const thermalLen = 12 + 22 * Math.max(0, Math.min(1, vectors.thermal_strength ?? 0.5));
-  const arrow = (deg, color, dash, len, w) => {
+  const arrow = (deg, color, dash, len, w, op = 1) => {
     if (deg == null) return "";
     const rad = ((deg - 90) * Math.PI) / 180;
     const x2 = c + Math.cos(rad) * len, y2 = c + Math.sin(rad) * len;
@@ -192,9 +211,29 @@ function standIcon(vectors, rank, selected = false) {
     const ah = 6, a1 = rad + Math.PI - 0.4, a2 = rad + Math.PI + 0.4;
     const hx1 = x2 + Math.cos(a1) * ah, hy1 = y2 + Math.sin(a1) * ah;
     const hx2 = x2 + Math.cos(a2) * ah, hy2 = y2 + Math.sin(a2) * ah;
-    return `<line x1="${c}" y1="${c}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${w}" ${dash ? 'stroke-dasharray="3 3"' : ""}/>
-      <polyline points="${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}" fill="none" stroke="${color}" stroke-width="${w}"/>`;
+    return `<g opacity="${op}"><line x1="${c}" y1="${c}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${w}" ${dash ? 'stroke-dasharray="3 3"' : ""}/>
+      <polyline points="${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}" fill="none" stroke="${color}" stroke-width="${w}"/></g>`;
   };
+  // Lee eddy: when likely, the forecast (ridge-top) wind arrow is ghosted and a curled arrow shows
+  // the near-ground air bending back upslope toward the crest. Either level gets a ⟲ badge.
+  const eddy = vectors.lee_eddy;
+  const eddyLikely = eddy?.level === "likely";
+  const curledArrow = (deg, len) => {
+    const rad = ((deg - 90) * Math.PI) / 180;
+    const tx = c + Math.cos(rad) * len, ty = c + Math.sin(rad) * len;
+    // control point bowed off to the side so the arrow reads as a curl, not a straight wind
+    const px = -Math.sin(rad), py = Math.cos(rad);
+    const qx = c + Math.cos(rad) * len * 0.15 + px * 16, qy = c + Math.sin(rad) * len * 0.15 + py * 16;
+    const tan = Math.atan2(ty - qy, tx - qx), ah = 6;
+    const hx1 = tx + Math.cos(tan + Math.PI - 0.45) * ah, hy1 = ty + Math.sin(tan + Math.PI - 0.45) * ah;
+    const hx2 = tx + Math.cos(tan + Math.PI + 0.45) * ah, hy2 = ty + Math.sin(tan + Math.PI + 0.45) * ah;
+    return `<path d="M ${c} ${c} Q ${qx} ${qy} ${tx} ${ty}" fill="none" stroke="${COLORS.eddy}" stroke-width="3" stroke-linecap="round"/>
+      <polyline points="${hx1},${hy1} ${tx},${ty} ${hx2},${hy2}" fill="none" stroke="${COLORS.eddy}" stroke-width="3"/>`;
+  };
+  const eddyBadge = eddy
+    ? `<circle cx="${c + 13}" cy="${c - 13}" r="7" fill="#fff" stroke="${COLORS.eddy}" stroke-width="1.5"/>
+       <text x="${c + 13}" y="${c - 9.5}" text-anchor="middle" font-size="10" font-weight="700" fill="${COLORS.eddy}">⟲</text>`
+    : "";
   const deerArrow = vectors.deer_approach_deg != null
     ? (() => {
         // deer approach is the direction deer come FROM; draw arrow pointing toward stand (inward)
@@ -221,11 +260,13 @@ function standIcon(vectors, rank, selected = false) {
   const html = `<div style="position:relative;width:${dotPx}px;height:${dotPx}px;overflow:visible">
     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"
       style="overflow:visible;position:absolute;left:${svgOff}px;top:${svgOff}px;pointer-events:none">
-      ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, windLen, 3) : ""}
+      ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, windLen, 3, eddyLikely ? 0.3 : 1) : ""}
+      ${eddyLikely && vectors.wind_to_deg != null ? curledArrow(eddy.near_ground_to_deg, 26) : ""}
       ${vectors.thermal_to_deg != null ? arrow(vectors.thermal_to_deg, COLORS.thermal, true, thermalLen, 2.5) : ""}
       ${deerArrow}
       ${ring}
       <circle cx="${c}" cy="${c}" r="5.5" fill="${COLORS.stand}" stroke="#fff" stroke-width="1.5"/>
+      ${eddyBadge}
     </svg>
   </div>`;
   return L.divIcon({ html, className: "stand-div-icon", iconSize: [dotPx, dotPx], iconAnchor: [dotHalf, dotHalf] });
@@ -283,7 +324,7 @@ function scoutExtrasHtml(color, comments) {
 
 // Build a popup with edit/delete buttons and wire them up after it opens.
 // `position` ({lat, lon, label}) adds a "Location / Center  lat, lon" line so every user-placed item shows where it is.
-function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
+function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
                                     dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment }) {
   const posHtml = position && position.lat != null && position.lon != null
     ? `<div class="feat-popup-pos"><span>${position.label || "Location"}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
@@ -291,11 +332,12 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
   let html = `<div class="feat-popup">
     <div class="feat-popup-title">${title || "(unnamed)"}</div>
     ${subtitle ? `<div class="feat-popup-sub">${subtitle}</div>` : ""}
+    ${note || ""}
     ${posHtml}
   `;
 
   if (kind === "stand") {
-    const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+    const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
     html += `
       <div class="feat-popup-toggles" style="display:flex; flex-direction:column; gap:6px; margin: 10px 0; border-top: 1px solid var(--bord); border-bottom: 1px solid var(--bord); padding: 8px 0;">
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" ${s.wind ? 'checked' : ''}> Wind</label>
@@ -303,6 +345,7 @@ function bindFeaturePopup(layer, { title, subtitle, kind, id, onEdit, onDelete, 
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" ${s.scent ? 'checked' : ''}> Scent</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" ${s.deer ? 'checked' : ''}> Deer</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="flow" ${s.flow ? 'checked' : ''}> Drainage Flow</label>
+        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="lee" ${s.lee ? 'checked' : ''}> Lee Eddy Zone</label>
       </div>
     `;
   }
@@ -451,9 +494,9 @@ const HuntMap = forwardRef(function HuntMap({
       };
       L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
-      // "scent" is added before "stands" so cones render below stand markers
+      // "scent" is added before "stands" so cones render below stand markers; "lee" shading sits below both
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
@@ -1022,7 +1065,7 @@ const HuntMap = forwardRef(function HuntMap({
     }
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
       if (!sl.scent) return; // Individual stand scent check
 
       const v = byId[s.id];
@@ -1034,10 +1077,18 @@ const HuntMap = forwardRef(function HuntMap({
       const scentScore = v.scent_score ?? 1;
 
       // Length: proportional to wind speed (60–300 m)
-      const lengthM  = Math.max(60,  Math.min(300, 40 + windSpeed * 12));
+      let lengthM  = Math.max(60,  Math.min(300, 40 + windSpeed * 12));
       // Half-angle: grows with gust spread — gusty = wide fan, steady = tight beam (8–50°)
       const gustSpread = Math.max(0, gust - windSpeed);
-      const halfAngle  = Math.max(8,  Math.min(50,  10 + gustSpread * 5));
+      let halfAngle  = Math.max(8,  Math.min(50,  10 + gustSpread * 5));
+      // Lee eddy: scent swirls in a short, wide, low-confidence fan instead of a clean beam
+      const eddyLevel = v.lee_eddy?.level;
+      if (eddyLevel === "likely") {
+        lengthM = Math.max(60, Math.min(120, 50 + windSpeed * 4));
+        halfAngle = Math.max(70, Math.min(90, 70 + gustSpread * 2));
+      } else if (eddyLevel === "possible") {
+        halfAngle = Math.min(70, halfAngle + 20);
+      }
 
       // Colour: green (away from deer) → amber → red (toward deer)
       const color = scentScore > 0.6 ? "#2D8A2D" : scentScore > 0.35 ? "#C28800" : "#C0392B";
@@ -1051,9 +1102,21 @@ const HuntMap = forwardRef(function HuntMap({
       }
 
       L.polygon(pts, {
-        color, fillColor: color, fillOpacity: 0.22, weight: 1, opacity: 0.55,
+        color, fillColor: color, fillOpacity: eddyLevel ? 0.12 : 0.22, weight: eddyLevel ? 1.5 : 1, opacity: 0.55,
+        dashArray: eddyLevel ? "5 6" : null,
         interactive: false, // never intercepts clicks
       }).addTo(g);
+      if (eddyLevel === "likely") {
+        // dashed inner arcs give the fan a "swirl" look
+        [0.45, 0.75].forEach((f) => {
+          const arc = [];
+          for (let i = 0; i <= ARC_STEPS; i++) {
+            const ang = (scentDeg - halfAngle * 0.85) + (2 * halfAngle * 0.85 * i / ARC_STEPS);
+            arc.push(bearingPoint(s.lat, s.lon, (ang + 360) % 360, lengthM * f));
+          }
+          L.polyline(arc, { color, weight: 1.2, opacity: 0.6, dashArray: "3 5", interactive: false }).addTo(g);
+        });
+      }
     });
   }, [stands, conditions, ready, standLayers]);
 
@@ -1076,19 +1139,25 @@ const HuntMap = forwardRef(function HuntMap({
     });
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
       const v = byId[s.id] || {};
       const vectors = {
         wind_to_deg: sl.wind ? v.wind_to_deg : null,
         thermal_to_deg: sl.thermal ? v.thermal_to_deg : null,
         wind_speed: v.wind_speed,
         thermal_strength: v.thermal_strength,
+        lee_eddy: sl.wind ? v.lee_eddy : null,
         deer_approach_deg: sl.deer ? s.deer_approach_deg : null,
       };
       const rank = rankIndex[s.id] ?? 99;
       const icon = standIcon(vectors, rank, isSelected("stand", s.id));
 
-      const windTxt = v.wind_to_deg != null ? `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph` : "";
+      const eddy = v.lee_eddy;
+      const windTxt = v.wind_to_deg == null ? ""
+        : eddy?.level === "likely"
+          ? `Ridge wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph · Near ground ⟲ ${degToCompass(eddy.near_ground_to_deg)}`
+          : `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph`;
+      const note = eddyNoteHtml(eddy, sl.lee);
       const thermTxt = v.thermal_to_deg != null ? `Thermal ${v.thermal_phase} → ${degToCompass(v.thermal_to_deg)}` : "";
       const subtitle = [windTxt, thermTxt].filter(Boolean).join(" · ");
 
@@ -1100,7 +1169,7 @@ const HuntMap = forwardRef(function HuntMap({
           m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection instead
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
         }
       } else {
@@ -1116,7 +1185,7 @@ const HuntMap = forwardRef(function HuntMap({
           // no popup while selecting
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
           });
         }
         m.addTo(g);
@@ -1144,7 +1213,7 @@ const HuntMap = forwardRef(function HuntMap({
     g.clearLayers();
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
       if (!sl.flow) return; // Individual stand flow check
       if (!s.terrain || !s.terrain.acc) return;
       const t = s.terrain;
@@ -1181,26 +1250,46 @@ const HuntMap = forwardRef(function HuntMap({
         }
       }
 
-      // Calculate exact geographic bounds for the 800m box
-      const latRad = s.lat * Math.PI / 180;
-      const mPerDegLat = 111320.0;
-      const mPerDegLon = mPerDegLat * Math.cos(latRad);
-      const halfLat = (boxM / 2) / mPerDegLat;
-      const halfLon = (boxM / 2) / mPerDegLon;
-
-      const bounds = [
-        [s.lat - halfLat, s.lon - halfLon], // SouthWest
-        [s.lat + halfLat, s.lon + halfLon]  // NorthEast
-      ];
-
-      // Project the canvas onto the Leaflet map
-      L.imageOverlay(canvas.toDataURL(), bounds, {
+      // Project the canvas onto the Leaflet map, over the stand's 800 m analysis box
+      L.imageOverlay(canvas.toDataURL(), standBoxBounds(s, boxM), {
         opacity: 0.85,
         interactive: false,
         className: "pixelated-overlay"
       }).addTo(g);
     });
   }, [stands, ready, standLayers]);
+
+  // render lee-eddy zones for the selected hour's wind over each stand's 2.4 km context grid
+  useEffect(() => {
+    if (!ready) return;
+    const g = layerGroups.current.lee;
+    g.clearLayers();
+    const byId = {};
+    (conditions?.stands || []).forEach((it) => { byId[it.stand.id] = it.vectors; });
+
+    stands.forEach((s) => {
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
+      const z = byId[s.id]?.lee_zone;
+      if (!sl.lee || !z) return;
+      const N = z.grid_size;
+      const canvas = document.createElement("canvas");
+      canvas.width = N;
+      canvas.height = N;
+      const ctx = canvas.getContext("2d");
+      for (let r = 0; r < N; r++) {
+        for (let c = 0; c < N; c++) {
+          const val = z.grid[r][c];
+          if (!val) continue;
+          // eddy zone = translucent teal; separating crest = solid darker teal
+          ctx.fillStyle = val === 2 ? "rgba(8, 82, 92, 0.9)" : "rgba(14, 124, 138, 0.38)";
+          ctx.fillRect(c, r, 1, 1);
+        }
+      }
+      L.imageOverlay(canvas.toDataURL(), standBoxBounds(s, z.box_m), {
+        opacity: 0.85, interactive: false, className: "pixelated-overlay",
+      }).addTo(g);
+    });
+  }, [stands, conditions, ready, standLayers]);
 
   return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
 });

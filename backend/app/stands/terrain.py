@@ -11,6 +11,10 @@ import richdem as rd
 
 DEFAULT_GRID = 41   # denser than the artifact (24) — odd number ensures exact center alignment
 DEFAULT_BOX_M = 800.0
+# Coarse wide grid around the stand (~60 m cells) so lee-eddy detection can see a ridge crest
+# well outside the 800 m analysis box (forecast/eddy.py).
+CONTEXT_GRID = 41
+CONTEXT_BOX_M = 2400.0
 M_PER_DEG_LAT = 111320.0
 
 # Rise/run below which a cell is treated as flat: richdem reports aspect 270 for a
@@ -137,24 +141,46 @@ async def fetch_terrain(lat: float, lon: float, grid: int = DEFAULT_GRID, box_m:
 
     async with httpx.AsyncClient() as client:
         try:
-            flat = await _fetch_usgs(client, lats, lons, progress_callback)
+            flat = await _fetch_usgs(client, lats, lons, progress_callback, progress_span=(5, 45))
             source = "USGS 3DEP"
         except Exception:
             if progress_callback:
-                await progress_callback(40, "USGS limit reached: switching to Open-Meteo...")
+                await progress_callback(25, "USGS limit reached: switching to Open-Meteo...")
             flat = await _fetch_open_meteo(client, lats, lons)
             source = "Open-Meteo"
+        context = await _fetch_context(client, lat, lon, progress_callback)
 
     if progress_callback:
         await progress_callback(85, "Running D-Infinity terrain analysis...")
 
     dem = [flat[r * grid:(r + 1) * grid] for r in range(grid)]
     result = analyze_terrain(dem, cell_m, source, box_m=box_m)
+    result["context"] = context
 
     if progress_callback:
         await progress_callback(100, "Complete!")
 
     return result
+
+
+async def _fetch_context(client: httpx.AsyncClient, lat: float, lon: float, progress_callback=None) -> dict | None:
+    """The wide, coarse elevation grid used for lee-eddy detection. Optional: if both
+    elevation services fail here the analysis still completes, just without it."""
+    lats, lons, cell_m = build_sample_grid(lat, lon, grid=CONTEXT_GRID, box_m=CONTEXT_BOX_M)
+    if progress_callback:
+        await progress_callback(45, "Sampling surrounding ridges...")
+    try:
+        flat = await _fetch_usgs(client, lats, lons, progress_callback, progress_span=(45, 80))
+        source = "USGS 3DEP"
+    except Exception:
+        try:
+            flat = await _fetch_open_meteo(client, lats, lons)
+            source = "Open-Meteo"
+        except Exception:
+            return None
+    n = CONTEXT_GRID
+    return {"source": source, "dem": [flat[r * n:(r + 1) * n] for r in range(n)],
+            "cell_m": cell_m, "box_m": CONTEXT_BOX_M, "grid_size": n}
 
 
 def compute_slope_aspect(dem_np, cell_m: float = 1.0):
