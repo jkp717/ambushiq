@@ -19,6 +19,7 @@ class ManualRankIn(BaseModel):
 
 class HourRankIn(BaseModel):
     time_index: int  # index into the forecast hourly arrays
+    lee_zone: bool = False  # include the property-wide lee-eddy map layer for this hour
 
 
 class DayRankIn(BaseModel):

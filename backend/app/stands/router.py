@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.dependencies import get_active_region_id, require_token
+from app.regions.terrain import ensure_property_terrain
 from app.stands.service import analyze_and_store
 from app.stands.models import Stand
 from app.stands.schemas import StandIn
@@ -26,18 +27,20 @@ def list_stands(region_id: int = Depends(get_active_region_id), _=Depends(requir
 
 
 @router.post("")
-def create_stand(body: StandIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+async def create_stand(body: StandIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     with Session(engine) as s:
         st = Stand(**body.model_dump(), region_id=region_id)
         s.add(st)
         s.commit()
         s.refresh(st)
-        return st.to_dict()
+        out = st.to_dict()
+    ensure_property_terrain(region_id)   # grows the property grid if the new stand is outside it
+    return out
 
 
 @router.put("/{stand_id}")
-def update_stand(stand_id: int, body: StandIn, region_id: int = Depends(get_active_region_id),
-                  _=Depends(require_token)):
+async def update_stand(stand_id: int, body: StandIn, region_id: int = Depends(get_active_region_id),
+                       _=Depends(require_token)):
     with Session(engine) as s:
         st = s.get(Stand, stand_id)
         if not st or st.region_id != region_id:
@@ -49,7 +52,10 @@ def update_stand(stand_id: int, body: StandIn, region_id: int = Depends(get_acti
             st.terrain_json = None  # invalidate cached terrain on move
         s.commit()
         s.refresh(st)
-        return st.to_dict()
+        out = st.to_dict()
+    if moved:
+        ensure_property_terrain(region_id)
+    return out
 
 
 @router.delete("/{stand_id}")

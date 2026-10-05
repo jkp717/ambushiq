@@ -21,9 +21,11 @@ from app.core.security import decrypt_settings_key
 from app.corridors.models import Corridor
 from app.deer_ratings.rating import phase_proximity_multipliers, rut_intensity
 from app.deer_sign.models import DeerSign
+from app.forecast import eddy as eddy_mod
 from app.forecast import scoring
 from app.forecast.models import ForecastCache
 from app.forecast.providers import WeatherError, _empty_hourly, _sun_times_utc, get_weather_provider
+from app.regions import terrain as region_terrain
 from app.regions.models import Region
 from app.settings.service import _thermal_params, get_settings
 from app.stands.models import Stand
@@ -852,9 +854,11 @@ class ScoringContext:
     scent_gate_floor: float
     rut_peak: tuple
     rut_strength: float
+    eddy_grid: Optional[eddy_mod.Grid] = None   # the region's property-wide elevation grid
     _prox: dict = field(default_factory=dict)
     _daylight: dict = field(default_factory=dict)
     _sun: dict = field(default_factory=dict)
+    _eddy: dict = field(default_factory=dict)
 
     def season(self, day: Optional[str]) -> tuple[Optional[dict], Optional[str]]:
         """(proximity multipliers, rut phase) for a forecast date, or (None, None)
@@ -900,6 +904,15 @@ class ScoringContext:
             self._daylight[sid] = kept
         return self._daylight[sid]
 
+    def eddy_site(self, stand: dict) -> Optional[eddy_mod.EddySite]:
+        """Where the stand reads lee-eddy terrain: its point in the property grid when it's
+        well inside it, else its own stand-analysis grid."""
+        sid = stand.get("id")
+        if sid not in self._eddy:
+            self._eddy[sid] = eddy_mod.site_for(self.eddy_grid, stand,
+                                                min_inset_m=region_terrain.MARGIN_M * region_terrain.COVER_TOLERANCE)
+        return self._eddy[sid]
+
     def score(self, stand: dict, hour: dict, period: Optional[str] = None,
               windows: Optional[dict] = None) -> dict:
         """Full score for one stand at one forecast hour. `hour["date"]` (ISO) selects the
@@ -920,7 +933,7 @@ class ScoringContext:
             unhealthy_reason=cam["reason"] if cam else None,
             proximity=prox, utc_offset_seconds=self.utc_offset,
             thermal_params=self.thermal_params, camera_boost_saturation=self.saturation,
-            scent_gate_floor=self.scent_gate_floor, windows=windows)
+            scent_gate_floor=self.scent_gate_floor, windows=windows, eddy_site=self.eddy_site(stand))
 
 
 def build_scoring_context(region_id: int, region: dict, settings: dict, utc_offset: int, *,
@@ -974,5 +987,6 @@ def build_scoring_context(region_id: int, region: dict, settings: dict, utc_offs
         scent_gate_floor=float(settings.get("scent_gate_floor", scoring.SCENT_GATE_FLOOR_DEFAULT)),
         rut_peak=(int(region["rut_peak_month"]), int(region["rut_peak_day"])),
         rut_strength=float(settings.get("rut_weight_strength", 1.0)),
+        eddy_grid=region_terrain.load_grid(region_id),
     )
 

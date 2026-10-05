@@ -137,7 +137,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: false });
   const [layersOpen, setLayersOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites } -> bool, default collapsed
   const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
@@ -193,7 +193,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   // function to toggle individual stand layers
   const toggleStandLayer = useCallback((standId, layerKey) => {
     setStandLayers((prev) => {
-      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
+      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
       return { ...prev, [standId]: { ...current, [layerKey]: !current[layerKey] } };
     });
   }, []);
@@ -265,10 +265,10 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   useEffect(() => {
     if (!curHour) return;
     let cancel = false;
-    api("/map/conditions", { method: "POST", body: JSON.stringify({ time_index: curHour.index }) })
+    api("/map/conditions", { method: "POST", body: JSON.stringify({ time_index: curHour.index, lee_zone: layers.leeEddies }) })
       .then((j) => { if (cancel) return; setConditions(j); }).catch(() => {});
     return () => { cancel = true; };
-  }, [curHour?.index]);
+  }, [curHour?.index, layers.leeEddies]);
 
   const onMapClick = useCallback(async (pt) => {
     if (drawMode === "stand") { setDrawMode(null); openStandEditor(pt); }
@@ -702,6 +702,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
               <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
+              <LayerChip on={layers.leeEddies} onClick={() => toggle("leeEddies")} color="#0E7C8A" label="Lee eddies" />
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} color="#D81B60" label="Public land" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("publicLand")}

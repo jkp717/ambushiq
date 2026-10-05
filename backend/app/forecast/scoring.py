@@ -120,19 +120,17 @@ def _terrain_vectors(stand: dict) -> tuple[float, float, float | None, bool]:
     return 0.0, 0.0, None, False
 
 
-def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = None) -> dict:
+def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = None,
+                       eddy_site: eddy_mod.EddySite | None = None) -> dict:
     """Return separate wind and thermal directions (blowing-TO, degrees) plus the
     blended scent direction and score — for map indicators that show wind and
     thermals as distinct arrows."""
     wind_to = (hour["wind_dir"] + 180) % 360
 
-    sc = score_stand_hour(stand, hour, thermal_params)
+    sc = score_stand_hour(stand, hour, thermal_params, eddy_site)
     # The thermal arrow is only meaningful when the drainage direction is known and the
     # phase actually has a coherent flow; in "neutral" hours the direction is noise.
     show_thermal = sc["thermal_known"] and sc["thermal_phase"] != "neutral"
-    # The lee-zone layer depends only on this hour's wind and the terrain, so it shows the
-    # eddy zones around the stand even when the stand itself sits outside them.
-    lee_zone = eddy_mod.lee_zone_mask(stand.get("terrain"), hour["wind_dir"], hour["wind_speed"], hour["gust"])
     return {
         "wind_to_deg": round(wind_to),
         "wind_from_deg": round(hour["wind_dir"]),
@@ -146,11 +144,13 @@ def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = No
         "scent_score": sc["scent_score"],
         "total": sc["total"],
         "lee_eddy": sc["lee_eddy"],
-        "lee_zone": lee_zone,
     }
 
 
-def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None) -> dict:
+def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None,
+                     eddy_site: eddy_mod.EddySite | None = None) -> dict:
+    """`eddy_site` is where the stand reads lee-eddy terrain from (its point in the property
+    grid); when omitted, the stand's own terrain-analysis grid is used."""
     downhill, drainage, channel, known = _terrain_vectors(stand)
     therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"],
                           hour.get("temp_swing"))
@@ -159,7 +159,8 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
     ww = max(0.2, min(1.0, hour["wind_speed"] / 12))
     # Lee eddy: the forecast wind is the flow over the ridge top; under a separating crest the
     # near-ground air instead curls back upslope toward the crest, at reduced strength.
-    lee = eddy_mod.detect_lee_eddy(stand.get("terrain"), hour["wind_dir"], hour["wind_speed"], hour["gust"])
+    site = eddy_site if eddy_site is not None else eddy_mod.stand_site(stand.get("terrain"))
+    lee = eddy_mod.detect_lee_eddy(site, hour["wind_dir"], hour["wind_speed"], hour["gust"])
     blend_wind_from = hour["wind_dir"]
     if lee and lee["level"] == "likely":
         blend_wind_from = (hour["wind_dir"] + 180) % 360
@@ -394,7 +395,8 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          thermal_params: dict | None = None,
                          camera_boost_saturation: float = CAMERA_BOOST_SATURATION_DEFAULT,
                          scent_gate_floor: float = SCENT_GATE_FLOOR_DEFAULT,
-                         windows: dict | None = None) -> dict:
+                         windows: dict | None = None,
+                         eddy_site: eddy_mod.EddySite | None = None) -> dict:
     """The one stand-scoring function every ranking endpoint uses, so a stand's score
     for a given hour is identical on the map, in sit rankings and in the day view:
 
@@ -406,7 +408,7 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
     scent gate  SOFT: bad scent scales the score down to `scent_gate_floor` of its
                 value (default 0.4) but never zeroes it; set the floor to 0 for a hard gate.
     """
-    base = score_stand_hour(stand, hour, thermal_params)
+    base = score_stand_hour(stand, hour, thermal_params, eddy_site)
     breakdown = []
 
     breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],

@@ -145,7 +145,7 @@ def test_job_list_shows_the_active_regions_terrain_run(db, monkeypatch):
     asyncio.run(service.run_tracked("terrain_reanalyze", "manual", region_id=1))
 
     jobs = {j["id"]: j for j in jobs_router.list_jobs(region_id=1)}
-    assert list(jobs)[0] == "terrain_reanalyze" and "sync_cameras" in jobs and "prune_roads" in jobs
+    assert list(jobs)[:2] == ["property_terrain", "terrain_reanalyze"] and "prune_roads" in jobs
     assert jobs["terrain_reanalyze"]["last_run"]["status"] == "success"
     assert jobs["terrain_reanalyze"]["running"] is False
     assert jobs["sync_cameras"]["last_run"] is None

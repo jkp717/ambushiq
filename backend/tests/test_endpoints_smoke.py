@@ -74,6 +74,7 @@ def seeded(monkeypatch):
     monkeypatch.setattr(deer_router, "get_historical_highs_f", none)
     monkeypatch.setattr(deer_router, "get_historical_day_weather", none)
     monkeypatch.setattr(fc_router.detection_mod, "species_available", lambda: False)
+    monkeypatch.setattr(fc_router, "ensure_property_terrain", lambda region_id: None)   # no elevation downloads
 
 
 def run(coro):

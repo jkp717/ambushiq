@@ -1,7 +1,7 @@
 """Database ORM model for hunting regions."""
 from __future__ import annotations
 
-from sqlalchemy import Float, Integer, String
+from sqlalchemy import Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -27,3 +27,20 @@ class Region(Base):
             "property_timezone": self.property_timezone,
             "is_default": bool(self.is_default), "created_at": self.created_at,
         }
+
+
+class RegionTerrain(Base):
+    """One property-wide elevation grid per region (regions/terrain.py), used for lee-eddy
+    detection. north/south/west/east are the outermost sample points; row 0 is north."""
+    __tablename__ = "region_terrain"
+    region_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    north: Mapped[float] = mapped_column(Float)
+    south: Mapped[float] = mapped_column(Float)
+    west: Mapped[float] = mapped_column(Float)
+    east: Mapped[float] = mapped_column(Float)
+    rows: Mapped[int] = mapped_column(Integer)
+    cols: Mapped[int] = mapped_column(Integer)
+    cell_m: Mapped[float] = mapped_column(Float)
+    dem_json: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(32))
+    fetched_at: Mapped[str] = mapped_column(String(40))

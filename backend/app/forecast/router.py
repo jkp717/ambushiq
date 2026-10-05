@@ -26,7 +26,9 @@ from app.forecast.service import (
     format_hour_label,
     get_forecast,
 )
+from app.forecast import eddy as eddy_mod
 from app.regions.models import Region
+from app.regions.terrain import ensure_property_terrain
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 from app.stands.models import Stand
@@ -211,6 +213,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     with that same hour. Drives the map indicators and the list together; scores come
     from the same ScoringContext as /api/day/ranked, so the two views always agree."""
     region = get_region_dict(region_id)
+    ensure_property_terrain(region_id)   # first map load (or a new far-out stand) fetches it in the background
     stands = _active_stands(region_id)
     lat, lon = _forecast_location(region_id)
     fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
@@ -232,7 +235,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     items = []
     for st in stands:
         det = ctx.score(st, hour, period, windows)
-        vec = dict(scoring.stand_hour_vectors(st, hour, ctx.thermal_params))
+        vec = dict(scoring.stand_hour_vectors(st, hour, ctx.thermal_params, ctx.eddy_site(st)))
         vec["total"] = det["final_score"]
         if ctx.camera_scoring_on and st["id"] in ctx.camera_state:
             vec["camera_boost"] = det["camera"]
@@ -255,6 +258,8 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
                  "wind_speed": h["wind_speed_10m"][i], "wind_dir": h["wind_direction_10m"][i]},
         "stands": items,
         "ranked": ranked,
+        "lee_zone": eddy_mod.lee_zone_mask(ctx.eddy_grid, hour["wind_dir"], hour["wind_speed"], hour["gust"])
+                    if body.lee_zone else None,
     }
 
 

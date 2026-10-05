@@ -39,11 +39,18 @@ def registry() -> dict[str, dict]:
     """Jobs in display order. Built on demand: the job functions live in modules (scheduler,
     stands) that would otherwise import-cycle with this one."""
     from app import scheduler as sch
+    from app.regions.terrain import fetch_property_terrain
     from app.stands.service import terrain_reanalyze_job
     return {
+        "property_terrain": {
+            "label": "Analyze property terrain", "icon": "terrain", "region_scoped": True,
+            "fn": fetch_property_terrain,
+            "description": "Fetches one elevation grid covering every stand plus 1.5 km, used for lee-eddy "
+                           "detection. Runs on its own when stands are added outside it.",
+        },
         "terrain_reanalyze": {
             "label": "Re-analyze stand terrain", "icon": "terrain", "region_scoped": True, "fn": terrain_reanalyze_job,
-            "description": "Refreshes slope, drainage and lee-eddy terrain for every stand in this region.",
+            "description": "Refreshes each stand's slope and drainage (thermal) analysis in this region.",
         },
         "sync_cameras": {
             "label": "Sync trail cameras", "icon": "camera", "fn": sch.sync_cameras_job,

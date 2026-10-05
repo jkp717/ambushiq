@@ -185,7 +185,7 @@ function eddyNoteHtml(eddy, leeLayerOn) {
       border-left:3px solid ${COLORS.eddy}; background:rgba(14,124,138,.08); border-radius:4px;">
     <div>${escHtml(eddy.text)}</div>
     <div style="color:#666; margin-top:4px;">${escHtml(eddy.why)}</div>
-    ${leeLayerOn ? "" : `<div style="color:#666; margin-top:4px; font-style:italic;">Turn on Lee Eddy Zone below to see the sheltered area on the map.</div>`}
+    ${leeLayerOn ? "" : `<div style="color:#666; margin-top:4px; font-style:italic;">Turn on the Lee eddies map layer to see the sheltered area.</div>`}
   </div>`;
 }
 
@@ -337,7 +337,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
   `;
 
   if (kind === "stand") {
-    const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
+    const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false };
     html += `
       <div class="feat-popup-toggles" style="display:flex; flex-direction:column; gap:6px; margin: 10px 0; border-top: 1px solid var(--bord); border-bottom: 1px solid var(--bord); padding: 8px 0;">
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" ${s.wind ? 'checked' : ''}> Wind</label>
@@ -345,7 +345,6 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" ${s.scent ? 'checked' : ''}> Scent</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" ${s.deer ? 'checked' : ''}> Deer</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="flow" ${s.flow ? 'checked' : ''}> Drainage Flow</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="lee" ${s.lee ? 'checked' : ''}> Lee Eddy Zone</label>
       </div>
     `;
   }
@@ -1065,7 +1064,7 @@ const HuntMap = forwardRef(function HuntMap({
     }
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
       if (!sl.scent) return; // Individual stand scent check
 
       const v = byId[s.id];
@@ -1139,7 +1138,7 @@ const HuntMap = forwardRef(function HuntMap({
     });
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
       const v = byId[s.id] || {};
       const vectors = {
         wind_to_deg: sl.wind ? v.wind_to_deg : null,
@@ -1157,7 +1156,7 @@ const HuntMap = forwardRef(function HuntMap({
         : eddy?.level === "likely"
           ? `Ridge wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph · Near ground ⟲ ${degToCompass(eddy.near_ground_to_deg)}`
           : `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph`;
-      const note = eddyNoteHtml(eddy, sl.lee);
+      const note = eddyNoteHtml(eddy, layers.leeEddies);
       const thermTxt = v.thermal_to_deg != null ? `Thermal ${v.thermal_phase} → ${degToCompass(v.thermal_to_deg)}` : "";
       const subtitle = [windTxt, thermTxt].filter(Boolean).join(" · ");
 
@@ -1193,7 +1192,7 @@ const HuntMap = forwardRef(function HuntMap({
       }
     });
   }, [stands, conditions, ready, standLayers, drawMode, onEditFeature, onDeleteFeature, onToggleStandLayer,
-      selectMode, selectedKeys]);
+      selectMode, selectedKeys, layers.leeEddies]);
 
   // render draft (in-progress drawing)
   useEffect(() => {
@@ -1213,7 +1212,7 @@ const HuntMap = forwardRef(function HuntMap({
     g.clearLayers();
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
       if (!sl.flow) return; // Individual stand flow check
       if (!s.terrain || !s.terrain.acc) return;
       const t = s.terrain;
@@ -1259,37 +1258,31 @@ const HuntMap = forwardRef(function HuntMap({
     });
   }, [stands, ready, standLayers]);
 
-  // render lee-eddy zones for the selected hour's wind over each stand's 2.4 km context grid
+  // render the property-wide lee-eddy layer for the selected hour's wind (one grid per region)
   useEffect(() => {
     if (!ready) return;
     const g = layerGroups.current.lee;
     g.clearLayers();
-    const byId = {};
-    (conditions?.stands || []).forEach((it) => { byId[it.stand.id] = it.vectors; });
-
-    stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false, lee: false };
-      const z = byId[s.id]?.lee_zone;
-      if (!sl.lee || !z) return;
-      const N = z.grid_size;
-      const canvas = document.createElement("canvas");
-      canvas.width = N;
-      canvas.height = N;
-      const ctx = canvas.getContext("2d");
-      for (let r = 0; r < N; r++) {
-        for (let c = 0; c < N; c++) {
-          const val = z.grid[r][c];
-          if (!val) continue;
-          // eddy zone = translucent teal; separating crest = solid darker teal
-          ctx.fillStyle = val === 2 ? "rgba(8, 82, 92, 0.9)" : "rgba(14, 124, 138, 0.38)";
-          ctx.fillRect(c, r, 1, 1);
-        }
+    const z = conditions?.lee_zone;
+    if (!layers.leeEddies || !z) return;
+    const rows = z.rows, H = rows.length, W = rows[0].length;
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        const val = rows[r][c];
+        if (val === "0") continue;
+        // eddy zone = translucent teal; separating crest = solid darker teal
+        ctx.fillStyle = val === "2" ? "rgba(8, 82, 92, 0.9)" : "rgba(14, 124, 138, 0.38)";
+        ctx.fillRect(c, r, 1, 1);
       }
-      L.imageOverlay(canvas.toDataURL(), standBoxBounds(s, z.box_m), {
-        opacity: 0.85, interactive: false, className: "pixelated-overlay",
-      }).addTo(g);
-    });
-  }, [stands, conditions, ready, standLayers]);
+    }
+    L.imageOverlay(canvas.toDataURL(), z.bounds, {
+      opacity: 0.85, interactive: false, className: "pixelated-overlay",
+    }).addTo(g);
+  }, [conditions, ready, layers.leeEddies]);
 
   return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
 });
