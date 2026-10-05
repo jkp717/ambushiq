@@ -190,10 +190,17 @@ def phase_proximity_multipliers(phase: str, strength: float = 1.0) -> dict:
     return {k: 1.0 + strength * (v - 1.0) for k, v in table.items()}
 
 
+def score_out_of_5(score: float) -> float:
+    """The 0-1 score on the 1.0-5.0 scale the UI shows, rounded half-up to one decimal
+    (round() is banker's rounding in Python)."""
+    return math.floor((1 + 4 * max(0.0, min(1.0, score))) * 10 + 0.5) / 10
+
+
 def rating_from_score(score: float) -> int:
-    """0.2-wide bins — [0,.2)=1 … [.8,1]=5 — instead of round(), which is banker's
-    rounding in Python and rated 0.375 and 0.625 both as 3."""
-    return 1 + min(4, max(0, int(score * 5)))
+    """Whole-number rating (deer icons, color) = the displayed 1-5 score rounded half-up,
+    so a day shown as 2.6 is always a 3. Deriving it from the same rounded value the UI
+    displays means the number, icons and color can never disagree."""
+    return int(min(5, max(1, math.floor(score_out_of_5(score) + 0.5))))
 
 
 def rate_day(d: date, wx: dict, weights: dict | None = None,
@@ -280,6 +287,7 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
     return {
         "rating": rating,
         "score": round(score, 3),
+        "score_5": score_out_of_5(score),   # the 1.0-5.0 value to display; `rating` is derived from it
         "rut": {"intensity": round(rut, 2), "phase": phase},
         "factors": {
             "pressure": round(pf, 2),

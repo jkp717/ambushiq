@@ -21,12 +21,16 @@ def test_scenario_table_uses_the_full_scale():
     assert _rating(PEAK_RUT_DAY, PERFECT) == 5
     assert _rating(PEAK_RUT_DAY, WORST) == 2
     assert _rating(OFF_SEASON_DAY, PERFECT) == 3
-    assert _rating(OFF_SEASON_DAY, WORST) == 1
+    assert _rating(OFF_SEASON_DAY, WORST) <= 2        # displays as 1.5
     assert _rating(date(2026, 1, 20), PERFECT) <= 3   # "off-season" tops out around 3
 
 
-def test_rating_bins_have_no_bankers_rounding():
-    for score, expected in [(0.0, 1), (0.19, 1), (0.2, 2), (0.375, 2), (0.4, 3), (0.625, 4), (0.8, 5), (1.0, 5)]:
+def test_rating_is_the_displayed_score_rounded_half_up():
+    # (score, displayed, rating) — 1.5 / 2.5 / 3.5 / 4.5 round up, never banker's-rounded
+    for score, shown, expected in [(0.0, 1.0, 1), (0.1, 1.4, 1), (0.125, 1.5, 2), (0.375, 2.5, 3),
+                                   (0.39, 2.6, 3), (0.4, 2.6, 3), (0.625, 3.5, 4), (0.875, 4.5, 5),
+                                   (1.0, 5.0, 5)]:
+        assert rating.score_out_of_5(score) == shown
         assert rating.rating_from_score(score) == expected
 
 

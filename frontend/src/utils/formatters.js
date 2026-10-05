@@ -49,4 +49,11 @@ function morningStartIdx(day) {
   return best * 4; // return in quarter-hour slot units
 }
 
-export { localDate, corridorLengthFt, formatRelTime, formatDateTime, morningStartIdx };
+/* ── deer rating "x.x/5" label ── */
+// score_5 is rounded by the backend, which derives the whole-number `rating` (icons, color)
+// from that same value — never recompute it here or the two can disagree.
+function ratingScore5(rating) {
+  return rating.score_5 != null ? rating.score_5.toFixed(1) : rating.rating;
+}
+
+export { localDate, corridorLengthFt, formatRelTime, formatDateTime, morningStartIdx, ratingScore5 };

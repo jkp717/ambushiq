@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Target, Plus, RefreshCw, AlertTriangle, Footprints, Wheat, Trees } from "lucide-react";
 import { api, apiRetry } from "../services/api.js";
-import { localDate } from "../utils/formatters.js";
+import { localDate, ratingScore5 } from "../utils/formatters.js";
 import { PERIOD_COLORS } from "../utils/periods.js";
 import Banner from "../components/ui/Banner.jsx";
 import PeriodKey from "../components/ui/PeriodKey.jsx";
@@ -123,7 +123,7 @@ function HeroCard({ rating, utcOffset = 0 }) {
       <div className="hero-date">{isToday ? "Today" : rating.label}</div>
       <div className="hero-rating">
         <span className="hero-deer">{"🦌".repeat(r)}{"·".repeat(5 - r)}</span>
-        <span className="hero-score" style={{ color: tone }}>{rating.score != null ? (1 + rating.score * 4).toFixed(1) : r}/5</span>
+        <span className="hero-score" style={{ color: tone }}>{ratingScore5(rating)}/5</span>
       </div>
       <div className="hero-label" style={{ color: tone }}>{label}</div>
       <div className="hero-rut">{rating.rut?.phase}</div>
@@ -176,14 +176,14 @@ function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 
             <button key={r.day}
               className={"outlook-day" + (sel ? " selected" : "") + (r.confidence === "low" ? " low-conf" : "")}
               onClick={() => onPick(r.day)} disabled={!loadable}
-              title={`${r.score != null ? (1 + r.score * 4).toFixed(1) : r.rating}/5 · ${r.rut?.phase}${r.confidence === "low" ? " · est." : ""}`}>
+              title={`${ratingScore5(r)}/5 · ${r.rut?.phase}${r.confidence === "low" ? " · est." : ""}`}>
               <div className="od-label">{r.day === today ? "Today" : r.label}</div>
               <div className="od-deer">
                 {Array.from({ length: 5 }, (_, i) => (
                   <span key={i} className={"od-deer-icon" + (i < r.rating ? "" : " empty")}>🦌</span>
                 ))}
               </div>
-              <div className="od-score" style={{ color: tone }}>{r.score != null ? (1 + r.score * 4).toFixed(1) : r.rating}/5</div>
+              <div className="od-score" style={{ color: tone }}>{ratingScore5(r)}/5</div>
               {r.confidence === "low" && <div className="od-est">est.</div>}
             </button>
           );

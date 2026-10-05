@@ -1,5 +1,6 @@
 import { useState } from "react";
 import InfoTip from "./ui/InfoTip.jsx";
+import { ratingScore5 } from "../utils/formatters.js";
 
 function DeerRating({ rating, prevRating }) {
   const [open, setOpen] = useState(false);
@@ -33,7 +34,7 @@ function DeerRating({ rating, prevRating }) {
     <div className="card" style={{ padding: "10px 12px", marginBottom: 10, borderLeft: `3px solid ${tone}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
         <span style={{ fontSize: 18, letterSpacing: 1 }} title={`${r} of 5`}>{deer}</span>
-        <span style={{ fontWeight: 600, color: tone }}>{rating.score != null ? (1 + rating.score * 4).toFixed(1) : r}/5 movement</span>
+        <span style={{ fontWeight: 600, color: tone }}>{ratingScore5(rating)}/5 movement</span>
         <span style={{ fontSize: 12, color: "var(--sub)" }}>· {rating.rut?.phase}</span>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--sub)" }}>{open ? "hide ▲" : "why? ▼"}</span>
       </div>
