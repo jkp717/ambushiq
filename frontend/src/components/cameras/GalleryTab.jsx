@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight } from "lucide-react";
-import { api } from "../../services/api.js";
+import { api, withToken } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
 import Banner from "../ui/Banner.jsx";
 import CameraFilterModal from "./CameraFilterModal.jsx";
@@ -27,7 +27,8 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
     const p = new URLSearchParams(query);
     p.set("limit", PAGE);
     if (cursor) { p.set("before_ts", cursor.ts); p.set("before_id", cursor.id); }
-    return api(`/cameras/gallery?${p}`);
+    const j = await api(`/cameras/gallery?${p}`);
+    return { ...j, items: j.items.map((it) => ({ ...it, image_url: withToken(it.image_url) })) };
   }, [query]);
 
   // A filter change starts over from the newest photo.

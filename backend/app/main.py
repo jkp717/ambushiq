@@ -18,6 +18,7 @@ from app.bulk.router import router as bulk_router
 from app.cameras.router import router as cameras_router
 from app.core.config import APP_TOKEN, APP_VERSION
 from app.core.database import init_db
+from app.core.security import safe_join
 from app.corridors.router import router as corridors_router
 from app.deer_ratings.router import router as deer_ratings_router
 from app.deer_sign.router import router as deer_sign_router
@@ -111,7 +112,7 @@ if os.path.isdir(STATIC_DIR):
 
     @app.get("/{path:path}")
     def spa(path: str):
-        candidate = os.path.join(STATIC_DIR, path)
-        if os.path.isfile(candidate):
+        candidate = safe_join(STATIC_DIR, path)
+        if candidate and os.path.isfile(candidate):
             return FileResponse(candidate)
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))

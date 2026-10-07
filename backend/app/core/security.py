@@ -8,20 +8,45 @@ import os
 import secrets
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query
 
 from app.core.config import APP_TOKEN
 
 
-def require_token(authorization: str = Header(default="")):
+def _check_token(token: str) -> None:
     # If APP_TOKEN is empty or "unused", authentication is handled by an upstream
     # reverse proxy (e.g. Authentik forward auth) or disabled.
     # Otherwise, require the Bearer token.
     if not APP_TOKEN or APP_TOKEN == "unused":
         return
-    token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else authorization.strip()
     if not token or not secrets.compare_digest(token, APP_TOKEN):
         raise HTTPException(401, "unauthorized")
+
+
+def require_token(authorization: str = Header(default="")):
+    _check_token(authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else authorization.strip())
+
+
+def require_token_or_query(authorization: str = Header(default=""), t: str = Query(default="")):
+    """For URLs loaded by <img> tags, which can't send an Authorization header: the
+    token may come as a `t` query parameter instead."""
+    if authorization:
+        require_token(authorization)
+    else:
+        _check_token(t.strip())
+
+
+def safe_join(base: str, subpath: str) -> Optional[str]:
+    """Join `subpath` onto `base`, or return None if the result would land outside
+    `base` (via "..", an absolute path, or a symlink)."""
+    root = os.path.realpath(base)
+    candidate = os.path.realpath(os.path.join(root, subpath))
+    try:
+        if os.path.commonpath([root, candidate]) != root:
+            return None
+    except ValueError:  # different drives on Windows
+        return None
+    return candidate
 
 
 # ---------- credential encryption (Fernet key derived from an existing secret) ----------

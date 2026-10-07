@@ -22,8 +22,8 @@ from app.cameras.service import (
 )
 from app.core.config import CAMERA_BRANDS, CAMERA_IMAGE_DIR
 from app.core.database import engine
-from app.core.security import decrypt_credentials, encrypt_credentials
-from app.dependencies import get_active_region_id, require_token
+from app.core.security import decrypt_credentials, encrypt_credentials, safe_join
+from app.dependencies import get_active_region_id, require_token, require_token_or_query
 from app.forecast.service import _camera_health
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
@@ -34,7 +34,7 @@ router = APIRouter(tags=["cameras"])
 
 
 @router.get("/api/camera-sightings/{sighting_id}/image")
-def get_sighting_image(sighting_id: int):
+def get_sighting_image(sighting_id: int, _=Depends(require_token_or_query)):
     with Session(engine) as s:
         sighting = s.get(CameraSighting, sighting_id)
         if not sighting or not sighting.image_path or not os.path.exists(sighting.image_path):
@@ -43,14 +43,14 @@ def get_sighting_image(sighting_id: int):
 
 
 @router.get("/static/camera_images/{subpath:path}")
-def get_static_camera_image(subpath: str):
+def get_static_camera_image(subpath: str, _=Depends(require_token_or_query)):
     settings = get_settings()
     base_dir = str(settings.get("camera_image_dir") or CAMERA_IMAGE_DIR)
-    candidate = os.path.join(base_dir, subpath)
-    if os.path.isfile(candidate):
+    candidate = safe_join(base_dir, subpath)
+    if candidate and os.path.isfile(candidate):
         return FileResponse(candidate)
-    candidate_default = os.path.join(CAMERA_IMAGE_DIR, subpath)
-    if os.path.isfile(candidate_default):
+    candidate_default = safe_join(CAMERA_IMAGE_DIR, subpath)
+    if candidate_default and os.path.isfile(candidate_default):
         return FileResponse(candidate_default)
     raise HTTPException(404, "image not found")
 

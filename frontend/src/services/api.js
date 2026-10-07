@@ -41,4 +41,10 @@ async function apiRetry(path, opts = {}, retries = 1, delayMs = 1500) {
   }
 }
 
-export { tokenStore, regionStore, api, apiRetry };
+// <img> tags can't send the Authorization header, so image URLs carry the token as `t`.
+function withToken(url) {
+  const tok = tokenStore.get();
+  return url && tok ? `${url}${url.includes("?") ? "&" : "?"}t=${encodeURIComponent(tok)}` : url;
+}
+
+export { tokenStore, regionStore, api, apiRetry, withToken };
