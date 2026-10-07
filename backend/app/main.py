@@ -5,6 +5,7 @@ import logging
 import os
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -40,6 +41,9 @@ from app.trails.router import router as trails_router
 from app.zones.router import router as zones_router
 
 app = FastAPI(title="AmbushIQ")
+# The phone pulls the whole forecast for offline use (/api/map/conditions/all); that JSON shrinks ~10x
+# gzipped, which matters most exactly when signal is weak.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.middleware("http")

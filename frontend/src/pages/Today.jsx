@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Target, Plus, RefreshCw, AlertTriangle, Footprints, Wheat, Trees } from "lucide-react";
-import { api, apiRetry } from "../services/api.js";
+import { apiSaved, fromDevice } from "../services/api.js";
+import { savedAtLabel } from "../utils/offlineData.js";
+import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
 import { localDate, ratingScore5 } from "../utils/formatters.js";
 import { fmtRain } from "../utils/units.js";
 import { PERIOD_COLORS } from "../utils/periods.js";
@@ -9,6 +11,10 @@ import PeriodKey from "../components/ui/PeriodKey.jsx";
 import ProxToggle from "../components/ui/ProxToggle.jsx";
 import DeerRating from "../components/DeerRating.jsx";
 import DayRankCard from "../components/DayRankCard.jsx";
+
+// Where a day's ranking is kept on the phone: one copy per day and proximity-toggle combination.
+const dayKey = (day, p) => `/day/ranked/${day}/${+p.corridor}${+p.food}${+p.bedding}`;
+const ALL_ON = { corridor: true, food: true, bedding: true };
 
 function TodayPage({ stands, onGoDraw }) {
   const [days, setDays] = useState([]);
@@ -23,12 +29,18 @@ function TodayPage({ stands, onGoDraw }) {
   const [utcOffset, setUtcOffset] = useState(0);
   const [err, setErr] = useState(null);
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
+  const [deviceAt, setDeviceAt] = useState(null);  // when the on-phone copy being shown was saved (ms), while offline
+  const foregroundTick = useForegroundRefresh();
 
+  // Each open (and return to the foreground) refreshes the ratings, hours and every day's ranking, and
+  // keeps them on the phone; with no connection the saved copies are shown instead.
   useEffect(() => {
     if (!stands.length) return;
-    apiRetry("/deer-ratings").then((j) => {
+    apiSaved("/deer-ratings").then((j) => {
+      const savedAt = fromDevice(j);
+      setDeviceAt(savedAt);
       setDeerRatings(j.ratings);
-      setStaleAt(j.stale ? j.fetched_at ?? null : null);
+      setStaleAt(!savedAt && j.stale ? j.fetched_at ?? null : null);
       setPreviousDay(j.previous_day ?? null);
       // Use the property's UTC offset so "today" matches the local calendar date
       // on the property rather than the UTC date in the browser or on the server.
@@ -38,21 +50,44 @@ function TodayPage({ stands, onGoDraw }) {
       const hit = j.ratings.find((r) => r.day === today);
       setSelectedDay(hit ? today : j.ratings[0]?.day ?? null);
     }).catch(() => setErr("Couldn't load deer ratings."));
-  }, [stands.length]);
+  }, [stands.length, foregroundTick]);
 
   useEffect(() => {
     if (!stands.length) return;
-    apiRetry("/hours").then((j) => setDays(j.days || [])).catch(() => {});
-  }, [stands.length]);
+    let cancel = false;
+    apiSaved("/hours").then((j) => {
+      if (cancel) return;
+      setDays(j.days || []);
+      if (fromDevice(j)) return;
+      // Online: save every day's ranking (default toggles) in the background, two requests at a time,
+      // so any day can be opened later with no signal — not just the ones looked at now.
+      const queue = (j.days || []).map((d) => d.day);
+      const next = () => {
+        const day = queue.shift();
+        if (!day || cancel) return Promise.resolve();
+        return apiSaved("/day/ranked", { key: dayKey(day, ALL_ON), method: "POST",
+                                         body: JSON.stringify({ day, use_corridor: true, use_food: true, use_bedding: true }) })
+          .catch(() => {}).then(next);
+      };
+      next(); next();
+    }).catch(() => {});
+    return () => { cancel = true; };
+  }, [stands.length, foregroundTick]);
 
   const curDay = days.find((d) => d.day === selectedDay);
 
   useEffect(() => {
     if (!curDay) return;
     let cancel = false;
-    api("/day/ranked", { method: "POST", body: JSON.stringify({ day: curDay.day, use_corridor: useProx.corridor, use_food: useProx.food, use_bedding: useProx.bedding }) })
-      .then((j) => { if (cancel) return; setDayRanked(j); })
-      .catch(() => {});
+    apiSaved("/day/ranked", { key: dayKey(curDay.day, useProx), method: "POST",
+                              body: JSON.stringify({ day: curDay.day, use_corridor: useProx.corridor, use_food: useProx.food, use_bedding: useProx.bedding }) })
+      .then((j) => {
+        if (cancel) return;
+        setDayRanked(j);
+        const savedAt = fromDevice(j);
+        if (savedAt) setDeviceAt(savedAt);
+      })
+      .catch(() => { if (!cancel) setDayRanked(null); });
     return () => { cancel = true; };
   }, [curDay?.day, useProx.corridor, useProx.food, useProx.bedding]);
 
@@ -80,6 +115,7 @@ function TodayPage({ stands, onGoDraw }) {
   return (
     <div className="today-page">
       {err && <Banner>{err}</Banner>}
+      {deviceAt && <Banner>No connection — showing the forecast saved on this phone at {savedAtLabel(deviceAt)}.</Banner>}
       {staleAt && <Banner>Showing the cached forecast from {new Date(staleAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} while the weather service catches up. Reload in a minute for the latest.</Banner>}
 
       {/* Hero */}

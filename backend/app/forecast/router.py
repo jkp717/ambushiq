@@ -5,6 +5,7 @@ the same stand at the same hour gets the same score on the map, in sit rankings 
 the day view."""
 from __future__ import annotations
 
+import asyncio
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 
@@ -89,6 +90,54 @@ def _active_stands(region_id: int) -> list[dict]:
     with Session(engine) as s:
         return [r.to_dict() for r in s.scalars(
             select(Stand).where(Stand.is_active == 1, Stand.region_id == region_id)).all()]
+
+
+async def _map_context(region_id: int, region: dict):
+    """(forecast, ScoringContext) for the map views."""
+    lat, lon = _forecast_location(region_id)
+    fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
+    ctx = build_scoring_context(region_id, region, get_settings(), int(fc.get("utc_offset_seconds", 0)),
+                                camera_scoring_on=detection_mod.species_available())
+    return fc, ctx
+
+
+def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int) -> dict:
+    """Map conditions at forecast hour `i`: per-stand wind/thermal vectors, the stands ranked for that hour,
+    and (under "hour") the hour inputs used, for callers that need them."""
+    h = fc["hourly"]
+    sr_h, ss_h = _sun_hours(fc, h["time"][i][:10])
+    hour = _hour_at(h, i, sr_h, ss_h, temp_swing)
+    windows = scoring.period_windows(sr_h, ss_h)
+    period = scoring.period_for_hour(hour["time_h"], windows)
+
+    items = []
+    for st in stands:
+        det = ctx.score(st, hour, period, windows)
+        vec = dict(scoring.stand_hour_vectors(st, hour, ctx.thermal_params, ctx.eddy_site(st)))
+        vec["total"] = det["final_score"]
+        if ctx.camera_scoring_on and st["id"] in ctx.camera_state:
+            vec["camera_boost"] = det["camera"]
+        items.append({"stand": st, "vectors": vec})
+
+    ranked = sorted(
+        [{"stand": it["stand"], "avg": it["vectors"]["total"],
+          "sample": {"hour": hour, "score": {
+              "scent_to_deg": it["vectors"]["scent_to_deg"],
+              "scent_score": it["vectors"]["scent_score"],
+              "thermal_phase": it["vectors"]["thermal_phase"],
+          }}} for it in items],
+        key=lambda x: x["avg"], reverse=True,
+    )
+    return {
+        "time": {"index": i, "iso": h["time"][i],
+                 "label": (lambda d: f"{format_day_label(d)}, {format_hour_label(d, lower=False)}")(
+                     datetime.fromisoformat(h["time"][i])),
+                 "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i],
+                 "wind_speed": h["wind_speed_10m"][i], "wind_dir": h["wind_direction_10m"][i]},
+        "stands": items,
+        "ranked": ranked,
+        "hour": hour,
+    }
 
 
 @router.get("/api/weather-providers")
@@ -215,52 +264,44 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     region = get_region_dict(region_id)
     ensure_property_terrain(region_id)   # first map load (or a new far-out stand) fetches it in the background
     stands = _active_stands(region_id)
-    lat, lon = _forecast_location(region_id)
-    fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
+    fc, ctx = await _map_context(region_id, region)
     h = fc["hourly"]
-    temp_swing = _temp_swing_rolling(h)
     i = body.time_index
     if i < 0 or i >= len(h["time"]):
         raise HTTPException(400, "time_index out of range")
-    day = h["time"][i][:10]
-    sr_h, ss_h = _sun_hours(fc, day)
-    hour = _hour_at(h, i, sr_h, ss_h, temp_swing)
-    windows = scoring.period_windows(sr_h, ss_h)
-    period = scoring.period_for_hour(hour["time_h"], windows)
+    out = _hour_conditions(ctx, fc, _temp_swing_rolling(h), stands, i)
+    hour = out.pop("hour")
+    out["lee_zone"] = (eddy_mod.lee_zone_mask(ctx.eddy_grid, hour["wind_dir"], hour["wind_speed"], hour["gust"])
+                       if body.lee_zone else None)
+    return out
 
-    settings = get_settings()
-    ctx = build_scoring_context(region_id, region, settings, int(fc.get("utc_offset_seconds", 0)),
-                                camera_scoring_on=detection_mod.species_available())
 
-    items = []
-    for st in stands:
-        det = ctx.score(st, hour, period, windows)
-        vec = dict(scoring.stand_hour_vectors(st, hour, ctx.thermal_params, ctx.eddy_site(st)))
-        vec["total"] = det["final_score"]
-        if ctx.camera_scoring_on and st["id"] in ctx.camera_state:
-            vec["camera_boost"] = det["camera"]
-        items.append({"stand": st, "vectors": vec})
+@router.post("/api/map/conditions/all")
+async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    """/api/map/conditions for every forecast hour in one response, so the phone can keep the whole forecast
+    and still show wind/thermal arrows with no signal. Each stand is sent once in `stands`; hours refer to
+    stands by id. No lee-eddy zone (a large grid per hour) - that stays online-only."""
+    region = get_region_dict(region_id)
+    stands = _active_stands(region_id)
+    fc, ctx = await _map_context(region_id, region)
+    h = fc["hourly"]
 
-    ranked = sorted(
-        [{"stand": it["stand"], "avg": it["vectors"]["total"],
-          "sample": {"hour": hour, "score": {
-              "scent_to_deg": it["vectors"]["scent_to_deg"],
-              "scent_score": it["vectors"]["scent_score"],
-              "thermal_phase": it["vectors"]["thermal_phase"],
-          }}} for it in items],
-        key=lambda x: x["avg"], reverse=True,
-    )
-    return {
-        "time": {"index": i, "iso": h["time"][i],
-                 "label": (lambda d: f"{format_day_label(d)}, {format_hour_label(d, lower=False)}")(
-                     datetime.fromisoformat(h["time"][i])),
-                 "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i],
-                 "wind_speed": h["wind_speed_10m"][i], "wind_dir": h["wind_direction_10m"][i]},
-        "stands": items,
-        "ranked": ranked,
-        "lee_zone": eddy_mod.lee_zone_mask(ctx.eddy_grid, hour["wind_dir"], hour["wind_speed"], hour["gust"])
-                    if body.lee_zone else None,
-    }
+    def build() -> list[dict]:
+        temp_swing = _temp_swing_rolling(h)
+        hours = []
+        for i in range(len(h["time"])):
+            one = _hour_conditions(ctx, fc, temp_swing, stands, i)
+            hours.append({
+                "time": one["time"],
+                "items": [{"stand_id": it["stand"]["id"], "vectors": it["vectors"]} for it in one["stands"]],
+                "ranked": [{"stand_id": r["stand"]["id"], "avg": r["avg"], "sample": r["sample"]}
+                           for r in one["ranked"]],
+            })
+        return hours
+
+    hours = await asyncio.to_thread(build)   # a few hundred hours x every stand: keep it off the event loop
+    return {"stands": stands, "hours": hours, "utc_offset_seconds": int(fc.get("utc_offset_seconds", 0)),
+            "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}
 
 
 @router.post("/api/day/ranked")

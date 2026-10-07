@@ -176,3 +176,19 @@ def test_a_region_at_the_placeholder_location_with_no_stands_is_rejected(no_stan
     with pytest.raises(HTTPException) as e:
         run(fc_router.list_hours(region_id=1, _=None))
     assert e.value.status_code == 400
+
+
+def test_all_hours_conditions_match_the_single_hour_endpoint(seeded):
+    """The offline copy of the forecast (/map/conditions/all) must show exactly what the live map would."""
+    allc = run(fc_router.map_conditions_all(region_id=1, _=None))
+    assert len(allc["hours"]) == len(_forecast()["hourly"]["time"])
+    assert {s["name"] for s in allc["stands"]} == {"Ridge", "Bare"}
+    for idx in (7, 30):
+        live = run(fc_router.map_conditions(HourRankIn(time_index=idx), region_id=1, _=None))
+        saved = allc["hours"][idx]
+        assert saved["time"] == live["time"]
+        assert [it["vectors"] for it in saved["items"]] == [it["vectors"] for it in live["stands"]]
+        assert [it["stand_id"] for it in saved["items"]] == [it["stand"]["id"] for it in live["stands"]]
+        assert [(r["stand_id"], r["avg"], r["sample"]) for r in saved["ranked"]] == \
+               [(r["stand"]["id"], r["avg"], r["sample"]) for r in live["ranked"]]
+        assert "hour" not in live and live["lee_zone"] is None

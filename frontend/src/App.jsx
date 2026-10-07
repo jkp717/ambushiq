@@ -3,7 +3,7 @@ import { Lock, Menu, Sun, Map as MapIcon, MapPin, Wheat, Camera, Settings as Set
   MapPinned, ChevronDown, Plus, Pencil, Star, Trash2 } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import { useAuth } from "./hooks/useAuth.js";
-import { api, regionStore } from "./services/api.js";
+import { api, regionStore, apiSaved } from "./services/api.js";
 import { pruneSavedAreasForRegion } from "./utils/offlineTiles.js";
 import Centered from "./components/ui/Centered.jsx";
 import Modal from "./components/ui/Modal.jsx";
@@ -58,11 +58,12 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const [editingCorridor, setEditingCorridor] = useState(null);
   const [relocateRequest, setRelocateRequest] = useState(null);
 
-  const loadStands    = useCallback(async () => { try { setStands(await api("/stands")); } catch {} }, []);
-  const loadZones     = useCallback(async () => { try { setZones(await api("/zones")); } catch {} }, []);
-  const loadCorridors = useCallback(async () => { try { setCorridors(await api("/corridors")); } catch {} }, []);
-  const loadSign      = useCallback(async () => { try { setSign(await api("/sign")); } catch {} }, []);
-  const loadSuggestions = useCallback(async () => { try { setSuggestions(await api("/scouting")); } catch {} }, []);
+  // apiSaved: with no signal, the map still gets the stands and features saved on the phone last time.
+  const loadStands    = useCallback(async () => { try { setStands(await apiSaved("/stands")); } catch {} }, []);
+  const loadZones     = useCallback(async () => { try { setZones(await apiSaved("/zones")); } catch {} }, []);
+  const loadCorridors = useCallback(async () => { try { setCorridors(await apiSaved("/corridors")); } catch {} }, []);
+  const loadSign      = useCallback(async () => { try { setSign(await apiSaved("/sign")); } catch {} }, []);
+  const loadSuggestions = useCallback(async () => { try { setSuggestions(await apiSaved("/scouting")); } catch {} }, []);
   const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions]);
 
   const toggleActiveStand = useCallback(async (stand) => {
@@ -287,11 +288,13 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
 
 function RegionGate({ onLogout, version }) {
   const [regions, setRegions] = useState(null); // null = loading
+  const [unreachable, setUnreachable] = useState(false);   // offline with no saved region list to fall back on
   const [activeRegionId, setActiveRegionId] = useState(() => regionStore.get());
 
   const loadRegions = useCallback(async () => {
     try {
-      const list = await api("/regions");
+      const list = await apiSaved("/regions", { global: true });
+      setUnreachable(false);
       setRegions(list);
       const stored = regionStore.get();
       const stillValid = list.some((r) => String(r.id) === String(stored));
@@ -300,10 +303,25 @@ function RegionGate({ onLogout, version }) {
         if (def) { regionStore.set(def.id); setActiveRegionId(String(def.id)); }
         else { regionStore.clear(); setActiveRegionId(""); }
       }
-    } catch { setRegions([]); }
+    } catch (e) {
+      // Can't reach the server and nothing saved yet: say so, rather than showing the
+      // "create your first region" screen as if this were a brand-new install.
+      if (e.code === undefined || e.code >= 500) { setUnreachable(true); return; }
+      setRegions([]);
+    }
   }, []);
   useEffect(() => { loadRegions(); }, [loadRegions]);
 
+  if (unreachable && regions === null) {
+    return (
+      <Centered>
+        <div style={{ textAlign: "center", maxWidth: 320 }}>
+          <p>Can't reach AmbushIQ. Connect once with signal so the app can save your data for offline use.</p>
+          <button className="btn" onClick={loadRegions}><RefreshCw size={14} /> Try again</button>
+        </div>
+      </Centered>
+    );
+  }
   if (regions === null) return <Centered><RefreshCw className="spin" size={20} /></Centered>;
 
   if (regions.length === 0) {

@@ -3,9 +3,9 @@ import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 import "./assets/styles.css";
 
-// Registering a service worker (even one that does nothing but install/activate)
-// is what makes Chrome/Android consider this PWA installable and fire the
-// `beforeinstallprompt` event the Settings page's "Install app" button relies on.
+// The service worker makes this PWA installable (Chrome/Android fire `beforeinstallprompt`,
+// which the Settings page's "Install app" button relies on) and keeps the app's own files so
+// it still opens with no signal (see public/sw.js).
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch(() => {});

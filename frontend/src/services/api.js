@@ -1,4 +1,6 @@
 /* ───────── API client ───────── */
+import { saveData, loadData } from "../utils/offlineData.js";
+
 const tokenStore = {
   get: () => localStorage.getItem("sa_token") || "",
   set: (t) => localStorage.setItem("sa_token", t),
@@ -47,4 +49,46 @@ function withToken(url) {
   return url && tok ? `${url}${url.includes("?") ? "&" : "?"}t=${encodeURIComponent(tok)}` : url;
 }
 
-export { tokenStore, regionStore, api, apiRetry, withToken };
+// Where apiSaved keeps a response on the phone: per region unless `global`.
+function savedKey(key, global) {
+  return `${global ? "global" : `r${regionStore.get() || "none"}`}${key.startsWith("/") ? "" : "/"}${key}`;
+}
+
+/** Like apiRetry, but keeps the last good response on the phone and falls back to it when the server
+ * can't be reached (no/weak signal, timeout, 5xx). A 401 or other 4xx never falls back. The saved copy is
+ * per region unless `global` is set (for data like the region list itself). A result that came from the
+ * phone carries `fromDevice(result)` = the time it was saved (ms), so pages can say how old it is.
+ * Weak signal often hangs rather than failing, so the network attempt gives up after `timeoutMs`. */
+async function apiSaved(path, { key = path, global = false, timeoutMs = 12000, ...opts } = {}) {
+  const fullKey = savedKey(key, global);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const data = await apiRetry(path, { ...opts, signal: ctl.signal });
+    saveData(fullKey, data);
+    return data;
+  } catch (e) {
+    const unreachable = e.code === undefined || e.code >= 500;
+    if (!unreachable) throw e;
+    const saved = await loadData(fullKey);
+    if (!saved) throw e;
+    const data = saved.data;
+    if (data && typeof data === "object") Object.defineProperty(data, SAVED_AT, { value: saved.savedAt });
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const SAVED_AT = Symbol("savedAt");
+/** When `result` came from apiSaved's on-phone copy: the time it was saved (ms since epoch); else null. */
+function fromDevice(result) {
+  return (result && result[SAVED_AT]) || null;
+}
+
+/** The on-phone copy apiSaved keeps for `key` ({ savedAt, data }), without trying the network; or null. */
+function loadSaved(key, { global = false } = {}) {
+  return loadData(savedKey(key, global));
+}
+
+export { tokenStore, regionStore, api, apiRetry, apiSaved, loadSaved, fromDevice, withToken };

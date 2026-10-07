@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
-import { api, apiRetry, tokenStore, regionStore } from "../services/api.js";
+import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
+import { savedAtLabel } from "../utils/offlineData.js";
+import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
 import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
@@ -121,6 +123,22 @@ const RECSITES_LEGEND = [
   ["#8D6E00", "Trailhead"], ["#2E7D32", "Campground"], ["#EF6C00", "Picnic site"], ["#1565C0", "Day-use area"],
 ];
 
+// /map/conditions/all sends each stand once and refers to it by id in every hour; rebuild each hour in
+// the shape /map/conditions returns, keyed by hour index. Stands missing from the list are skipped.
+function conditionsByHour(all) {
+  const byId = new Map((all.stands || []).map((s) => [s.id, s]));
+  const out = new Map();
+  for (const h of all.hours || []) {
+    out.set(h.time.index, {
+      time: h.time,
+      stands: h.items.filter((it) => byId.has(it.stand_id)).map((it) => ({ stand: byId.get(it.stand_id), vectors: it.vectors })),
+      ranked: h.ranked.filter((r) => byId.has(r.stand_id)).map((r) => ({ stand: byId.get(r.stand_id), avg: r.avg, sample: r.sample })),
+      lee_zone: null,
+    });
+  }
+  return out;
+}
+
 function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion, onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
@@ -165,6 +183,15 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [recSitesStatus, setRecSitesStatus] = useState("off"); // recreation sites layer: off | zoom | loading | ok | partial | error
   const [roadsStatus, setRoadsStatus] = useState("off"); // roads layer: off | zoom | loading | ok | partial | error
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
+  // Offline copy of the forecast. `savedHours` is every forecast hour's conditions (from
+  // /map/conditions/all), keyed by hour index; `deviceAt` is when the copy being shown was saved
+  // (ms), set only while the server can't be reached.
+  const [savedHours, setSavedHours] = useState(null);
+  const savedHoursRef = useRef({ map: null, savedAt: null });
+  const savedHoursRegion = useRef(null);
+  const [deviceAt, setDeviceAt] = useState(null);
+  const offlineRef = useRef(false);   // the last conditions request failed: show the saved copy first
+  const foregroundTick = useForegroundRefresh();
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
   const datePickerRef = useRef(null);
@@ -186,7 +213,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [maptilerKey, setMaptilerKey] = useState("");
 
   useEffect(() => {
-    api("/settings").then((s) => {
+    apiSaved("/settings", { global: true }).then((s) => {
       setScoutSettings({
         scout_radius_default_m: s.scout_radius_default_m ?? SCOUT_RADIUS_DEFAULT_M,
         scout_radius_min_m: s.scout_radius_min_m ?? SCOUT_RADIUS_MIN_M,
@@ -225,10 +252,15 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   // Forecast hours drive the time controls. They don't need a stand: the backend falls back to the region's
   // own location, so a brand-new region gets a working map straight away. Re-fetched when the first stand
   // appears, since the forecast location moves from the region center to that stand.
+  // Every open (and return to the foreground) also refreshes the on-phone copy of the whole forecast, so
+  // the map keeps working when signal drops; if the server can't be reached, the saved copies are used.
   useEffect(() => {
-    apiRetry("/hours").then((j) => {
+    apiSaved("/hours").then((j) => {
+      const savedAt = fromDevice(j);
+      setDeviceAt(savedAt);
+      offlineRef.current = !!savedAt;
       setDays(j.days || []);
-      setStaleAt(j.stale ? j.fetched_at ?? null : null);
+      setStaleAt(!savedAt && j.stale ? j.fetched_at ?? null : null);
       setErr((cur) => (cur === "Couldn't load forecast." ? null : cur));
       // Apply the property's UTC offset so both the date comparison and the
       // current-hour lookup use property local time rather than the browser's
@@ -243,7 +275,28 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
         if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi * 4); break; }
       }
     }).catch(() => setErr("Couldn't load forecast."));
-  }, [stands.length, activeRegion?.id]);
+  }, [stands.length, activeRegion?.id, foregroundTick]);
+
+  // The whole forecast's conditions, for offline use: the saved copy straight away, then a fresh one.
+  useEffect(() => {
+    let cancel = false;
+    const use = (j, savedAt) => {
+      if (cancel || !j?.hours) return;
+      const map = conditionsByHour(j);
+      savedHoursRef.current = { map, savedAt };
+      setSavedHours(map);
+    };
+    if (savedHoursRegion.current !== activeRegion?.id) {   // another region's copy must never show here
+      savedHoursRegion.current = activeRegion?.id;
+      savedHoursRef.current = { map: null, savedAt: null };
+      setSavedHours(null);
+    }
+    loadSaved("/map/conditions/all").then((s) => { if (s && !savedHoursRef.current.map) use(s.data, s.savedAt); });
+    apiSaved("/map/conditions/all", { method: "POST", timeoutMs: 45000 })
+      .then((j) => use(j, fromDevice(j)))
+      .catch(() => {});
+    return () => { cancel = true; };
+  }, [stands.length, activeRegion?.id, foregroundTick]);
 
   const curDay     = days[dayIdx];
   const maxHour    = (curDay?.hours.length || 1) - 1;
@@ -268,13 +321,48 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     return () => clearInterval(id);
   }, [playing, curDay]);
 
+  // One hour's conditions, live from the server (the only source of the lee-eddy zone). With no
+  // connection, the on-phone copy of that hour is shown instead — straight away once a request has
+  // failed, so scrubbing the slider offline doesn't wait on a request per hour — and a live answer
+  // still replaces it if signal comes back.
   useEffect(() => {
     if (!curHour) return;
     let cancel = false;
-    api("/map/conditions", { method: "POST", body: JSON.stringify({ time_index: curHour.index, lee_zone: layers.leeEddies }) })
-      .then((j) => { if (cancel) return; setConditions(j); }).catch(() => {});
-    return () => { cancel = true; };
+    const showSaved = () => {
+      const { map, savedAt } = savedHoursRef.current;
+      const hit = map?.get(curHour.index);
+      if (!hit || cancel) return false;
+      setConditions(hit);
+      setDeviceAt(savedAt || Date.now());
+      return true;
+    };
+    if (offlineRef.current) showSaved();
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 12000);
+    api("/map/conditions", { method: "POST", signal: ctl.signal,
+                              body: JSON.stringify({ time_index: curHour.index, lee_zone: layers.leeEddies }) })
+      .then((j) => {
+        if (cancel) return;
+        offlineRef.current = false;
+        setConditions(j);
+        setDeviceAt(null);
+      })
+      .catch((e) => {
+        if (cancel || (e.code !== undefined && e.code < 500)) return;
+        offlineRef.current = true;
+        showSaved();
+      })
+      .finally(() => clearTimeout(timer));
+    return () => { cancel = true; ctl.abort(); clearTimeout(timer); };
   }, [curHour?.index, layers.leeEddies]);
+
+  // The saved forecast arrived after the hour's request had already failed: show that hour from it now.
+  useEffect(() => {
+    const hit = curHour && savedHours?.get(curHour.index);
+    if (!offlineRef.current || !hit) return;
+    setConditions(hit);
+    setDeviceAt(savedHoursRef.current.savedAt || Date.now());
+  }, [savedHours]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onMapClick = useCallback(async (pt) => {
     if (drawMode === "stand") { setDrawMode(null); openStandEditor(pt); }
@@ -497,6 +585,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   return (
     <div className="map-page">
       {err && <div style={{ padding: "6px 12px" }}><Banner>{err}</Banner></div>}
+      {deviceAt && <div style={{ padding: "6px 12px" }}><Banner>No connection — showing the forecast saved on this phone at {savedAtLabel(deviceAt)}.{layers.leeEddies ? " Lee eddies need a connection." : ""}</Banner></div>}
       {staleAt && <div style={{ padding: "6px 12px" }}><Banner>Showing the cached forecast from {new Date(staleAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} while the weather service catches up. Reload in a minute for the latest.</Banner></div>}
 
       {/* ── Time controls: bottom sheet. Only the centered tab (date + time + grip) shows until it is
