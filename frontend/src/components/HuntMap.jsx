@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
-import { TILE_SOURCES, MAP_MAX_ZOOM, resolveUrl } from "../utils/tileSources.js";
+import { TILE_SOURCES, MAP_MAX_ZOOM, RENAMED_BASES, resolveUrl } from "../utils/tileSources.js";
 import { clamp } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
 import { api } from "../services/api.js";
@@ -10,6 +10,7 @@ const DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW"
 const degToCompass = (d) => DIRS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
 
 const BASE_LAYER_KEY = "sa_base_layer";   // localStorage: id of the last base layer picked
+const OVERLAYS_KEY = "sa_overlays";       // localStorage: ids of the on/off overlays that are on
 const DEFAULT_BASE = "topo";
 
 const COLORS = {
@@ -460,7 +461,7 @@ const HuntMap = forwardRef(function HuntMap({
     // ids of the offline-downloadable layers that make up the base layer on screen
     getActiveBaseIds: () => {
       const src = TILE_SOURCES.find((t) => t.id === activeBase.current);
-      return src ? (src.parts || [src.id]) : [];
+      return src ? (src.parts ? src.parts.map((p) => p.id) : [src.id]) : [];
     },
   }));
 
@@ -496,8 +497,8 @@ const HuntMap = forwardRef(function HuntMap({
     return () => { if (timer) clearTimeout(timer); if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
   }, []);
 
-  // Base layers + the layer picker. Rebuilt when the MapTiler key changes, since that decides which
-  // sources are offered and their URLs; the base layer on screen is kept across rebuilds and reloads.
+  // Base layers, on/off overlays and the layer picker. Rebuilt when the MapTiler key changes, since that
+  // decides which sources are offered and their URLs; the chosen base and overlays survive rebuilds and reloads.
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return undefined;
@@ -505,45 +506,70 @@ const HuntMap = forwardRef(function HuntMap({
     // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
     // from IndexedDB when it's been downloaded for offline use, network otherwise.
     // Past a source's nativeMaxZoom its deepest tiles are stretched rather than going blank.
-    const tile = (src) => L.tileLayer.offline(resolveUrl(src, maptilerKey), {
-      maxZoom: MAP_MAX_ZOOM, maxNativeZoom: src.nativeMaxZoom, attribution: src.attribution,
-    });
+    // zIndex keeps the stack fixed (base parts low, overlays high) whatever order layers get switched in.
+    // A blend mode goes on the layer's container: each container is its own stacking context, so a
+    // blend set on the tile images would have nothing beneath them to mix with.
+    const tile = (src, { blend, opacity = 1, zIndex = 1 } = {}) => {
+      const layer = L.tileLayer.offline(resolveUrl(src, maptilerKey), {
+        maxZoom: MAP_MAX_ZOOM, maxNativeZoom: src.nativeMaxZoom, minZoom: src.minZoom ?? 0,
+        attribution: src.attribution, opacity, zIndex,
+      });
+      if (blend) layer.on("add", () => { layer.getContainer().style.mixBlendMode = blend; });
+      return layer;
+    };
     const available = (src) => !src.needsKey || !!maptilerKey;
-    const bases = {}, idOf = new Map(), offline = {};
+    const bases = {}, idOf = new Map(), overlays = {}, overlayIdOf = new Map(), offline = {};
     for (const src of TILE_SOURCES) {
       if (!available(src)) continue;
+      if (src.parts) {
+        const group = L.layerGroup(src.parts.map((p, i) => tile(byId[p.id], { ...p, zIndex: 1 + i })));
+        bases[src.label] = group; idOf.set(group, src.id);
+        continue;
+      }
       // id-keyed (matches TILE_SOURCES) for the offline-download panel, which
       // needs each layer instance's getTileUrls() and its exact urlTemplate.
-      if (!src.parts) {
-        const layer = tile(src);
-        offline[src.id] = { ...src, url: resolveUrl(src, maptilerKey), layer };
-        if (src.overlayOnly) continue;
-        bases[src.label] = layer; idOf.set(layer, src.id);
-      } else {
-        const group = L.layerGroup(src.parts.map((id) => tile(byId[id])));
-        bases[src.label] = group; idOf.set(group, src.id);
+      const layer = tile(src);
+      offline[src.id] = { ...src, url: resolveUrl(src, maptilerKey), layer };
+      if (src.toggle) {
+        const ov = tile(src, { ...(src.toggle === true ? {} : src.toggle), zIndex: 10 });
+        overlays[src.label] = ov; overlayIdOf.set(ov, src.id);
       }
+      if (!src.overlayOnly) { bases[src.label] = layer; idOf.set(layer, src.id); }
     }
     offlineLayers.current = offline;
 
     let saved = activeBase.current;
     if (!saved) { try { saved = localStorage.getItem(BASE_LAYER_KEY); } catch { saved = null; } }
+    saved = RENAMED_BASES[saved] || saved;
     const pick = [...idOf.entries()].find(([, id]) => id === saved) || [...idOf.entries()].find(([, id]) => id === DEFAULT_BASE);
     pick[0].addTo(map);
     activeBase.current = pick[1];
 
-    const control = L.control.layers(bases, null, { position: "topright", collapsed: true }).addTo(map);
-    const onChange = (e) => {
+    let onOverlays = [];
+    try { onOverlays = JSON.parse(localStorage.getItem(OVERLAYS_KEY) || "[]"); } catch { onOverlays = []; }
+    const shown = new Set(Array.isArray(onOverlays) ? onOverlays : []);
+    overlayIdOf.forEach((id, layer) => { if (shown.has(id)) layer.addTo(map); });
+
+    const control = L.control.layers(bases, overlays, { position: "topright", collapsed: true }).addTo(map);
+    const onBase = (e) => {
       const id = idOf.get(e.layer);
       if (!id) return;
       activeBase.current = id;
       try { localStorage.setItem(BASE_LAYER_KEY, id); } catch { /* storage blocked: just not remembered */ }
     };
-    map.on("baselayerchange", onChange);
+    const onOverlay = (e) => {
+      const id = overlayIdOf.get(e.layer);
+      if (!id) return;
+      if (e.type === "overlayadd") shown.add(id); else shown.delete(id);
+      try { localStorage.setItem(OVERLAYS_KEY, JSON.stringify([...shown])); } catch { /* not remembered */ }
+    };
+    map.on("baselayerchange", onBase);
+    map.on("overlayadd overlayremove", onOverlay);
     return () => {
-      map.off("baselayerchange", onChange);
+      map.off("baselayerchange", onBase);
+      map.off("overlayadd overlayremove", onOverlay);
       control.remove();
-      Object.values(bases).forEach((l) => map.removeLayer(l));
+      [...Object.values(bases), ...Object.values(overlays)].forEach((l) => map.removeLayer(l));
     };
   }, [ready, maptilerKey]);
 

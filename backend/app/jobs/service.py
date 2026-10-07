@@ -80,6 +80,10 @@ def registry() -> dict[str, dict]:
             "label": "Prune roads cache", "icon": "cleanup", "fn": sch.prune_roads_job,
             "description": "Drops cached road map data nobody has viewed in ~6 months.",
         },
+        "prune_tiles": {
+            "label": "Prune terrain tile cache", "icon": "cleanup", "fn": sch.prune_tiles_job,
+            "description": "Deletes cached hillshade, contour and woods/water map tiles nobody has viewed in ~6 months.",
+        },
     }
 
 

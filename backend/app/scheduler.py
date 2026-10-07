@@ -90,6 +90,15 @@ def prune_roads_job(progress):
     return f"pruned {n} cell{'' if n == 1 else 's'}"
 
 
+def prune_tiles_job(progress):
+    """Scheduler job (daily): delete cached terrain overlay tiles nobody has viewed in ~6 months."""
+    from app.tiles.service import prune_cache
+    n = prune_cache()
+    if n:
+        log.info("scheduler: pruned %d stale overlay tile(s)", n)
+    return f"pruned {n} tile{'' if n == 1 else 's'}"
+
+
 def auto_cleanup_job(progress):
     """Scheduler job (daily 3 AM UTC): delete JPEGs older than retention; keep
     sighting rows. Runs at a fixed UTC hour rather than any one region's local
@@ -170,6 +179,8 @@ def start_scheduler():
     sched.add_job(run_tracked, CronTrigger(hour=4, minute=0), args=["prune_recsites"], id="prune_recsites",
                   replace_existing=True, max_instances=1)
     sched.add_job(run_tracked, CronTrigger(hour=4, minute=15), args=["prune_roads"], id="prune_roads",
+                  replace_existing=True, max_instances=1)
+    sched.add_job(run_tracked, CronTrigger(hour=4, minute=30), args=["prune_tiles"], id="prune_tiles",
                   replace_existing=True, max_instances=1)
     # Keep the weather cache warm: first run shortly after boot (so a restart never leaves the
     # first user waiting on the provider), then every 30 minutes.
