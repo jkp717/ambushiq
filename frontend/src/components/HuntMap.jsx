@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
+import { RefreshCw, ZoomIn } from "lucide-react";
 import { TILE_SOURCES, MAP_MAX_ZOOM, RENAMED_BASES, resolveUrl } from "../utils/tileSources.js";
 import { clamp } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
@@ -8,6 +9,20 @@ import { api } from "../services/api.js";
 
 const DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
 const degToCompass = (d) => DIRS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
+
+// A per-layer on/off flag rolled up by label: `counts` (a ref'd Map of label -> layers with the flag on)
+// feeds `setLabels` with the labels that have at least one. Several layers can share a label (the contour
+// checkbox and the contours inside Esri Imagery+Topo), so it's a count, not a set.
+function statusFlag(counts, setLabels, label) {
+  let on = false;
+  return (next) => {
+    if (on === next) return;
+    on = next;
+    const n = (counts.current.get(label) || 0) + (on ? 1 : -1);
+    if (n > 0) counts.current.set(label, n); else counts.current.delete(label);
+    setLabels([...counts.current.keys()]);
+  };
+}
 
 const BASE_LAYER_KEY = "sa_base_layer";   // localStorage: id of the last base layer picked
 const OVERLAYS_KEY = "sa_overlays";       // localStorage: ids of the on/off overlays that are on
@@ -449,6 +464,12 @@ const HuntMap = forwardRef(function HuntMap({
   const layerGroups = useRef({});
   const offlineLayers = useRef({});
   const activeBase = useRef(null);   // TILE_SOURCES id of the base layer currently shown
+  // Terrain overlay status for the map pill, as loadingLabel -> how many layers of it are in that state:
+  // still fetching tiles (slow on first view), or switched on but zoomed out past where it draws anything.
+  const tileLoads = useRef(new Map());
+  const tileZoomOut = useRef(new Map());
+  const [tilesLoading, setTilesLoading] = useState([]);
+  const [tilesZoomIn, setTilesZoomIn] = useState([]);
   const standsMarkers = useRef({}); // Prevents unmounting marker to keep popup open
   const scoutDraftLayer = useRef(null);
   const [ready, setReady] = useState(false);
@@ -515,6 +536,25 @@ const HuntMap = forwardRef(function HuntMap({
         attribution: src.attribution, opacity, zIndex,
       });
       if (blend) layer.on("add", () => { layer.getContainer().style.mixBlendMode = blend; });
+      if (src.loadingLabel) {
+        // "loading" fires when the layer starts fetching tiles, "load" once every visible tile is in
+        // (failed tiles included); removing the layer mid-load must clear it too.
+        const setBusy = statusFlag(tileLoads, setTilesLoading, src.loadingLabel);
+        layer.on("loading", () => setBusy(true));
+        layer.on("load remove", () => setBusy(false));
+        if (src.minZoom) {
+          // Below its minZoom the layer requests nothing and, if it was mid-load, never fires "load" (Leaflet
+          // just drops the pending tiles), so clear the spinner and say why it's blank instead.
+          const setOut = statusFlag(tileZoomOut, setTilesZoomIn, src.loadingLabel);
+          const check = () => {
+            const out = map.getZoom() < src.minZoom;
+            setOut(out);
+            if (out) setBusy(false);
+          };
+          layer.on("add", () => { check(); map.on("zoomend", check); });
+          layer.on("remove", () => { map.off("zoomend", check); setOut(false); });
+        }
+      }
       return layer;
     };
     const available = (src) => !src.needsKey || !!maptilerKey;
@@ -1353,7 +1393,20 @@ const HuntMap = forwardRef(function HuntMap({
     }).addTo(g);
   }, [conditions, ready, layers.leeEddies]);
 
-  return <div ref={mapEl} style={{ height, width: "100%", overflow: "hidden" }} />;
+  return (
+    <div style={{ position: "relative", height, width: "100%" }}>
+      <div ref={mapEl} style={{ height: "100%", width: "100%", overflow: "hidden" }} />
+      {tilesLoading.length > 0 ? (
+        <div className="map-tile-loading" role="status" aria-live="polite">
+          <RefreshCw size={13} className="spin" /> Loading {tilesLoading.join(", ")}…
+        </div>
+      ) : tilesZoomIn.length > 0 && (
+        <div className="map-tile-loading" role="status" aria-live="polite">
+          <ZoomIn size={13} /> Zoom in to see {tilesZoomIn.join(", ")}
+        </div>
+      )}
+    </div>
+  );
 });
 
 export default HuntMap;

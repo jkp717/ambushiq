@@ -15,7 +15,8 @@
 
    The /api/tiles overlays (hillshade, contours, woods & water) come from the
    backend, which renders them from USGS 3DEP elevation and NLCD land cover
-   and caches them (app/tiles). */
+   and caches them (app/tiles). Tiles nobody has viewed yet take a few seconds,
+   so the map shows a "Loading <loadingLabel>…" pill while they arrive. */
 const MAP_MAX_ZOOM = 20;
 
 const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
@@ -43,11 +44,12 @@ const TILE_SOURCES = [
   { id: "mt_hybrid", label: "MapTiler Satellite", nativeMaxZoom: 20, attribution: MT_ATTR, needsKey: true,
     url: "https://api.maptiler.com/maps/hybrid/256/{z}/{x}/{y}.jpg?key={key}" },
   { id: "contours", label: "Contour lines (10 ft)", nativeMaxZoom: 18, minZoom: 13, attribution: USGS_3DEP_ATTR,
-    overlayOnly: true, toggle: true, url: "/api/tiles/contours/{z}/{x}/{y}.png" },
+    overlayOnly: true, toggle: true, loadingLabel: "contour lines", url: "/api/tiles/contours/{z}/{x}/{y}.png" },
   { id: "hillshade", label: "Hillshade", nativeMaxZoom: 18, attribution: USGS_3DEP_ATTR,
-    overlayOnly: true, toggle: { blend: "multiply", opacity: 0.55 }, url: "/api/tiles/hillshade/{z}/{x}/{y}.png" },
+    overlayOnly: true, toggle: { blend: "multiply", opacity: 0.55 }, loadingLabel: "hillshade",
+    url: "/api/tiles/hillshade/{z}/{x}/{y}.png" },
   { id: "landcover", label: "Woods & water", nativeMaxZoom: 15, attribution: "USGS/MRLC NLCD",
-    overlayOnly: true, url: "/api/tiles/landcover/{z}/{x}/{y}.png" },
+    overlayOnly: true, loadingLabel: "woods & water", url: "/api/tiles/landcover/{z}/{x}/{y}.png" },
 ];
 
 // Base-layer ids that were renamed or folded into another, so a remembered choice still lands somewhere.

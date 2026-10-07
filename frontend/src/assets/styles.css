@@ -510,6 +510,20 @@ input[type="checkbox"], input[type="radio"] {
   position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 500;
 }
 
+/* "Loading contour lines…" pill, top-center under the + button, while slow terrain tiles arrive. It fades
+   in after a short delay, so tiles already cached on the server never flash it. Clicks pass through, and
+   z-index 650 keeps it under Leaflet's popups (700) and controls (1000), so an open layer picker covers it. */
+.map-tile-loading {
+  position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 650; pointer-events: none;
+  white-space: nowrap;
+  display: flex; align-items: center; gap: 6px; max-width: calc(100% - 20px);
+  padding: 5px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+  background: var(--bg); color: var(--txt); border: 1px solid var(--bord2);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  animation: map-tile-loading-in .2s ease-out .35s both;
+}
+@keyframes map-tile-loading-in { from { opacity: 0; transform: translate(-50%, -4px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
 /* ── layer overlay — collapsible ── */
 .layer-overlay {
   position: absolute; bottom: calc(20px + var(--sheet-lift, 0px)); left: 10px; z-index: 500;
