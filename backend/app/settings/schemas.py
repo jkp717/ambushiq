@@ -36,6 +36,7 @@ class SettingsIn(BaseModel):
     weather_provider: str | None = None
     weather_secondary_provider: str | None = None
     weather_provider_api_keys: dict[str, str] | None = None
+    maptiler_api_key: str | None = None
     scout_radius_default_m: float | None = None
     scout_radius_min_m: float | None = None
     scout_radius_max_m: float | None = None

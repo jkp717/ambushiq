@@ -68,6 +68,10 @@ DEFAULT_SETTINGS = {
     "weather_provider_api_key": "",
     "weather_secondary_provider": "",
     "weather_secondary_provider_api_key": "",
+    # optional MapTiler key: unlocks the MapTiler Outdoor / Satellite base maps. Not
+    # encrypted — it is sent to the browser in tile URLs anyway; restrict it to this
+    # site's origin in the MapTiler dashboard.
+    "maptiler_api_key": "",
     # v2.28: Scouting Suggestions — terrain/land-cover analysis of a user-drawn
     # circle that flags candidate locations to go scout in person
     "scout_radius_default_m": 800.0,

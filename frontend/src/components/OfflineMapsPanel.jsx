@@ -9,6 +9,7 @@ import {
 } from "../utils/offlineTiles.js";
 
 const MIN_ZOOM_FLOOR = 5; // leaflet.offline's own sanity floor — prevents saving the whole USA
+const MAX_ZOOM_CEIL = 18; // each level is ~4x the tiles of the one before; deeper gets huge fast
 
 // Records from before regions existed carry no regionId — keep them visible
 // under every region rather than orphaning them.
@@ -24,7 +25,11 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
   const offlineLayers = mapApi.getBaseLayers(); // { topo: {id,label,url,layer}, imagery: {...} }
   const layerList = Object.values(offlineLayers || {});
 
-  const [selected, setSelected] = useState(() => new Set(layerList.map((l) => l.id)));
+  // Only the layer(s) on screen start selected — with every basemap ticked, a download balloons.
+  const [selected, setSelected] = useState(() => {
+    const active = (mapApi.getActiveBaseIds?.() || []).filter((id) => offlineLayers?.[id]);
+    return new Set(active.length ? active : layerList.slice(0, 1).map((l) => l.id));
+  });
   const [minZoom, setMinZoom] = useState(() => Math.max(MIN_ZOOM_FLOOR, Math.round(map?.getZoom() ?? 12)));
   const [maxZoom, setMaxZoom] = useState(16);
   const [label, setLabel] = useState("");
@@ -133,7 +138,7 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
         {!progress && (
           <>
             <Field label="Layers to save">
-              <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 12px" }}>
                 {layerList.map((l) => (
                   <label key={l.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13 }}>
                     <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleLayer(l.id)} />
@@ -147,7 +152,7 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
               <div style={{ flex: 1 }}>
                 <Field label="Min zoom (more zoomed out)">
                   <select value={minZoom} onChange={(e) => setMinZoom(Math.min(+e.target.value, maxZoom))}>
-                    {Array.from({ length: 17 - MIN_ZOOM_FLOOR }, (_, i) => MIN_ZOOM_FLOOR + i).map((z) => (
+                    {Array.from({ length: MAX_ZOOM_CEIL + 1 - MIN_ZOOM_FLOOR }, (_, i) => MIN_ZOOM_FLOOR + i).map((z) => (
                       <option key={z} value={z}>{z}</option>
                     ))}
                   </select>
@@ -156,7 +161,7 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
               <div style={{ flex: 1 }}>
                 <Field label="Max zoom (most zoomed in)">
                   <select value={maxZoom} onChange={(e) => setMaxZoom(Math.max(+e.target.value, minZoom))}>
-                    {Array.from({ length: 17 - MIN_ZOOM_FLOOR }, (_, i) => MIN_ZOOM_FLOOR + i).map((z) => (
+                    {Array.from({ length: MAX_ZOOM_CEIL + 1 - MIN_ZOOM_FLOOR }, (_, i) => MIN_ZOOM_FLOOR + i).map((z) => (
                       <option key={z} value={z}>{z}</option>
                     ))}
                   </select>
@@ -173,6 +178,7 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
             <p style={{ fontSize: 12, color: "var(--sub)", marginTop: 12 }}>
               ~{estimatedTiles.toLocaleString()} tiles, roughly {formatBytes(estimatedTiles * AVG_TILE_BYTES_FALLBACK)} (rough estimate — actual size varies by imagery detail).
               A wide min/max zoom range over a large area can take a while and use meaningful storage — the current map view is what gets saved, so zoom/pan to just the area you need first.
+              {[...selected].some((id) => offlineLayers?.[id]?.needsKey) && " MapTiler tiles count against your MapTiler monthly tile quota."}
             </p>
 
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>

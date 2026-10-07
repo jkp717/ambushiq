@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon } from "lucide-react";
 import { api } from "../services/api.js";
 import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -127,6 +127,24 @@ function SettingsPage({ reloadStands }) {
             </div>
           )}
         </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+      </div>
+
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20 }}>
+        <MapIcon size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Map layers
+      </div>
+      <p className="settings-desc">
+        USGS and Esri base maps need no setup. A free <a href="https://cloud.maptiler.com/account/keys/" target="_blank" rel="noreferrer">MapTiler key</a> adds
+        MapTiler Outdoor and Satellite to the map's layer picker. Restrict the key to this site's address in the MapTiler dashboard.
+      </p>
+      <div className="settings-section">
+        <Field label="MapTiler API key (optional)">
+          <input value={s.maptiler_api_key || ""} onChange={(e) => setS({ ...s, maptiler_api_key: e.target.value.trim() })}
+            placeholder="Paste key to enable MapTiler layers" autoComplete="off" spellCheck={false}
+            style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 13 }} />
+        </Field>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>

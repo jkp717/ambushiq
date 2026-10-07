@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
-import { TILE_SOURCES } from "../utils/tileSources.js";
+import { TILE_SOURCES, MAP_MAX_ZOOM, resolveUrl } from "../utils/tileSources.js";
 import { clamp } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
 import { api } from "../services/api.js";
@@ -9,9 +9,8 @@ import { api } from "../services/api.js";
 const DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
 const degToCompass = (d) => DIRS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
 
-// USGS topo tile layers (public, no key). Imagery topo is the shaded relief + contours.
-const USGS_TOPO = TILE_SOURCES.find((t) => t.id === "topo").url;
-const USGS_IMAGERY = TILE_SOURCES.find((t) => t.id === "imagery").url;
+const BASE_LAYER_KEY = "sa_base_layer";   // localStorage: id of the last base layer picked
+const DEFAULT_BASE = "topo";
 
 const COLORS = {
   wind: "#0C447C",
@@ -429,7 +428,7 @@ const HuntMap = forwardRef(function HuntMap({
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
   userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
-  height = 420,
+  maptilerKey = "", height = 420,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
   // Multi-select: every selectable feature is identified by a "kind:id" key. In select mode
@@ -447,8 +446,8 @@ const HuntMap = forwardRef(function HuntMap({
   const mapRef = useRef(null);
   const mapEl = useRef(null);
   const layerGroups = useRef({});
-  const baseLayers = useRef({});
   const offlineLayers = useRef({});
+  const activeBase = useRef(null);   // TILE_SOURCES id of the base layer currently shown
   const standsMarkers = useRef({}); // Prevents unmounting marker to keep popup open
   const scoutDraftLayer = useRef(null);
   const [ready, setReady] = useState(false);
@@ -458,6 +457,11 @@ const HuntMap = forwardRef(function HuntMap({
   useImperativeHandle(ref, () => ({
     getMap: () => mapRef.current,
     getBaseLayers: () => offlineLayers.current,
+    // ids of the offline-downloadable layers that make up the base layer on screen
+    getActiveBaseIds: () => {
+      const src = TILE_SOURCES.find((t) => t.id === activeBase.current);
+      return src ? (src.parts || [src.id]) : [];
+    },
   }));
 
   // init map once (waits for the Leaflet global if the CDN script is slow)
@@ -469,7 +473,7 @@ const HuntMap = forwardRef(function HuntMap({
         if (tries++ < 50) { timer = setTimeout(tryInit, 100); }  // up to ~5s
         return;
       }
-      const map = L.map(mapEl.current, { zoomControl: true });
+      const map = L.map(mapEl.current, { zoomControl: true, maxZoom: MAP_MAX_ZOOM });
       // Public land gets its own pane below the vector overlay pane (400). Leaflet stacks shapes in the order
       // they were added, and the land arrives after your zones, corridors and suggestions have been drawn, so
       // without this it would sit on top of them and swallow their clicks.
@@ -480,19 +484,6 @@ const HuntMap = forwardRef(function HuntMap({
       // The MVUM forest trails/roads sit above the general roads: they draw many of the same physical roads,
       // and their popup (vehicle class, seasonal dates) is the more useful one where the two overlap.
       map.createPane("trailsPane").style.zIndex = 395;
-      // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
-      // from IndexedDB when it's been downloaded for offline use, network otherwise.
-      const topo = L.tileLayer.offline(USGS_TOPO, { maxZoom: 16, attribution: "USGS The National Map" });
-      const imagery = L.tileLayer.offline(USGS_IMAGERY, { maxZoom: 16, attribution: "USGS The National Map" });
-      topo.addTo(map);
-      baseLayers.current = { Topo: topo, "Imagery+Topo": imagery };
-      // id-keyed (matches TILE_SOURCES) for the offline-download panel, which
-      // needs each layer instance's getTileUrls() and its exact urlTemplate.
-      offlineLayers.current = {
-        topo: { ...TILE_SOURCES.find((t) => t.id === "topo"), layer: topo },
-        imagery: { ...TILE_SOURCES.find((t) => t.id === "imagery"), layer: imagery },
-      };
-      L.control.layers(baseLayers.current, null, { position: "topright", collapsed: true }).addTo(map);
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers; "lee" shading sits below both
       // "location" (the device's blue dot) goes last so it draws above everything else
@@ -504,6 +495,57 @@ const HuntMap = forwardRef(function HuntMap({
     tryInit();
     return () => { if (timer) clearTimeout(timer); if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
   }, []);
+
+  // Base layers + the layer picker. Rebuilt when the MapTiler key changes, since that decides which
+  // sources are offered and their URLs; the base layer on screen is kept across rebuilds and reloads.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const byId = Object.fromEntries(TILE_SOURCES.map((t) => [t.id, t]));
+    // .offline (from the leaflet.offline CDN bundle) transparently serves a tile
+    // from IndexedDB when it's been downloaded for offline use, network otherwise.
+    // Past a source's nativeMaxZoom its deepest tiles are stretched rather than going blank.
+    const tile = (src) => L.tileLayer.offline(resolveUrl(src, maptilerKey), {
+      maxZoom: MAP_MAX_ZOOM, maxNativeZoom: src.nativeMaxZoom, attribution: src.attribution,
+    });
+    const available = (src) => !src.needsKey || !!maptilerKey;
+    const bases = {}, idOf = new Map(), offline = {};
+    for (const src of TILE_SOURCES) {
+      if (!available(src)) continue;
+      // id-keyed (matches TILE_SOURCES) for the offline-download panel, which
+      // needs each layer instance's getTileUrls() and its exact urlTemplate.
+      if (!src.parts) {
+        const layer = tile(src);
+        offline[src.id] = { ...src, url: resolveUrl(src, maptilerKey), layer };
+        if (src.overlayOnly) continue;
+        bases[src.label] = layer; idOf.set(layer, src.id);
+      } else {
+        const group = L.layerGroup(src.parts.map((id) => tile(byId[id])));
+        bases[src.label] = group; idOf.set(group, src.id);
+      }
+    }
+    offlineLayers.current = offline;
+
+    let saved = activeBase.current;
+    if (!saved) { try { saved = localStorage.getItem(BASE_LAYER_KEY); } catch { saved = null; } }
+    const pick = [...idOf.entries()].find(([, id]) => id === saved) || [...idOf.entries()].find(([, id]) => id === DEFAULT_BASE);
+    pick[0].addTo(map);
+    activeBase.current = pick[1];
+
+    const control = L.control.layers(bases, null, { position: "topright", collapsed: true }).addTo(map);
+    const onChange = (e) => {
+      const id = idOf.get(e.layer);
+      if (!id) return;
+      activeBase.current = id;
+      try { localStorage.setItem(BASE_LAYER_KEY, id); } catch { /* storage blocked: just not remembered */ }
+    };
+    map.on("baselayerchange", onChange);
+    return () => {
+      map.off("baselayerchange", onChange);
+      control.remove();
+      Object.values(bases).forEach((l) => map.removeLayer(l));
+    };
+  }, [ready, maptilerKey]);
 
   // map click handler (for drawing)
   useEffect(() => {

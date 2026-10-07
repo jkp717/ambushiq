@@ -183,12 +183,17 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [scoutProgress, setScoutProgress] = useState({ pct: 0, msg: "" });
   const [scoutError, setScoutError] = useState(null);
 
+  const [maptilerKey, setMaptilerKey] = useState("");
+
   useEffect(() => {
-    api("/settings").then((s) => setScoutSettings({
-      scout_radius_default_m: s.scout_radius_default_m ?? SCOUT_RADIUS_DEFAULT_M,
-      scout_radius_min_m: s.scout_radius_min_m ?? SCOUT_RADIUS_MIN_M,
-      scout_radius_max_m: s.scout_radius_max_m ?? SCOUT_RADIUS_MAX_M,
-    })).catch(() => {});
+    api("/settings").then((s) => {
+      setScoutSettings({
+        scout_radius_default_m: s.scout_radius_default_m ?? SCOUT_RADIUS_DEFAULT_M,
+        scout_radius_min_m: s.scout_radius_min_m ?? SCOUT_RADIUS_MIN_M,
+        scout_radius_max_m: s.scout_radius_max_m ?? SCOUT_RADIUS_MAX_M,
+      });
+      setMaptilerKey(s.maptiler_api_key || "");
+    }).catch(() => {});
   }, []);
 
   // function to toggle individual stand layers
@@ -687,7 +692,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
-            userLocation={userLocation} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus}
+            userLocation={userLocation} maptilerKey={maptilerKey} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus}
             onRecSitesStatus={setRecSitesStatus} onRoadsStatus={setRoadsStatus}
             regionId={activeRegion.id}
             height="100%" />
