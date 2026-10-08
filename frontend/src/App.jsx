@@ -132,7 +132,8 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
 
   function openStandEditor(coord) {
     setEditingStand({ id: null, name: "", lat: coord ? coord.lat.toFixed(6) : "", lon: coord ? coord.lon.toFixed(6) : "",
-                      downhill_deg: null, deer_approach_deg: null, visibility_m: null, terrain: null });
+                      downhill_deg: null, deer_approach_deg: null, visibility_m: null, terrain: null,
+                      stand_type: "tree", color: null });
   }
 
   function requestRelocate(kind, id) {

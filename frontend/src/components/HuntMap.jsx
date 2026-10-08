@@ -3,6 +3,7 @@ import { RefreshCw, ZoomIn } from "lucide-react";
 import { TILE_SOURCES, MAP_MAX_ZOOM, RENAMED_BASES, resolveUrl } from "../utils/tileSources.js";
 import { clamp } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
+import { standColor, pinFg, standGlyph } from "../utils/standStyle.js";
 import { api } from "../services/api.js";
 
 /* global L */
@@ -205,8 +206,16 @@ function eddyNoteHtml(eddy, leeLayerOn) {
   </div>`;
 }
 
-// Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
-function standIcon(vectors, rank, selected = false) {
+// Draw a stroke twice — a white casing under the colored line — so arrows stay readable where they
+// cross the colored stand pin or busy imagery. `draw(color, width, opacity)` returns one pass's SVG.
+const cased = (draw, color, w) => draw("#fff", w + 2, 0.85) + draw(color, w, 1);
+
+// Teardrop pin geometry, tip at the stand point: head radius, and head-center height above the tip.
+const PIN_R = 14, PIN_HEAD = 24, PIN_H = PIN_HEAD + PIN_R;
+
+// Build an SVG divIcon for a stand: a teardrop pin (color + type icon) with its tip on the stand,
+// and the wind (solid), thermal (dashed) and deer-approach arrows drawn from the tip over the pin.
+function standIcon(vectors, rank, selected = false, stand = null) {
   const size = 78, c = size / 2;
   // Arrow length tracks magnitude so stands with very different conditions don't look identical:
   // wind by speed (mph), thermal by its blended weight (0..1).
@@ -220,8 +229,9 @@ function standIcon(vectors, rank, selected = false) {
     const ah = 6, a1 = rad + Math.PI - 0.4, a2 = rad + Math.PI + 0.4;
     const hx1 = x2 + Math.cos(a1) * ah, hy1 = y2 + Math.sin(a1) * ah;
     const hx2 = x2 + Math.cos(a2) * ah, hy2 = y2 + Math.sin(a2) * ah;
-    return `<g opacity="${op}"><line x1="${c}" y1="${c}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${w}" ${dash ? 'stroke-dasharray="3 3"' : ""}/>
-      <polyline points="${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}" fill="none" stroke="${color}" stroke-width="${w}"/></g>`;
+    // the casing stays solid under a dashed line so the dashes read against the pin
+    return `<g opacity="${op}">${cased((col, sw, o) => `<g opacity="${o}"><line x1="${c}" y1="${c}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="${sw}" ${dash && o === 1 ? 'stroke-dasharray="3 3"' : ""}/>
+      <polyline points="${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}" fill="none" stroke="${col}" stroke-width="${sw}"/></g>`, color, w)}</g>`;
   };
   // Lee eddy: when likely, the forecast (ridge-top) wind arrow is ghosted and a curled arrow shows
   // the near-ground air bending back upslope toward the crest. Either level gets a ⟲ badge.
@@ -236,12 +246,14 @@ function standIcon(vectors, rank, selected = false) {
     const tan = Math.atan2(ty - qy, tx - qx), ah = 6;
     const hx1 = tx + Math.cos(tan + Math.PI - 0.45) * ah, hy1 = ty + Math.sin(tan + Math.PI - 0.45) * ah;
     const hx2 = tx + Math.cos(tan + Math.PI + 0.45) * ah, hy2 = ty + Math.sin(tan + Math.PI + 0.45) * ah;
-    return `<path d="M ${c} ${c} Q ${qx} ${qy} ${tx} ${ty}" fill="none" stroke="${COLORS.eddy}" stroke-width="3" stroke-linecap="round"/>
-      <polyline points="${hx1},${hy1} ${tx},${ty} ${hx2},${hy2}" fill="none" stroke="${COLORS.eddy}" stroke-width="3"/>`;
+    return cased((col, sw, o) => `<g opacity="${o}"><path d="M ${c} ${c} Q ${qx} ${qy} ${tx} ${ty}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linecap="round"/>
+      <polyline points="${hx1},${hy1} ${tx},${ty} ${hx2},${hy2}" fill="none" stroke="${col}" stroke-width="${sw}"/></g>`, COLORS.eddy, 3);
   };
+  // badge sits on the top-right of the pin head, like a notification dot
+  const bx = c + PIN_R, by = c - PIN_HEAD - PIN_R + 3;
   const eddyBadge = eddy
-    ? `<circle cx="${c + 13}" cy="${c - 13}" r="7" fill="#fff" stroke="${COLORS.eddy}" stroke-width="1.5"/>
-       <text x="${c + 13}" y="${c - 9.5}" text-anchor="middle" font-size="10" font-weight="700" fill="${COLORS.eddy}">⟲</text>`
+    ? `<circle cx="${bx}" cy="${by}" r="7" fill="#fff" stroke="${COLORS.eddy}" stroke-width="1.5"/>
+       <text x="${bx}" y="${by + 3.5}" text-anchor="middle" font-size="10" font-weight="700" fill="${COLORS.eddy}">⟲</text>`
     : "";
   const deerArrow = vectors.deer_approach_deg != null
     ? (() => {
@@ -253,32 +265,45 @@ function standIcon(vectors, rank, selected = false) {
         const ex = c - Math.cos(rad) * 14, ey = c - Math.sin(rad) * 14;
         const hx1 = ex + Math.cos(a1) * ah, hy1 = ey + Math.sin(a1) * ah;
         const hx2 = ex + Math.cos(a2) * ah, hy2 = ey + Math.sin(a2) * ah;
-        return `<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${COLORS.deer}" stroke-width="2.5"/>
-          <polyline points="${hx1},${hy1} ${ex},${ey} ${hx2},${hy2}" fill="none" stroke="${COLORS.deer}" stroke-width="2.5"/>`;
+        return cased((col, sw, o) => `<g opacity="${o}"><line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${col}" stroke-width="${sw}"/>
+          <polyline points="${hx1},${hy1} ${ex},${ey} ${hx2},${hy2}" fill="none" stroke="${col}" stroke-width="${sw}"/></g>`, COLORS.deer, 2.5);
       })()
     : "";
 
-  const ring = (rank === 0 ? `<circle cx="${c}" cy="${c}" r="11" fill="none" stroke="${COLORS.stand}" stroke-width="2.5"/>` : "")
-    + (selected ? `<circle cx="${c}" cy="${c}" r="15" fill="rgba(245,163,0,.25)" stroke="${COLORS.selected}" stroke-width="3.5"/>` : "");
-  // The clickable hit-area is a small div (dotPx × dotPx) centered on the stand dot.
-  // The SVG is absolutely offset so its visual center aligns with the div center, but
-  // pointer-events:none on the SVG means only the tiny div registers clicks — arrows
-  // don't expand the selection area.
-  const dotPx = 14, dotHalf = dotPx / 2;
-  const svgOff = dotHalf - c; // negative: shifts SVG up-left so (c,c) lands at (dotHalf,dotHalf)
-  const html = `<div style="position:relative;width:${dotPx}px;height:${dotPx}px;overflow:visible">
+  // Teardrop: straight sides from the tip to their tangent points on the head circle, then the
+  // long way round the top of the head.
+  const hy = c - PIN_HEAD;
+  const phi = Math.acos(PIN_R / PIN_HEAD);
+  const tx = PIN_R * Math.sin(phi), ty = hy + PIN_R * Math.cos(phi);
+  const fill = standColor(stand), fg = pinFg(fill);
+  const pin = `<path d="M ${c} ${c} L ${c - tx} ${ty} A ${PIN_R} ${PIN_R} 0 1 1 ${c + tx} ${ty} Z"
+      fill="${fill}" stroke="rgba(0,0,0,.55)" stroke-width="1.2" stroke-linejoin="round"
+      style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))"/>
+    <g transform="translate(${c - 9} ${hy - 9}) scale(0.75)">${standGlyph(stand?.stand_type, fg, fill)}</g>`;
+  // best-ranked stand: a dark-and-white ring round the pin head; selected: the amber halo
+  const ring = (selected ? `<circle cx="${c}" cy="${hy}" r="${PIN_R + 6}" fill="rgba(245,163,0,.25)" stroke="${COLORS.selected}" stroke-width="3.5"/>` : "")
+    + (rank === 0 ? `<circle cx="${c}" cy="${hy}" r="${PIN_R + 3.5}" fill="none" stroke="rgba(0,0,0,.6)" stroke-width="4.5"/>
+       <circle cx="${c}" cy="${hy}" r="${PIN_R + 3.5}" fill="none" stroke="#fff" stroke-width="2.5"/>` : "");
+  // The clickable hit-area is a div covering just the pin (tip at its bottom-center, the stand
+  // point). The SVG is offset so its center (c,c) lands on that tip, and pointer-events:none on
+  // the SVG means only the pin registers clicks — arrows don't expand the selection area.
+  // Draw order is bottom to top: rings, pin, then the arrows over it (the scent cone is a separate
+  // vector layer below the marker pane).
+  const hitW = PIN_R * 2, hitH = PIN_H;
+  const html = `<div style="position:relative;width:${hitW}px;height:${hitH}px;overflow:visible">
     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"
-      style="overflow:visible;position:absolute;left:${svgOff}px;top:${svgOff}px;pointer-events:none">
+      style="overflow:visible;position:absolute;left:${hitW / 2 - c}px;top:${hitH - c}px;pointer-events:none">
+      ${ring}
+      ${pin}
       ${vectors.wind_to_deg != null ? arrow(vectors.wind_to_deg, COLORS.wind, false, windLen, 3, eddyLikely ? 0.3 : 1) : ""}
       ${eddyLikely && vectors.wind_to_deg != null ? curledArrow(eddy.near_ground_to_deg, 26) : ""}
       ${vectors.thermal_to_deg != null ? arrow(vectors.thermal_to_deg, COLORS.thermal, true, thermalLen, 2.5) : ""}
       ${deerArrow}
-      ${ring}
-      <circle cx="${c}" cy="${c}" r="5.5" fill="${COLORS.stand}" stroke="#fff" stroke-width="1.5"/>
       ${eddyBadge}
     </svg>
   </div>`;
-  return L.divIcon({ html, className: "stand-div-icon", iconSize: [dotPx, dotPx], iconAnchor: [dotHalf, dotHalf] });
+  return L.divIcon({ html, className: "stand-div-icon", iconSize: [hitW, hitH], iconAnchor: [hitW / 2, hitH],
+                     popupAnchor: [0, -hitH] });
 }
 
 // The point to show for a corridor: halfway along its length (a corridor has no single location).
@@ -1252,7 +1277,7 @@ const HuntMap = forwardRef(function HuntMap({
         deer_approach_deg: sl.deer ? s.deer_approach_deg : null,
       };
       const rank = rankIndex[s.id] ?? 99;
-      const icon = standIcon(vectors, rank, isSelected("stand", s.id));
+      const icon = standIcon(vectors, rank, isSelected("stand", s.id), s);
 
       const eddy = v.lee_eddy;
       const windTxt = v.wind_to_deg == null ? ""

@@ -62,6 +62,13 @@ def init_db(retries: int = 30):
                     conn.commit()
                 except Exception:
                     pass
+                # v3.31: stand type + pin color (display only)
+                try:
+                    conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS stand_type VARCHAR(16) NOT NULL DEFAULT 'tree'"))
+                    conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS color VARCHAR(16)"))
+                    conn.commit()
+                except Exception:
+                    pass
                 # v2.21: species classification on camera sightings, so the camera
                 # boost can be limited to actual deer instead of any animal
                 try:

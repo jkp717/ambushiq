@@ -23,6 +23,10 @@ class Stand(Base):
     terrain_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # effective sight/cover radius (m); None -> falls back to corridor/global falloff
     visibility_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # map pin only — doesn't affect scoring: "tree" | "blind" | "spot"
+    stand_type: Mapped[str] = mapped_column(String(16), default="tree", server_default="tree")
+    # pin color as #RRGGBB; None -> the default stand red
+    color: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -30,5 +34,6 @@ class Stand(Base):
             "is_active": bool(self.is_active if self.is_active is not None else 1),
             "downhill_deg": self.downhill_deg, "deer_approach_deg": self.deer_approach_deg,
             "visibility_m": self.visibility_m,
+            "stand_type": self.stand_type or "tree", "color": self.color,
             "terrain": json.loads(self.terrain_json) if self.terrain_json else None,
         }

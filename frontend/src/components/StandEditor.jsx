@@ -5,6 +5,7 @@ import Field from "./ui/Field.jsx";
 import DirPicker from "./ui/DirPicker.jsx";
 import TerrainPanel from "./TerrainPanel.jsx";
 import { ydInput, ydFromInput } from "../utils/units.js";
+import { STAND_TYPES, STAND_COLORS, standColor, standGlyph } from "../utils/standStyle.js";
 
 function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
   const [s, setS] = useState({ ...stand });
@@ -52,6 +53,8 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         downhill_deg: s.downhill_deg,
         deer_approach_deg: s.deer_approach_deg,
         visibility_m: s.visibility_m,
+        stand_type: s.stand_type || "tree",
+        color: s.color || null,
       };
 
       if (!id) { 
@@ -103,7 +106,8 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
           
           if (data.complete && data.terrain) {
             const updated = data.terrain;
-            setS({ ...updated, lat: updated.lat, lon: updated.lon });
+            setS((prev) => ({ ...updated, lat: updated.lat, lon: updated.lon,
+                              stand_type: prev.stand_type, color: prev.color }));
           }
         }
       }
@@ -123,6 +127,30 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
       </div>
       <Field label="Stand name"><input value={s.name} onChange={(e) => setS({ ...s, name: e.target.value })} placeholder="North Ridge" /></Field>
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 13, color: "var(--sub)", marginBottom: 6 }}>Stand type</div>
+        <div className="grid-dir">
+          {STAND_TYPES.map(({ key, label }) => (
+            <button key={key} type="button" className={"chip" + ((s.stand_type || "tree") === key ? " on" : "")}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              onClick={() => setS({ ...s, stand_type: key })}>
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"
+                dangerouslySetInnerHTML={{ __html: standGlyph(key, "currentColor", "var(--bg)") }} />
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 13, color: "var(--sub)", marginBottom: 6 }}>Pin color</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {STAND_COLORS.map((c, i) => (
+            <button key={c} type="button" aria-label={`Pin color ${c}`}
+              className={"scout-swatch" + (standColor(s) === c ? " on" : "")} style={{ background: c, width: 26, height: 26 }}
+              onClick={() => setS({ ...s, color: i === 0 ? null : c })} />
+          ))}
+        </div>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
         <Field label="Latitude"><input value={s.lat} onChange={(e) => { setOutside(false); setS({ ...s, lat: e.target.value, terrain: null }); }} placeholder="34.7465" inputMode="decimal" /></Field>
         <Field label="Longitude"><input value={s.lon} onChange={(e) => { setOutside(false); setS({ ...s, lon: e.target.value, terrain: null }); }} placeholder="-92.2896" inputMode="decimal" /></Field>
@@ -175,7 +203,7 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         Active — included in rankings and map scoring
       </label>
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-        <button className="btn btn-primary" disabled={!valid} onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m }, savedId)}>
+        <button className="btn btn-primary" disabled={!valid} onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m, stand_type: s.stand_type || "tree", color: s.color || null }, savedId)}>
           <Save size={15} /> Save stand
         </button>
         {onMoveOnMap && <button className="btn" onClick={() => { onMoveOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Move on Map</button>}

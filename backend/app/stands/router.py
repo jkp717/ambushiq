@@ -57,7 +57,9 @@ async def update_stand(stand_id: int, body: StandIn, region_id: int = Depends(ge
         if not st or st.region_id != region_id:
             raise HTTPException(404, "not found")
         moved = (st.lat != body.lat) or (st.lon != body.lon)
-        for k, v in body.model_dump().items():
+        # pin style is kept when a caller (move, active toggle) doesn't send it
+        keep = {"stand_type", "color"} - body.model_fields_set
+        for k, v in body.model_dump(exclude=keep).items():
             setattr(st, k, 1 if (k == "is_active" and v) else (0 if k == "is_active" else v))
         if moved:
             st.terrain_json = None  # invalidate cached terrain on move
