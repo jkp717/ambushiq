@@ -6,7 +6,7 @@ import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
 import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx } from "../utils/formatters.js";
-import { fmtDist } from "../utils/units.js";
+import { fmtDist, fmtYd } from "../utils/units.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M, distanceM } from "../utils/geo.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -122,6 +122,9 @@ const RECSITES_HINTS = {
 const RECSITES_LEGEND = [
   ["#8D6E00", "Trailhead"], ["#2E7D32", "Campground"], ["#EF6C00", "Picnic site"], ["#1565C0", "Day-use area"],
 ];
+
+// Add-menu modes that place a single point (vs. drawing a corridor or a scouting area).
+const POINT_ADDS = ["stand", "food", "bedding", "scrape", "rub"];
 
 // The map's 15-minute slot for forecast hour `index`, `minute` past it.
 const slotKey = (index, minute = 0) => index * 4 + minute / 15;
@@ -453,6 +456,11 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     return { lat: p.lat, lon: p.lon, accuracy: p.accuracy, heading: compassHeading ?? gpsHeading };
   }, [geo.position, compassHeading]);
 
+  // Single-point adds can be placed at the device's current fix ("Use my location" in the draw bar).
+  // Only a live fix is offered — not a stale one left over from before GPS was lost.
+  const hereFix = POINT_ADDS.includes(drawMode) && locationOn && geo.status === "active" ? userLocation : null;
+  const tapOrHere = hereFix ? "Tap the map, or use your location," : "Click the map";
+
   function toggleLocation() {
     if (locationOn) { setLocationOn(false); return; }
     requestOrientationPermission();   // iOS requires this inside the tap; a denial just means no compass beam
@@ -750,9 +758,15 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       {/* draw mode banner */}
       {drawMode && (
         <div className="map-draw-bar">
-          {drawMode === "stand"    && "Click the map to place the stand."}
-          {(drawMode === "food" || drawMode === "bedding") && `Click the map to drop the ${drawMode} zone.`}
-          {(drawMode === "scrape" || drawMode === "rub") && `Click the map to mark this ${drawMode}.`}
+          {drawMode === "stand"    && `${tapOrHere} to place the stand.`}
+          {(drawMode === "food" || drawMode === "bedding") && `${tapOrHere} to drop the ${drawMode} zone.`}
+          {(drawMode === "scrape" || drawMode === "rub") && `${tapOrHere} to mark this ${drawMode}.`}
+          {hereFix && (
+            <button className="btn btn-primary" style={{ marginLeft: 8 }}
+                    onClick={() => onMapClick({ lat: hereFix.lat, lon: hereFix.lon })}>
+              <Navigation2 size={13} /> Use my location{hereFix.accuracy ? ` ±${fmtYd(hereFix.accuracy)}` : ""}
+            </button>
+          )}
           {drawMode === "corridor" && `Click points along the deer path (${draftPoints.length} set).`}
           {drawMode === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishCorridor} disabled={draftPoints.length < 2}>Finish</button>}
           {drawMode === "scout" && !scoutDraft && "Click the map to drop the scouting-analysis area."}
