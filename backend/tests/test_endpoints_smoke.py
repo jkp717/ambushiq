@@ -10,6 +10,7 @@ import app.main  # noqa: F401  (imports every router/model so create_all sees al
 from app.core.database import Base, engine
 from app.deer_ratings import router as deer_router
 from app.forecast import router as fc_router
+from app.forecast import eddy as eddy_mod, scoring
 from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
 from app.regions.models import Region
 from app.stands import terrain as terrain_mod
@@ -192,3 +193,69 @@ def test_all_hours_conditions_match_the_single_hour_endpoint(seeded):
         assert [(r["stand_id"], r["avg"], r["sample"]) for r in saved["ranked"]] == \
                [(r["stand"]["id"], r["avg"], r["sample"]) for r in live["ranked"]]
         assert "hour" not in live and live["lee_zone"] is None
+
+
+def test_all_hours_quarters_match_the_live_15_minute_slot(seeded):
+    allc = run(fc_router.map_conditions_all(region_id=1, _=None))
+    for idx in (7, 30):
+        quarters = allc["hours"][idx]["quarters"]
+        assert [q["time"]["minute"] for q in quarters] == [15, 30, 45]
+        live = run(fc_router.map_conditions(HourRankIn(time_index=idx, minute=30), region_id=1, _=None))
+        saved = quarters[1]
+        assert saved["time"] == live["time"]
+        assert [it["vectors"] for it in saved["items"]] == [it["vectors"] for it in live["stands"]]
+        assert [(r["stand_id"], r["avg"]) for r in saved["ranked"]] == [(r["stand"]["id"], r["avg"]) for r in live["ranked"]]
+
+
+# ---------- 15-minute slots: inputs eased toward the next hour ----------
+
+def _two_hours(dir_a, dir_b, speed_a=8.0, speed_b=12.0):
+    return {"time": ["2025-11-10T05:00", "2025-11-10T06:00"],
+            "wind_direction_10m": [dir_a, dir_b], "wind_speed_10m": [speed_a, speed_b],
+            "wind_gusts_10m": [9.0, 9.0], "shortwave_radiation": [0.0, 100.0]}
+
+
+def test_slot_inputs_at_the_top_of_the_hour_are_the_hour_itself():
+    h = _two_hours(200.0, 260.0)
+    at = fc_router._hour_at(h, 0, 6.75, 17.08, [10.0, 10.0])
+    assert fc_router._hour_at(h, 0, 6.75, 17.08, [10.0, 10.0], minute=0) == at
+    assert at["time_h"] == 5 and at["wind_dir"] == 200.0
+
+
+def test_slot_wind_turns_the_short_way_and_speed_is_halfway_at_30():
+    h = _two_hours(350.0, 10.0)
+    half = fc_router._hour_at(h, 0, 6.75, 17.08, [10.0, 10.0], minute=30)
+    assert half["wind_dir"] == pytest.approx(0.0) or half["wind_dir"] == pytest.approx(360.0)
+    assert half["wind_speed"] == pytest.approx(10.0) and half["solar"] == pytest.approx(50.0)
+    assert half["time_h"] == pytest.approx(5.5)
+    q = fc_router._hour_at(_two_hours(200.0, 260.0), 0, 6.75, 17.08, [10.0, 10.0], minute=15)
+    assert q["wind_dir"] == pytest.approx(215.0)
+
+
+def test_last_forecast_hour_has_no_next_hour_to_ease_toward():
+    h = _two_hours(200.0, 260.0)
+    assert fc_router._hour_at(h, 1, 6.75, 17.08, [10.0, 10.0], minute=45) == \
+           fc_router._hour_at(h, 1, 6.75, 17.08, [10.0, 10.0])
+
+
+def test_thermal_phase_turns_at_the_15_minute_slot_nearest_sunrise():
+    # sunrise 6:45: the stronger dawn drainage starts an hour before, at 5:45, not on the hour
+    h = _two_hours(200.0, 200.0)
+
+    def state(minute):
+        hr = fc_router._hour_at(h, 0, 6.75, 17.08, [12.0, 12.0], minute=minute)
+        return scoring.thermal_state(hr["time_h"], hr["solar"], hr["sunrise_h"], hr["sunset_h"], hr["temp_swing"])
+
+    assert state(30)["weight"] == pytest.approx(0.70)    # still night drainage
+    assert state(45)["weight"] == pytest.approx(0.85)    # dawn drainage
+
+
+def test_lee_eddy_wind_threshold_is_crossed_mid_hour():
+    h = _two_hours(270.0, 270.0, speed_a=8.0, speed_b=12.0)
+
+    def level(minute):
+        hr = fc_router._hour_at(h, 0, 6.75, 17.08, [10.0, 10.0], minute=minute)
+        return eddy_mod._wind_level(hr["wind_speed"], hr["gust"], eddy_mod.DEFAULT_EDDY_PARAMS)
+
+    assert level(15) == "possible"   # 9 mph
+    assert level(30) == "likely"     # 10 mph

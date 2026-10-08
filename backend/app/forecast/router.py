@@ -48,14 +48,36 @@ def _sun_hours(fc: dict, day: str) -> tuple[float, float]:
     return 6.5, 19.0
 
 
-def _hour_at(h: dict, i: int, sr_h: float, ss_h: float, temp_swing: list) -> dict:
-    return {
+QUARTER_MINUTES = (15, 30, 45)
+
+
+def _lerp_deg(a: float, b: float, f: float) -> float:
+    """`f` of the way from bearing `a` to `b`, the short way round (350 -> 10 passes through 0)."""
+    d = ((b - a + 540) % 360) - 180
+    return (a + f * d) % 360
+
+
+def _hour_at(h: dict, i: int, sr_h: float, ss_h: float, temp_swing: list, minute: int = 0) -> dict:
+    """Model inputs at forecast hour `i`, or `minute` past it. Providers give one value per hour (taken as
+    the value at the top of the hour), so a 15-minute slot eases wind, gust and sunlight toward hour i+1,
+    and `time_h` carries the minutes so the thermal phase turns at the right slot around sunrise/sunset.
+    Daily temperature swing and the date stay the hour's. minute=0, or the last hour, is the hour as is."""
+    out = {
         "wind_dir": h["wind_direction_10m"][i], "wind_speed": h["wind_speed_10m"][i],
         "gust": h["wind_gusts_10m"][i], "solar": h["shortwave_radiation"][i],
         "time_h": datetime.fromisoformat(h["time"][i]).hour,
         "sunrise_h": sr_h, "sunset_h": ss_h,
         "temp_swing": temp_swing[i], "date": h["time"][i][:10],
     }
+    if minute and i + 1 < len(h["time"]):
+        f = minute / 60
+        nxt = i + 1
+        out["wind_dir"] = _lerp_deg(out["wind_dir"], h["wind_direction_10m"][nxt], f)
+        for key, field in (("wind_speed", "wind_speed_10m"), ("gust", "wind_gusts_10m"),
+                           ("solar", "shortwave_radiation")):
+            out[key] = out[key] + f * (h[field][nxt] - out[key])
+        out["time_h"] = out["time_h"] + f
+    return out
 
 
 def _score_view(det: dict) -> dict:
@@ -101,14 +123,15 @@ async def _map_context(region_id: int, region: dict):
     return fc, ctx
 
 
-def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int) -> dict:
-    """Map conditions at forecast hour `i`: per-stand wind/thermal vectors, the stands ranked for that hour,
-    and (under "hour") the hour inputs used, for callers that need them."""
+def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int, minute: int = 0) -> dict:
+    """Map conditions at forecast hour `i` (`minute` past it): per-stand wind/thermal vectors, the stands
+    ranked for that time, and (under "hour") the inputs used, for callers that need them."""
     h = fc["hourly"]
     sr_h, ss_h = _sun_hours(fc, h["time"][i][:10])
-    hour = _hour_at(h, i, sr_h, ss_h, temp_swing)
+    hour = _hour_at(h, i, sr_h, ss_h, temp_swing, minute)
     windows = scoring.period_windows(sr_h, ss_h)
-    period = scoring.period_for_hour(hour["time_h"], windows)
+    # hunt periods are whole-hour windows: a 15-minute slot belongs to its hour's period
+    period = scoring.period_for_hour(int(hour["time_h"]), windows)
 
     items = []
     for st in stands:
@@ -129,11 +152,12 @@ def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int
         key=lambda x: x["avg"], reverse=True,
     )
     return {
-        "time": {"index": i, "iso": h["time"][i],
+        "time": {"index": i, "minute": minute, "iso": h["time"][i],
                  "label": (lambda d: f"{format_day_label(d)}, {format_hour_label(d, lower=False)}")(
                      datetime.fromisoformat(h["time"][i])),
                  "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i],
-                 "wind_speed": h["wind_speed_10m"][i], "wind_dir": h["wind_direction_10m"][i]},
+                 "wind_speed": round(hour["wind_speed"], 1) if minute else h["wind_speed_10m"][i],
+                 "wind_dir": round(hour["wind_dir"]) if minute else h["wind_direction_10m"][i]},
         "stands": items,
         "ranked": ranked,
         "hour": hour,
@@ -258,8 +282,8 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
 @router.post("/api/map/conditions")
 async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_region_id),
                           _=Depends(require_token)):
-    """Per-stand wind + thermal vectors at one forecast hour, plus a ranked list in sync
-    with that same hour. Drives the map indicators and the list together; scores come
+    """Per-stand wind + thermal vectors at one forecast hour (or `minute` past it), plus a ranked
+    list in sync with that same time. Drives the map indicators and the list together; scores come
     from the same ScoringContext as /api/day/ranked, so the two views always agree."""
     region = get_region_dict(region_id)
     ensure_property_terrain(region_id)   # first map load (or a new far-out stand) fetches it in the background
@@ -269,7 +293,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     i = body.time_index
     if i < 0 or i >= len(h["time"]):
         raise HTTPException(400, "time_index out of range")
-    out = _hour_conditions(ctx, fc, _temp_swing_rolling(h), stands, i)
+    out = _hour_conditions(ctx, fc, _temp_swing_rolling(h), stands, i, body.minute)
     hour = out.pop("hour")
     out["lee_zone"] = (eddy_mod.lee_zone_mask(ctx.eddy_grid, hour["wind_dir"], hour["wind_speed"], hour["gust"])
                        if body.lee_zone else None)
@@ -280,26 +304,32 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
 async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """/api/map/conditions for every forecast hour in one response, so the phone can keep the whole forecast
     and still show wind/thermal arrows with no signal. Each stand is sent once in `stands`; hours refer to
-    stands by id. No lee-eddy zone (a large grid per hour) - that stays online-only."""
+    stands by id. Each hour also carries `quarters`: the same for :15, :30 and :45 past it. No lee-eddy zone
+    (a large grid per slot) - that stays online-only."""
     region = get_region_dict(region_id)
     stands = _active_stands(region_id)
     fc, ctx = await _map_context(region_id, region)
     h = fc["hourly"]
 
+    def slot(temp_swing: list, i: int, minute: int) -> dict:
+        one = _hour_conditions(ctx, fc, temp_swing, stands, i, minute)
+        return {
+            "time": one["time"],
+            "items": [{"stand_id": it["stand"]["id"], "vectors": it["vectors"]} for it in one["stands"]],
+            "ranked": [{"stand_id": r["stand"]["id"], "avg": r["avg"], "sample": r["sample"]}
+                       for r in one["ranked"]],
+        }
+
     def build() -> list[dict]:
         temp_swing = _temp_swing_rolling(h)
         hours = []
         for i in range(len(h["time"])):
-            one = _hour_conditions(ctx, fc, temp_swing, stands, i)
-            hours.append({
-                "time": one["time"],
-                "items": [{"stand_id": it["stand"]["id"], "vectors": it["vectors"]} for it in one["stands"]],
-                "ranked": [{"stand_id": r["stand"]["id"], "avg": r["avg"], "sample": r["sample"]}
-                           for r in one["ranked"]],
-            })
+            hour = slot(temp_swing, i, 0)
+            hour["quarters"] = [slot(temp_swing, i, m) for m in QUARTER_MINUTES]
+            hours.append(hour)
         return hours
 
-    hours = await asyncio.to_thread(build)   # a few hundred hours x every stand: keep it off the event loop
+    hours = await asyncio.to_thread(build)   # a thousand-plus slots x every stand: keep it off the event loop
     return {"stands": stands, "hours": hours, "utc_offset_seconds": int(fc.get("utc_offset_seconds", 0)),
             "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}
 

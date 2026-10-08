@@ -340,14 +340,16 @@ function scoutExtrasHtml(color, comments) {
 
 // Build a popup with edit/delete buttons and wire them up after it opens.
 // `position` ({lat, lon, label}) adds a "Location / Center  lat, lon" line so every user-placed item shows where it is.
+// `title`, `subtitle` and `position.label` are plain text (names the user typed) and are escaped; `note` is HTML
+// built by this file and goes in as-is.
 function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
                                     dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment }) {
   const posHtml = position && position.lat != null && position.lon != null
-    ? `<div class="feat-popup-pos"><span>${position.label || "Location"}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
+    ? `<div class="feat-popup-pos"><span>${escHtml(position.label || "Location")}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
     : "";
   let html = `<div class="feat-popup">
-    <div class="feat-popup-title">${title || "(unnamed)"}</div>
-    ${subtitle ? `<div class="feat-popup-sub">${subtitle}</div>` : ""}
+    <div class="feat-popup-title">${escHtml(title || "(unnamed)")}</div>
+    ${subtitle ? `<div class="feat-popup-sub">${escHtml(subtitle)}</div>` : ""}
     ${note || ""}
     ${posHtml}
   `;

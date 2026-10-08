@@ -123,18 +123,24 @@ const RECSITES_LEGEND = [
   ["#8D6E00", "Trailhead"], ["#2E7D32", "Campground"], ["#EF6C00", "Picnic site"], ["#1565C0", "Day-use area"],
 ];
 
-// /map/conditions/all sends each stand once and refers to it by id in every hour; rebuild each hour in
-// the shape /map/conditions returns, keyed by hour index. Stands missing from the list are skipped.
+// The map's 15-minute slot for forecast hour `index`, `minute` past it.
+const slotKey = (index, minute = 0) => index * 4 + minute / 15;
+
+// /map/conditions/all sends each stand once and refers to it by id in every hour; rebuild each hour and
+// each of its :15/:30/:45 quarters in the shape /map/conditions returns, keyed by slotKey. Stands missing
+// from the list are skipped.
 function conditionsByHour(all) {
   const byId = new Map((all.stands || []).map((s) => [s.id, s]));
+  const build = (h) => ({
+    time: h.time,
+    stands: h.items.filter((it) => byId.has(it.stand_id)).map((it) => ({ stand: byId.get(it.stand_id), vectors: it.vectors })),
+    ranked: h.ranked.filter((r) => byId.has(r.stand_id)).map((r) => ({ stand: byId.get(r.stand_id), avg: r.avg, sample: r.sample })),
+    lee_zone: null,
+  });
   const out = new Map();
   for (const h of all.hours || []) {
-    out.set(h.time.index, {
-      time: h.time,
-      stands: h.items.filter((it) => byId.has(it.stand_id)).map((it) => ({ stand: byId.get(it.stand_id), vectors: it.vectors })),
-      ranked: h.ranked.filter((r) => byId.has(r.stand_id)).map((r) => ({ stand: byId.get(r.stand_id), avg: r.avg, sample: r.sample })),
-      lee_zone: null,
-    });
+    out.set(slotKey(h.time.index), build(h));
+    for (const q of h.quarters || []) out.set(slotKey(h.time.index, q.time.minute), build(q));
   }
   return out;
 }
@@ -321,26 +327,35 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     return () => clearInterval(id);
   }, [playing, curDay]);
 
-  // One hour's conditions, live from the server (the only source of the lee-eddy zone). With no
-  // connection, the on-phone copy of that hour is shown instead — straight away once a request has
-  // failed, so scrubbing the slider offline doesn't wait on a request per hour — and a live answer
-  // still replaces it if signal comes back.
+  // One 15-minute slot's conditions, live from the server (the only source of the lee-eddy zone). With no
+  // connection, the on-phone copy of that slot is shown instead — straight away once a request has
+  // failed, so scrubbing the slider offline doesn't wait on a request per step — and a live answer
+  // still replaces it if signal comes back. Online, a copy fetched this session is shown right away too
+  // (unless the lee-eddy layer is on, which only the live answer has), so Play and scrubbing stay smooth.
   useEffect(() => {
     if (!curHour) return;
     let cancel = false;
+    const savedSlot = () => {
+      const { map } = savedHoursRef.current;
+      // a copy saved before 15-minute slots existed only has whole hours
+      return map?.get(slotKey(curHour.index, curMinute)) || map?.get(slotKey(curHour.index));
+    };
     const showSaved = () => {
-      const { map, savedAt } = savedHoursRef.current;
-      const hit = map?.get(curHour.index);
+      const hit = savedSlot();
       if (!hit || cancel) return false;
       setConditions(hit);
-      setDeviceAt(savedAt || Date.now());
+      setDeviceAt(savedHoursRef.current.savedAt || Date.now());
       return true;
     };
     if (offlineRef.current) showSaved();
+    else if (!layers.leeEddies && savedHoursRef.current.map && !savedHoursRef.current.savedAt) {
+      const hit = savedSlot();
+      if (hit) setConditions(hit);
+    }
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 12000);
     api("/map/conditions", { method: "POST", signal: ctl.signal,
-                              body: JSON.stringify({ time_index: curHour.index, lee_zone: layers.leeEddies }) })
+                              body: JSON.stringify({ time_index: curHour.index, minute: curMinute, lee_zone: layers.leeEddies }) })
       .then((j) => {
         if (cancel) return;
         offlineRef.current = false;
@@ -354,11 +369,11 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       })
       .finally(() => clearTimeout(timer));
     return () => { cancel = true; ctl.abort(); clearTimeout(timer); };
-  }, [curHour?.index, layers.leeEddies]);
+  }, [curHour?.index, curMinute, layers.leeEddies]);
 
-  // The saved forecast arrived after the hour's request had already failed: show that hour from it now.
+  // The saved forecast arrived after the slot's request had already failed: show that slot from it now.
   useEffect(() => {
-    const hit = curHour && savedHours?.get(curHour.index);
+    const hit = curHour && (savedHours?.get(slotKey(curHour.index, curMinute)) || savedHours?.get(slotKey(curHour.index)));
     if (!offlineRef.current || !hit) return;
     setConditions(hit);
     setDeviceAt(savedHoursRef.current.savedAt || Date.now());
