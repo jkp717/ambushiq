@@ -234,6 +234,17 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   // the phone — even while its chip is off, so it still draws with no signal.
   const [drainage, setDrainage] = useState(null);
 
+  // The page is sized to fill the screen exactly, so any document scroll — carried over from a
+  // scrolled list page, or left behind when the keyboard closes — hides the top of the map under
+  // the sticky top bar. Undo it on open and whenever the visible viewport resizes.
+  useEffect(() => {
+    const reset = () => { if (window.scrollY) window.scrollTo(0, 0); };
+    reset();
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", reset);
+    return () => vv?.removeEventListener("resize", reset);
+  }, []);
+
   useEffect(() => {
     apiSaved("/settings", { global: true }).then((s) => {
       setScoutSettings({

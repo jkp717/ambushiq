@@ -91,7 +91,10 @@ input[type="checkbox"], input[type="radio"] {
 /* ══════════════════════════════════════
    APP SHELL
    ══════════════════════════════════════ */
-.app-shell { display: flex; flex-direction: column; min-height: 100vh; }
+/* #root already pads the top safe area, so the shell takes the rest — together exactly one screen */
+.app-shell { display: flex; flex-direction: column; min-height: 100vh; min-height: calc(100dvh - env(safe-area-inset-top)); }
+/* the map page fills the screen exactly; the document must never scroll under the sticky top bar */
+html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-behavior: none; }
 
 .top-bar {
   height: var(--top-bar-h);
@@ -528,8 +531,11 @@ input[type="checkbox"], input[type="radio"] {
 .layer-overlay {
   position: absolute; bottom: calc(20px + var(--sheet-lift, 0px)); left: 10px; z-index: 500;
   display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  /* never grow past the top of the map: 90px clears Leaflet's top-left zoom control */
+  max-height: calc(100% - 20px - var(--sheet-lift, 0px) - 90px);
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
 }
+.layer-overlay > .layer-toggle-btn { flex-shrink: 0; }
 .layer-toggle-btn {
   display: flex; align-items: center; justify-content: center;
   width: 34px; height: 34px;
@@ -582,7 +588,11 @@ input[type="checkbox"], input[type="radio"] {
   display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
   background: rgba(0,0,0,.40); backdrop-filter: blur(4px);
   padding: 8px 6px; border-radius: 10px;
+  /* on short screens the panel shrinks and scrolls so the buttons above and below stay reachable */
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
 }
+/* chips and legends keep their size inside the scrolling panel */
+.layer-chips-panel > * { flex-shrink: 0; }
 .layer-chips-panel .chip { background: var(--bg); font-size: 11.5px; }
 /* expand/collapse icon beside a chip that has a legend (public land, trails, roads, rec sites) */
 .chip-expand-btn {
