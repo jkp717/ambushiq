@@ -279,7 +279,7 @@ function standIcon(vectors, rank, selected = false, stand = null) {
   const pin = `<path d="M ${c} ${c} L ${c - tx} ${ty} A ${PIN_R} ${PIN_R} 0 1 1 ${c + tx} ${ty} Z"
       fill="${fill}" stroke="rgba(0,0,0,.55)" stroke-width="1.2" stroke-linejoin="round"
       style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))"/>
-    <g transform="translate(${c - 9} ${hy - 9}) scale(0.75)">${standGlyph(stand?.stand_type, fg, fill)}</g>`;
+    <g transform="translate(${c - 9} ${hy - 9}) scale(0.75)">${standGlyph(stand?.stand_type, fg)}</g>`;
   // best-ranked stand: a dark-and-white ring round the pin head; selected: the amber halo
   const ring = (selected ? `<circle cx="${c}" cy="${hy}" r="${PIN_R + 6}" fill="rgba(245,163,0,.25)" stroke="${COLORS.selected}" stroke-width="3.5"/>` : "")
     + (rank === 0 ? `<circle cx="${c}" cy="${hy}" r="${PIN_R + 3.5}" fill="none" stroke="rgba(0,0,0,.6)" stroke-width="4.5"/>
@@ -684,7 +684,9 @@ const HuntMap = forwardRef(function HuntMap({
     if (!ready) return;
     const g = layerGroups.current.zones; g.clearLayers();
     if (!layers.zones) return;
-    zones.forEach((z) => {
+    // Largest first: paths stack in the order they're added, so a smaller zone inside a bigger one is
+    // drawn on top and stays tappable. (Don't bringToFront the selected zone — it would cover them again.)
+    [...zones].sort((a, b) => (b.radius_m || 0) - (a.radius_m || 0)).forEach((z) => {
       const active = !!z.is_active;
       const sel = isSelected("zone", z.id);
       const baseColor = sel ? COLORS.selected : (COLORS[z.kind] || "#888");

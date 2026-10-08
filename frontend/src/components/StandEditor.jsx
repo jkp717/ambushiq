@@ -135,7 +135,7 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
               style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
               onClick={() => setS({ ...s, stand_type: key })}>
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"
-                dangerouslySetInnerHTML={{ __html: standGlyph(key, "currentColor", "var(--bg)") }} />
+                dangerouslySetInnerHTML={{ __html: standGlyph(key, "currentColor") }} />
               {label}
             </button>
           ))}
