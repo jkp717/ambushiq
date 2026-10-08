@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Mountain, Save, X, MapPin } from "lucide-react";
 import { tokenStore, regionStore, api } from "../services/api.js";
 import Field from "./ui/Field.jsx";
@@ -13,7 +13,27 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
   const [statusText, setStatusText] = useState("");
   const [err, setErr] = useState(null);
   const [savedId, setSavedId] = useState(stand.id);
+  const [outside, setOutside] = useState(false);   // the property terrain grid can't supply this spot
   const valid = s.name && s.lat !== "" && s.lon !== "" && !isNaN(+s.lat) && !isNaN(+s.lon);
+  const hasPoint = s.lat !== "" && s.lon !== "" && s.lat != null && s.lon != null && !isNaN(+s.lat) && !isNaN(+s.lon);
+  const fromProperty = s.terrain?.basis === "property";
+
+  // Terrain comes from the region's property-wide grid: show it as soon as a point is chosen, before
+  // saving. Outside the grid the server analyzes the stand's own terrain automatically once it's saved.
+  useEffect(() => {
+    if (s.terrain || !hasPoint) return undefined;
+    let cancel = false;
+    const t = setTimeout(() => {
+      api(`/stands/terrain-preview?lat=${+s.lat}&lon=${+s.lon}`).then((tr) => {
+        if (cancel) return;
+        if (tr.outside) { setOutside(true); return; }
+        setOutside(false);
+        setS((prev) => ({ ...prev, terrain: tr,
+                          downhill_deg: prev.downhill_deg ?? (tr.flat ? null : tr.downhill_deg) }));
+      }).catch(() => {});
+    }, 400);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [s.lat, s.lon, !!s.terrain]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function analyze() {
     if (!valid) return; 
@@ -104,13 +124,15 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
       </div>
       <Field label="Stand name"><input value={s.name} onChange={(e) => setS({ ...s, name: e.target.value })} placeholder="North Ridge" /></Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-        <Field label="Latitude"><input value={s.lat} onChange={(e) => setS({ ...s, lat: e.target.value, terrain: null })} placeholder="34.7465" inputMode="decimal" /></Field>
-        <Field label="Longitude"><input value={s.lon} onChange={(e) => setS({ ...s, lon: e.target.value, terrain: null })} placeholder="-92.2896" inputMode="decimal" /></Field>
+        <Field label="Latitude"><input value={s.lat} onChange={(e) => { setOutside(false); setS({ ...s, lat: e.target.value, terrain: null }); }} placeholder="34.7465" inputMode="decimal" /></Field>
+        <Field label="Longitude"><input value={s.lon} onChange={(e) => { setOutside(false); setS({ ...s, lon: e.target.value, terrain: null }); }} placeholder="-92.2896" inputMode="decimal" /></Field>
       </div>
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <span style={{ fontSize: 13, color: "var(--sub)" }}>Terrain & drainage</span>
-          <button className="btn" onClick={analyze} disabled={!valid || loading}><Mountain size={14} /> {loading ? "Analyzing…" : s.terrain ? "Re-analyze" : "Analyze terrain"}</button>
+          {!fromProperty && (outside || s.terrain) && (
+            <button className="btn" onClick={analyze} disabled={!valid || loading}><Mountain size={14} /> {loading ? "Analyzing…" : s.terrain ? "Re-analyze" : "Analyze terrain"}</button>
+          )}
         </div>
         {/* Progress Bar UI */}
         {loading && (
@@ -126,9 +148,16 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         )}
         {err && <div style={{ fontSize: 12, color: "var(--amber)", marginBottom: 8 }}>{err}</div>}
         {s.terrain && !loading && <TerrainPanel t={s.terrain} />}
+        {!loading && (fromProperty || outside || s.terrain) && (
+          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 6 }}>
+            {fromProperty ? "From the property terrain grid."
+              : s.terrain ? "Outside the property terrain grid — from this stand's own terrain analysis."
+              : "Outside the property terrain grid — this stand's own terrain is analyzed automatically when saved."}
+          </div>
+        )}
         <div style={{ marginTop: 10 }}>
           <DirPicker label="Downhill faces" value={s.downhill_deg} onChange={(d) => setS({ ...s, downhill_deg: d })} />
-          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4 }}>{s.terrain ? "Set from elevation grid — adjust if needed." : "Set by hand, or analyze terrain above."}</div>
+          <div style={{ fontSize: 11.5, color: "var(--sub)", marginTop: 4 }}>{s.terrain ? "Set from elevation grid — adjust if needed." : "Set by hand, or let the terrain analysis fill it in."}</div>
         </div>
       </div>
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--bord)" }}>

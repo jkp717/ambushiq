@@ -35,7 +35,7 @@ function SettingsPage({ reloadStands }) {
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80, scent_gate_floor: 0.4, rut_weight_strength: 1.0 }); }
   function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
-  function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3 }); }
+  function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3, drainage_margin_m: 457.2 }); }
   function resetScouting() {
     setS({ ...s,
       scout_radius_default_m: 800.0, scout_radius_min_m: 60.0, scout_radius_max_m: 2400.0,
@@ -216,6 +216,9 @@ function SettingsPage({ reloadStands }) {
           display={`${Math.round((s.thermal_midday_discount ?? 0.3) * 100)}%`}
           onChange={(v) => setS({ ...s, thermal_midday_discount: v })}
           info="Extra reduction applied to midday (rising) thermals even in dead calm — solar heating churns the air enough to scramble a clean directional flow." />
+        <SliderRow label="Drainage map margin" min={100} max={1600} step={50}
+          {...ydSlider("drainage_margin_m", 457.2)} display={fmtDist(s.drainage_margin_m ?? 457.2)}
+          info="How far past your outermost stands the map's Drainage layer is drawn. Drainage is still calculated over the whole property terrain grid, so cold air flowing in from beyond this edge is counted." />
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>

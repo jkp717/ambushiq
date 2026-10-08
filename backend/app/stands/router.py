@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.dependencies import get_active_region_id, require_token
-from app.regions.terrain import ensure_property_terrain
-from app.stands.service import analyze_and_store
+from app.regions.drainage import stand_terrain, with_property_terrain
+from app.regions.terrain import ensure_property_terrain, load_grid
+from app.stands.service import analyze_and_store, auto_analyze_if_outside
 from app.stands.models import Stand
 from app.stands.schemas import StandIn
 
@@ -22,8 +23,17 @@ router = APIRouter(prefix="/api/stands", tags=["stands"])
 @router.get("")
 def list_stands(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     with Session(engine) as s:
-        return [r.to_dict() for r in s.scalars(
+        stands = [r.to_dict() for r in s.scalars(
             select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).all()]
+    return with_property_terrain(region_id, stands)
+
+
+@router.get("/terrain-preview")
+def terrain_preview(lat: float, lon: float, region_id: int = Depends(get_active_region_id),
+                    _=Depends(require_token)):
+    """Terrain at a point from the property grid, for the stand editor before a stand is saved;
+    {"outside": true} when the grid can't supply it (the stand gets its own analysis on save)."""
+    return stand_terrain(load_grid(region_id), lat, lon) or {"outside": True}
 
 
 @router.post("")
@@ -35,7 +45,8 @@ async def create_stand(body: StandIn, region_id: int = Depends(get_active_region
         s.refresh(st)
         out = st.to_dict()
     ensure_property_terrain(region_id)   # grows the property grid if the new stand is outside it
-    return out
+    auto_analyze_if_outside(out["id"], region_id)
+    return with_property_terrain(region_id, [out])[0]
 
 
 @router.put("/{stand_id}")
@@ -55,7 +66,8 @@ async def update_stand(stand_id: int, body: StandIn, region_id: int = Depends(ge
         out = st.to_dict()
     if moved:
         ensure_property_terrain(region_id)
-    return out
+        auto_analyze_if_outside(stand_id, region_id)
+    return with_property_terrain(region_id, [out])[0]
 
 
 @router.delete("/{stand_id}")

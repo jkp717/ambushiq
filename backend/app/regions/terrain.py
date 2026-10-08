@@ -75,7 +75,7 @@ def load_grid(region_id: int) -> Grid | None:
         row = s.get(RegionTerrain, region_id)
         grid = Grid(dem=np.asarray(json.loads(row.dem_json), dtype=np.float64), cell_m=row.cell_m,
                     north=row.north, south=row.south, west=row.west, east=row.east,
-                    key=(region_id, row.fetched_at))
+                    key=(region_id, row.fetched_at), source=row.source or "")
     _grid_cache[region_id] = grid
     return grid
 
@@ -151,4 +151,9 @@ async def fetch_property_terrain(progress, region_id: int) -> str:
            f"covers {len(pts) - len(outside)} of {len(pts)} stands")
     if outside:
         msg += f" ({', '.join(outside[:3])}{'…' if len(outside) > 3 else ''} too far out)"
+    # stands this grid can't supply terrain for (outside it, or an Open-Meteo grid) get their own analysis
+    from app.stands.service import auto_analyze_uncovered   # stands.service -> regions.drainage -> here
+    started = auto_analyze_uncovered(region_id)
+    if started:
+        msg += f" · analyzing {started} stand(s) on their own"
     return msg

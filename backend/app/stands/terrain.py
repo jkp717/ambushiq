@@ -186,6 +186,14 @@ def compute_slope_aspect(dem_np, cell_m: float = 1.0):
     return rda, slope_rda, aspect_rda
 
 
+# Drainage area (m²) at which a stand counts as sitting in a full-strength channel: 6% of the
+# original 41×41, 20 m stand box. Expressed as an area so any grid (the stand's own or the
+# property-wide one) gives a channel strength with the same meaning.
+CHANNEL_FULL_AREA_M2 = 41 * 41 * 0.06 * 20.0 * 20.0
+WINDOW_HALF_M = 70.0     # direction averages cover ~140 m around the stand on any grid
+RELIEF_HALF_M = DEFAULT_BOX_M / 2
+
+
 def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_M) -> dict:
     """Analyze terrian using the D-Infinity spatial analysis algorithm"""
     n = len(dem)
@@ -197,17 +205,36 @@ def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_
     # Calculate D-Infinity Flow Accumulation (sinks already filled by compute_slope_aspect)
     accum_rda = rd.flow_accumulation(rda, method='Dinf')
 
-    # slope_riserun is already true rise/run, so percent slope is just ×100.
-    slope_pct = max(0, round(float(slope_rda[ctr, ctr]) * 100))
+    return {
+        "source": source,
+        "dem": dem,
+        "acc": accum_rda.tolist(),
+        "cell_m": cell_m,
+        **stand_metrics(dem_np, slope_rda, aspect_rda, accum_rda, ctr, ctr, cell_m),
+        "grid_size": n,
+        "box_m": box_m,
+    }
 
-    # downhill_deg and drainage_deg are weighted aspect averages over the 7x7 window
-    # around the stand rather than raw single-cell reads. A single pixel is noisy against
-    # real DEM error and ordinary stand-pin drift — a few meters shouldn't be able to flip
+
+def stand_metrics(dem_raw, slope, aspect, acc, r: int, c: int, cell_m: float) -> dict:
+    """Downhill/drainage direction, slope, channel strength, elevation and relief at grid cell
+    (r, c), from a raw DEM plus its (sink-filled) slope, aspect and D-Infinity accumulation grids.
+    Shared by a stand's own 800 m analysis and the property-wide grid (regions/drainage.py)."""
+    dem_raw = np.asarray(dem_raw, dtype=np.float64)
+    n_r, n_c = dem_raw.shape
+
+    # slope_riserun is already true rise/run, so percent slope is just ×100.
+    slope_pct = max(0, round(float(slope[r, c]) * 100))
+
+    # downhill_deg and drainage_deg are weighted aspect averages over a ~140 m window
+    # around the stand (7x7 at 20 m) rather than raw single-cell reads. A single pixel is noisy
+    # against real DEM error and ordinary stand-pin drift — a few meters shouldn't be able to flip
     # which side of a micro-feature the thermal direction is read from.
-    win = slice(max(0, ctr - 3), min(n, ctr + 4))
-    slope_w = np.asarray(slope_rda, dtype=np.float64)[win, win]
-    asp_w = np.asarray(aspect_rda, dtype=np.float64)[win, win]
-    acc_w = np.asarray(accum_rda, dtype=np.float64)[win, win]
+    h = max(1, int(WINDOW_HALF_M / cell_m))   # 3 cells at 20 m (7x7), 2 at 30 m (5x5)
+    wr, wc = slice(max(0, r - h), min(n_r, r + h + 1)), slice(max(0, c - h), min(n_c, c + h + 1))
+    slope_w = np.asarray(slope, dtype=np.float64)[wr, wc]
+    asp_w = np.asarray(aspect, dtype=np.float64)[wr, wc]
+    acc_w = np.asarray(acc, dtype=np.float64)[wr, wc]
     # richdem reports aspect 270 for a zero gradient, so flat cells are masked out of
     # the direction averages; NoData (-9999 slope) falls out via the same test.
     valid = (asp_w >= 0) & (slope_w > FLAT_SLOPE_EPS)
@@ -231,24 +258,19 @@ def analyze_terrain(dem, cell_m: float, source: str, box_m: float = DEFAULT_BOX_
 
     aspect_ok = asp_w >= 0
     max_near = float(acc_w[aspect_ok].max()) if aspect_ok.any() else 0.0
-    channel_strength = round(min(1.0, max_near / (n * n * 0.06)) * 100) / 100
+    channel_strength = round(min(1.0, max_near * cell_m * cell_m / CHANNEL_FULL_AREA_M2) * 100) / 100
 
-    # relief is measured on the raw DEM — the sink-filled copy would understate it
-    min_e = float(np.min(dem_np))
-    max_e = float(np.max(dem_np))
+    # relief is measured on the raw DEM over the ~800 m around the stand — the sink-filled
+    # copy would understate it
+    rh = round(RELIEF_HALF_M / cell_m)
+    near = dem_raw[max(0, r - rh):r + rh + 1, max(0, c - rh):c + rh + 1]
 
     return {
-        "source": source,
-        "dem": dem,
-        "acc": accum_rda.tolist(),
-        "cell_m": cell_m,
         "downhill_deg": round(downhill_deg),
         "slope_pct": slope_pct,
         "drainage_deg": drainage_deg,
         "channel_strength": channel_strength,
-        "elevation": round(dem[ctr][ctr]),
-        "relief": round(max_e - min_e),
+        "elevation": round(float(dem_raw[r, c])),
+        "relief": round(float(near.max() - near.min())),
         "flat": flat,
-        "grid_size": n,
-        "box_m": box_m,
     }

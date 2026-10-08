@@ -205,13 +205,6 @@ function eddyNoteHtml(eddy, leeLayerOn) {
   </div>`;
 }
 
-// Geographic bounds of a stand-centred square terrain box (box_m metres on a side).
-function standBoxBounds(s, boxM) {
-  const halfLat = (boxM / 2) / 111320.0;
-  const halfLon = (boxM / 2) / (111320.0 * Math.cos(s.lat * Math.PI / 180));
-  return [[s.lat - halfLat, s.lon - halfLon], [s.lat + halfLat, s.lon + halfLon]];
-}
-
 // Build an SVG divIcon for a stand showing wind (solid) + thermal (dashed) arrows.
 function standIcon(vectors, rank, selected = false) {
   const size = 78, c = size / 2;
@@ -355,14 +348,13 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
   `;
 
   if (kind === "stand") {
-    const s = sl || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+    const s = sl || { wind: true, thermal: true, scent: true, deer: true };
     html += `
       <div class="feat-popup-toggles" style="display:flex; flex-direction:column; gap:6px; margin: 10px 0; border-top: 1px solid var(--bord); border-bottom: 1px solid var(--bord); padding: 8px 0;">
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" ${s.wind ? 'checked' : ''}> Wind</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="thermal" ${s.thermal ? 'checked' : ''}> Thermal</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" ${s.scent ? 'checked' : ''}> Scent</label>
         <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" ${s.deer ? 'checked' : ''}> Deer</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="flow" ${s.flow ? 'checked' : ''}> Drainage Flow</label>
       </div>
     `;
   }
@@ -439,7 +431,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
 }
 
 const HuntMap = forwardRef(function HuntMap({
-  stands, zones, corridors, sign, suggestions, conditions,
+  stands, zones, corridors, sign, suggestions, conditions, drainage = null,
   drawMode, onMapClick, draftPoints, onFinishCorridor,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion,
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
@@ -1175,7 +1167,7 @@ const HuntMap = forwardRef(function HuntMap({
     }
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true };
       if (!sl.scent) return; // Individual stand scent check
 
       const v = byId[s.id];
@@ -1249,7 +1241,7 @@ const HuntMap = forwardRef(function HuntMap({
     });
 
     stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true };
       const v = byId[s.id] || {};
       const vectors = {
         wind_to_deg: sl.wind ? v.wind_to_deg : null,
@@ -1316,58 +1308,30 @@ const HuntMap = forwardRef(function HuntMap({
     }
   }, [draftPoints, ready]);
 
-  // render terrain flow accumulation
+  // render the property-wide cold-air drainage layer (flow accumulation over the region's terrain grid,
+  // drawn over every stand plus the "drainage map margin" setting; levels 1-9, log-scaled)
   useEffect(() => {
     if (!ready) return;
-    const g = layerGroups.current.flow; 
+    const g = layerGroups.current.flow;
     g.clearLayers();
-
-    stands.forEach((s) => {
-      const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
-      if (!sl.flow) return; // Individual stand flow check
-      if (!s.terrain || !s.terrain.acc) return;
-      const t = s.terrain;
-      const N = t.grid_size;
-      const boxM = t.box_m;
-
-      // Find max accumulation to establish a logarithmic scale
-      let maxAcc = 0;
-      for (let r = 0; r < N; r++) {
-        for (let c = 0; c < N; c++) {
-          if (t.acc[r][c] > maxAcc) maxAcc = t.acc[r][c];
-        }
+    if (!layers.drainage || !drainage?.rows?.length) return;
+    const rows = drainage.rows, H = rows.length, W = rows[0].length;
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        const lvl = rows[r].charCodeAt(c) - 48;
+        if (lvl <= 0) continue;
+        ctx.fillStyle = `rgba(24, 95, 165, ${lvl / 9})`;   // var(--blue)
+        ctx.fillRect(c, r, 1, 1);
       }
-      if (maxAcc <= 0) return;
-      const logMax = Math.log1p(maxAcc);
-
-      // Paint the matrix to an in-memory canvas
-      const canvas = document.createElement("canvas");
-      canvas.width = N;
-      canvas.height = N;
-      const ctx = canvas.getContext("2d");
-
-      for (let r = 0; r < N; r++) {
-        for (let c = 0; c < N; c++) {
-          const val = t.acc[r][c];
-          const norm = Math.log1p(val) / logMax;
-
-          // Only render cells with meaningful accumulation to keep the map clean
-          if (norm > 0.15) {
-            // using var(--blue): rgb(24, 95, 165)
-            ctx.fillStyle = `rgba(24, 95, 165, ${norm})`;
-            ctx.fillRect(c, r, 1, 1);
-          }
-        }
-      }
-
-      // Project the canvas onto the Leaflet map, over the stand's 800 m analysis box
-      L.imageOverlay(canvas.toDataURL(), standBoxBounds(s, boxM), {
-        opacity: 0.85,
-        interactive: false,
-        className: "pixelated-overlay"
-      }).addTo(g);
-    });
-  }, [stands, ready, standLayers]);
+    }
+    L.imageOverlay(canvas.toDataURL(), drainage.bounds, {
+      opacity: 0.85, interactive: false, className: "pixelated-overlay",
+    }).addTo(g);
+  }, [drainage, ready, layers.drainage]);
 
   // render the property-wide lee-eddy layer for the selected hour's wind (one grid per region)
   useEffect(() => {

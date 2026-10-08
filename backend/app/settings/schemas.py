@@ -1,7 +1,7 @@
 """Pydantic validation schemas for app settings."""
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SettingsIn(BaseModel):
@@ -37,6 +37,7 @@ class SettingsIn(BaseModel):
     weather_secondary_provider: str | None = None
     weather_provider_api_keys: dict[str, str] | None = None
     maptiler_api_key: str | None = None
+    drainage_margin_m: float | None = Field(default=None, ge=0, le=2000)   # m; the drainage layer is clipped to the terrain grid anyway
     scout_radius_default_m: float | None = None
     scout_radius_min_m: float | None = None
     scout_radius_max_m: float | None = None

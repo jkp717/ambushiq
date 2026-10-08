@@ -56,6 +56,7 @@ class Grid:
     west: float
     east: float
     key: tuple = field(default=())
+    source: str = ""   # elevation source ("USGS 3DEP" / "Open-Meteo"), when known
 
     def rowcol(self, lat: float, lon: float) -> tuple[float, float]:
         n_r, n_c = self.dem.shape

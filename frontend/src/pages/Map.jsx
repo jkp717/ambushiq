@@ -165,7 +165,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: false });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: false, drainage: false });
   const [layersOpen, setLayersOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites } -> bool, default collapsed
   const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
@@ -220,6 +220,9 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const [scoutError, setScoutError] = useState(null);
 
   const [maptilerKey, setMaptilerKey] = useState("");
+  // Property-wide cold-air drainage layer (doesn't change with the forecast): fetched — and saved on
+  // the phone — even while its chip is off, so it still draws with no signal.
+  const [drainage, setDrainage] = useState(null);
 
   useEffect(() => {
     apiSaved("/settings", { global: true }).then((s) => {
@@ -235,7 +238,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   // function to toggle individual stand layers
   const toggleStandLayer = useCallback((standId, layerKey) => {
     setStandLayers((prev) => {
-      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true, flow: false };
+      const current = prev[standId] || { wind: true, thermal: true, scent: true, deer: true };
       return { ...prev, [standId]: { ...current, [layerKey]: !current[layerKey] } };
     });
   }, []);
@@ -306,6 +309,14 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       .catch(() => {});
     return () => { cancel = true; };
   }, [stands.length, activeRegion?.id, foregroundTick]);
+
+  const standsKey = stands.map((s) => `${s.id}:${s.lat},${s.lon}`).join("|");
+  useEffect(() => {
+    let cancel = false;
+    apiSaved("/map/drainage").then((j) => { if (!cancel) setDrainage(j?.rows ? j : null); }).catch(() => {});
+    return () => { cancel = true; };
+  }, [standsKey, activeRegion?.id, foregroundTick]);
+  useEffect(() => { setDrainage(null); }, [activeRegion?.id]);
 
   const curDay     = days[dayIdx];
   const maxHour    = (curDay?.hours.length || 1) - 1;
@@ -800,7 +811,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       <div className="map-body">
         <div className="map-fill">
           <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign}
-            suggestions={suggestions} conditions={conditions}
+            suggestions={suggestions} conditions={conditions} drainage={drainage}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
@@ -827,6 +838,7 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
               <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
               <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
               <LayerChip on={layers.leeEddies} onClick={() => toggle("leeEddies")} color="#0E7C8A" label="Lee eddies" />
+              <LayerChip on={layers.drainage} onClick={() => toggle("drainage")} color="#185FA5" label="Drainage" />
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} color="#D81B60" label="Public land" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("publicLand")}

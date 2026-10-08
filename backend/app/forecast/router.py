@@ -28,6 +28,7 @@ from app.forecast.service import (
     get_forecast,
 )
 from app.forecast import eddy as eddy_mod
+from app.regions import drainage as drainage_mod
 from app.regions.models import Region
 from app.regions.terrain import ensure_property_terrain
 from app.regions.service import get_region_dict
@@ -109,9 +110,11 @@ def _forecast_location(region_id: int) -> tuple[float, float]:
 
 
 def _active_stands(region_id: int) -> list[dict]:
+    """Active stands, with terrain read from the property grid wherever it covers them."""
     with Session(engine) as s:
-        return [r.to_dict() for r in s.scalars(
+        stands = [r.to_dict() for r in s.scalars(
             select(Stand).where(Stand.is_active == 1, Stand.region_id == region_id)).all()]
+    return drainage_mod.with_property_terrain(region_id, stands)
 
 
 async def _map_context(region_id: int, region: dict):
@@ -332,6 +335,17 @@ async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=D
     hours = await asyncio.to_thread(build)   # a thousand-plus slots x every stand: keep it off the event loop
     return {"stands": stands, "hours": hours, "utc_offset_seconds": int(fc.get("utc_offset_seconds", 0)),
             "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}
+
+
+@router.get("/api/map/drainage")
+async def map_drainage(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    """The property-wide cold-air drainage layer: flow accumulation over the region's terrain grid,
+    drawn over every stand plus the "drainage map margin" setting. It doesn't change with the
+    forecast, so the app keeps a copy for offline use. `rows` is None until the grid exists."""
+    ensure_property_terrain(region_id)   # must run on the event loop
+    margin = float(get_settings().get("drainage_margin_m", 457.2) or 0.0)
+    layer = await asyncio.to_thread(drainage_mod.drainage_layer, region_id, margin)
+    return layer or {"rows": None}
 
 
 @router.post("/api/day/ranked")

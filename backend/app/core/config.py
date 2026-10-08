@@ -72,6 +72,9 @@ DEFAULT_SETTINGS = {
     # encrypted — it is sent to the browser in tile URLs anyway; restrict it to this
     # site's origin in the MapTiler dashboard.
     "maptiler_api_key": "",
+    # how far past the outermost stands the map's property-wide Drainage layer is drawn
+    # (the flow itself is calculated over the whole property terrain grid)
+    "drainage_margin_m": 457.2,            # 500 yd
     # v2.28: Scouting Suggestions — terrain/land-cover analysis of a user-drawn
     # circle that flags candidate locations to go scout in person
     "scout_radius_default_m": 800.0,
