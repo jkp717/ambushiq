@@ -48,6 +48,9 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   }, [regionOpen]);
 
   const [stands, setStands] = useState([]);
+  // The active region's stand list has loaded (or failed to): the map waits for it before fetching the
+  // forecast, so it doesn't fetch once with no stands and again a moment later with them.
+  const [standsReady, setStandsReady] = useState(false);
   const [zones, setZones] = useState([]);
   const [corridors, setCorridors] = useState([]);
   const [sign, setSign] = useState([]);
@@ -59,7 +62,9 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const [relocateRequest, setRelocateRequest] = useState(null);
 
   // apiSaved: with no signal, the map still gets the stands and features saved on the phone last time.
-  const loadStands    = useCallback(async () => { try { setStands(await apiSaved("/stands")); } catch {} }, []);
+  const loadStands    = useCallback(async () => {
+    try { setStands(await apiSaved("/stands")); } catch {} finally { setStandsReady(true); }
+  }, []);
   const loadZones     = useCallback(async () => { try { setZones(await apiSaved("/zones")); } catch {} }, []);
   const loadCorridors = useCallback(async () => { try { setCorridors(await apiSaved("/corridors")); } catch {} }, []);
   const loadSign      = useCallback(async () => { try { setSign(await apiSaved("/sign")); } catch {} }, []);
@@ -83,6 +88,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   // The previous region's features are cleared first so they can't be drawn (or framed) under the new one.
   useEffect(() => {
     setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]);
+    setStandsReady(false);
     loadAll();
   }, [loadAll, activeRegion?.id]);
 
@@ -242,7 +248,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             onGoDraw={goDraw} openStandEditor={openStandEditor} />
         )}
         {view === "map" && (
-          <MapPage stands={stands} zones={zones} corridors={corridors} sign={sign} suggestions={suggestions}
+          <MapPage stands={stands} standsReady={standsReady} zones={zones} corridors={corridors} sign={sign} suggestions={suggestions}
             activeRegion={activeRegion}
             reloadStands={loadStands} reloadZones={loadZones} reloadCorridors={loadCorridors} reloadSign={loadSign}
             reloadSuggestions={loadSuggestions} onDismissSuggestion={dismissSuggestion}

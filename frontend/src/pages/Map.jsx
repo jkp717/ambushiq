@@ -126,8 +126,11 @@ const RECSITES_LEGEND = [
 // Add-menu modes that place a single point (vs. drawing a corridor or a scouting area).
 const POINT_ADDS = ["stand", "food", "bedding", "scrape", "rub"];
 
-// The map's 15-minute slot for forecast hour `index`, `minute` past it.
-const slotKey = (index, minute = 0) => index * 4 + minute / 15;
+// A 15-minute slot's key in the saved forecast: the hour's local time ("2025-11-10T06:00") plus the
+// minutes past it. Keyed by time rather than forecast index, so a copy saved on an earlier day (whose
+// index 0 was an earlier hour) can never show the wrong hour's arrows.
+const slotKey = (iso, minute = 0) => `${iso}|${minute}`;
+const hourIso = (day, hour) => `${day.day}T${String(hour.hour).padStart(2, "0")}:00`;
 
 // /map/conditions/all sends each stand once and refers to it by id in every hour; rebuild each hour and
 // each of its :15/:30/:45 quarters in the shape /map/conditions returns, keyed by slotKey. Stands missing
@@ -142,17 +145,19 @@ function conditionsByHour(all) {
   });
   const out = new Map();
   for (const h of all.hours || []) {
-    out.set(slotKey(h.time.index), build(h));
-    for (const q of h.quarters || []) out.set(slotKey(h.time.index, q.time.minute), build(q));
+    out.set(slotKey(h.time.iso), build(h));
+    for (const q of h.quarters || []) out.set(slotKey(h.time.iso, q.time.minute), build(q));
   }
   return out;
 }
 
-function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
+function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion, onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
                    openStandEditor, onEditFeature, onDeleteFeature }) {
   const [days, setDays] = useState([]);
+  const daysRef = useRef(days);
+  daysRef.current = days;
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
   const [sliderHovering, setSliderHovering] = useState(false);
@@ -200,6 +205,11 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   const savedHoursRegion = useRef(null);
   const [deviceAt, setDeviceAt] = useState(null);
   const offlineRef = useRef(false);   // the last conditions request failed: show the saved copy first
+  const liveShownRef = useRef(false); // the current slot's live conditions are on screen
+  // The live /hours list is in (its indexes match the server's), and the current slot's first live
+  // request has finished: the large whole-forecast refresh waits for that.
+  const [hoursSettled, setHoursSettled] = useState(false);
+  const [firstSlotDone, setFirstSlotDone] = useState(false);
   const foregroundTick = useForegroundRefresh();
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
@@ -266,56 +276,94 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
   // appears, since the forecast location moves from the region center to that stand.
   // Every open (and return to the foreground) also refreshes the on-phone copy of the whole forecast, so
   // the map keeps working when signal drops; if the server can't be reached, the saved copies are used.
+  // On open, the hours saved on the phone are shown straight away (no "no connection" banner: this is
+  // just a head start) while the live copy loads; with a saved copy on screen a slow network is given
+  // up on after 4 s instead of 12. Waits for the stand list so it isn't fetched twice on open.
+  const hasStands = stands.length > 0;
   useEffect(() => {
-    apiSaved("/hours").then((j) => {
-      const savedAt = fromDevice(j);
-      setDeviceAt(savedAt);
-      offlineRef.current = !!savedAt;
+    if (!standsReady) return undefined;
+    let cancel = false;
+    let positioned = false;
+    const apply = (j) => {
       setDays(j.days || []);
-      setStaleAt(!savedAt && j.stale ? j.fetched_at ?? null : null);
-      setErr((cur) => (cur === "Couldn't load forecast." ? null : cur));
       // Apply the property's UTC offset so both the date comparison and the
       // current-hour lookup use property local time rather than the browser's
       // clock timezone (which may differ) or a bare UTC date.
       const ofs = j.utc_offset_seconds ?? 0;
       setUtcOffset(ofs);
+      if (positioned) return;   // the live copy doesn't move the slider the saved copy just placed
+      positioned = true;
       const localNow = new Date(Date.now() + ofs * 1000);
       const todayStr  = localNow.toISOString().slice(0, 10);
       const localHour = localNow.getUTCHours();
-      for (let d = 0; d < j.days.length; d++) {
+      for (let d = 0; d < (j.days || []).length; d++) {
         const hi = j.days[d].hours.findIndex((h) => h.hour === localHour);
         if (j.days[d].day === todayStr && hi >= 0) { setDayIdx(d); setHourPos(hi * 4); break; }
       }
-    }).catch(() => setErr("Couldn't load forecast."));
-  }, [stands.length, activeRegion?.id, foregroundTick]);
+    };
+    (async () => {
+      const saved = daysRef.current.length ? null : await loadSaved("/hours");
+      if (cancel) return;
+      if (saved?.data?.days) apply(saved.data);
+      try {
+        const j = await apiSaved("/hours", { timeoutMs: saved || daysRef.current.length ? 4000 : 12000 });
+        if (cancel) return;
+        const savedAt = fromDevice(j);
+        setDeviceAt(savedAt);
+        offlineRef.current = !!savedAt;
+        setStaleAt(!savedAt && j.stale ? j.fetched_at ?? null : null);
+        setErr((cur) => (cur === "Couldn't load forecast." ? null : cur));
+        apply(j);
+      } catch {
+        if (cancel) return;
+        setErr("Couldn't load forecast.");
+        setFirstSlotDone(true);   // nothing to wait for: let the whole-forecast refresh try anyway
+      }
+      if (!cancel) setHoursSettled(true);
+    })();
+    return () => { cancel = true; };
+  }, [standsReady, hasStands, activeRegion?.id, foregroundTick]);
 
-  // The whole forecast's conditions, for offline use: the saved copy straight away, then a fresh one.
+  // The whole forecast's conditions, for offline use. The copy saved on the phone is read straight away;
+  // the fresh one (a large download) waits until the current slot's arrows have loaded, so it never
+  // holds them up on a slow connection.
+  const applySavedHours = (j, savedAt) => {
+    if (!j?.hours) return;
+    const map = conditionsByHour(j);
+    savedHoursRef.current = { map, savedAt };
+    setSavedHours(map);
+  };
   useEffect(() => {
     let cancel = false;
-    const use = (j, savedAt) => {
-      if (cancel || !j?.hours) return;
-      const map = conditionsByHour(j);
-      savedHoursRef.current = { map, savedAt };
-      setSavedHours(map);
-    };
     if (savedHoursRegion.current !== activeRegion?.id) {   // another region's copy must never show here
       savedHoursRegion.current = activeRegion?.id;
       savedHoursRef.current = { map: null, savedAt: null };
       setSavedHours(null);
+      setHoursSettled(false);
+      setDays([]);
+      setFirstSlotDone(false);
     }
-    loadSaved("/map/conditions/all").then((s) => { if (s && !savedHoursRef.current.map) use(s.data, s.savedAt); });
+    loadSaved("/map/conditions/all").then((s) => {
+      if (!cancel && s && !savedHoursRef.current.map) applySavedHours(s.data, s.savedAt);
+    });
+    return () => { cancel = true; };
+  }, [activeRegion?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!standsReady || !firstSlotDone) return undefined;
+    let cancel = false;
     apiSaved("/map/conditions/all", { method: "POST", timeoutMs: 45000 })
-      .then((j) => use(j, fromDevice(j)))
+      .then((j) => { if (!cancel) applySavedHours(j, fromDevice(j)); })
       .catch(() => {});
     return () => { cancel = true; };
-  }, [stands.length, activeRegion?.id, foregroundTick]);
+  }, [standsReady, firstSlotDone, stands.length, activeRegion?.id, foregroundTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const standsKey = stands.map((s) => `${s.id}:${s.lat},${s.lon}`).join("|");
   useEffect(() => {
+    if (!standsReady) return undefined;
     let cancel = false;
     apiSaved("/map/drainage").then((j) => { if (!cancel) setDrainage(j?.rows ? j : null); }).catch(() => {});
     return () => { cancel = true; };
-  }, [standsKey, activeRegion?.id, foregroundTick]);
+  }, [standsReady, standsKey, activeRegion?.id, foregroundTick]);
   useEffect(() => { setDrainage(null); }, [activeRegion?.id]);
 
   const curDay     = days[dayIdx];
@@ -341,18 +389,21 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
     return () => clearInterval(id);
   }, [playing, curDay]);
 
-  // One 15-minute slot's conditions, live from the server (the only source of the lee-eddy zone). With no
-  // connection, the on-phone copy of that slot is shown instead — straight away once a request has
-  // failed, so scrubbing the slider offline doesn't wait on a request per step — and a live answer
-  // still replaces it if signal comes back. Online, a copy fetched this session is shown right away too
-  // (unless the lee-eddy layer is on, which only the live answer has), so Play and scrubbing stay smooth.
+  // One 15-minute slot's conditions, live from the server (the only source of the lee-eddy zone). The copy
+  // of that slot saved on the phone is shown first whenever there is one (unless the lee-eddy layer is on,
+  // which only the live answer has), so arrows appear at once on open and Play/scrubbing stay smooth; the
+  // live answer replaces it. With a saved slot already on screen a slow network is given up on after 4 s.
+  // Once a request has failed the saved copy is flagged as such ("no connection" banner) and a live answer
+  // still replaces it if signal comes back.
+  const curIso = curDay && curHour ? hourIso(curDay, curHour) : null;
   useEffect(() => {
-    if (!curHour) return;
+    if (!curIso) return undefined;
     let cancel = false;
+    liveShownRef.current = false;
     const savedSlot = () => {
       const { map } = savedHoursRef.current;
       // a copy saved before 15-minute slots existed only has whole hours
-      return map?.get(slotKey(curHour.index, curMinute)) || map?.get(slotKey(curHour.index));
+      return map?.get(slotKey(curIso, curMinute)) || map?.get(slotKey(curIso));
     };
     const showSaved = () => {
       const hit = savedSlot();
@@ -361,18 +412,23 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
       setDeviceAt(savedHoursRef.current.savedAt || Date.now());
       return true;
     };
-    if (offlineRef.current) showSaved();
-    else if (!layers.leeEddies && savedHoursRef.current.map && !savedHoursRef.current.savedAt) {
+    let headStart = false;
+    if (offlineRef.current) headStart = showSaved();
+    else if (!layers.leeEddies) {
       const hit = savedSlot();
-      if (hit) setConditions(hit);
+      if (hit) { setConditions(hit); headStart = true; }
     }
+    // Until the live hours list is in, curHour.index may come from a copy saved on an earlier day,
+    // which would ask the server for the wrong hour.
+    if (!hoursSettled) return () => { cancel = true; };
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 12000);
+    const timer = setTimeout(() => ctl.abort(), headStart ? 4000 : 12000);
     api("/map/conditions", { method: "POST", signal: ctl.signal,
                               body: JSON.stringify({ time_index: curHour.index, minute: curMinute, lee_zone: layers.leeEddies }) })
       .then((j) => {
         if (cancel) return;
         offlineRef.current = false;
+        liveShownRef.current = true;
         setConditions(j);
         setDeviceAt(null);
       })
@@ -381,16 +437,25 @@ function MapPage({ stands, zones, corridors, sign, suggestions, activeRegion, re
         offlineRef.current = true;
         showSaved();
       })
-      .finally(() => clearTimeout(timer));
+      .finally(() => {
+        clearTimeout(timer);
+        if (!cancel) setFirstSlotDone(true);
+      });
     return () => { cancel = true; ctl.abort(); clearTimeout(timer); };
-  }, [curHour?.index, curMinute, layers.leeEddies]);
+  }, [curIso, curHour?.index, curMinute, layers.leeEddies, hoursSettled]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The saved forecast arrived after the slot's request had already failed: show that slot from it now.
+  // The saved forecast arrived after the slot was requested: show that slot from it now, flagged as the
+  // phone's copy when the request failed, or as a head start while the live answer is still on its way.
   useEffect(() => {
-    const hit = curHour && (savedHours?.get(slotKey(curHour.index, curMinute)) || savedHours?.get(slotKey(curHour.index)));
-    if (!offlineRef.current || !hit) return;
-    setConditions(hit);
-    setDeviceAt(savedHoursRef.current.savedAt || Date.now());
+    if (!curIso || !savedHours) return;
+    const hit = savedHours.get(slotKey(curIso, curMinute)) || savedHours.get(slotKey(curIso));
+    if (!hit) return;
+    if (offlineRef.current) {
+      setConditions(hit);
+      setDeviceAt(savedHoursRef.current.savedAt || Date.now());
+    } else if (!liveShownRef.current && !layers.leeEddies) {
+      setConditions(hit);
+    }
   }, [savedHours]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onMapClick = useCallback(async (pt) => {
