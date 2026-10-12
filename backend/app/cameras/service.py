@@ -118,7 +118,7 @@ async def _backfill_species_task(sighting_ids: list[int]) -> None:
 
 
 async def find_deer_job(progress, region_id: int) -> str:
-    """Jobs-page entry: run detection again on this region's whitetail photos that are still on disk
+    """Jobs-page entry: run detection again on this region's animal photos that are still on disk
     and have no usable deer boxes yet (none at all, or a deer whose features couldn't be read), so the
     buck trainer has deer to show straight away."""
     with Session(engine) as s:

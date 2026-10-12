@@ -313,18 +313,17 @@ def queue(region_id: int, limit: int = 16) -> list[dict]:
 
 
 def unscanned_query(region_id: int, q):
-    """Restrict a CameraSighting query to this region's whitetail photos still on file that have no
-    usable deer boxes: never scanned (taken before the buck model existed), or a deer whose features
-    couldn't be read. "Find deer in existing photos" works through these. Only photos already
-    classified as white-tailed deer are rescanned, which skips the slow detector on every raccoon and
-    turkey; a deer behind another animal in an older photo is the rare miss."""
+    """Restrict a CameraSighting query to this region's animal photos still on file that have no usable
+    deer boxes: never scanned (taken before the buck model existed), or a white-tailed deer whose
+    features couldn't be read. "Find deer in existing photos" works through these. Every animal photo
+    is included, not just ones labeled whitetail: a photo labeled for another animal can still have a
+    deer in it."""
     from app.cameras.detection import DEER_SPECIES
     unreadable = select(DeerDetection.sighting_id).where(
         DeerDetection.vec.is_(None), func.lower(DeerDetection.species) == DEER_SPECIES.lower())
     scanned = select(DeerDetection.sighting_id)
     return (q.join(Camera, Camera.id == CameraSighting.camera_id)
             .where(Camera.region_id == region_id, Camera.is_deleted == 0, CameraSighting.is_animal == 1,
-                   func.lower(CameraSighting.species) == DEER_SPECIES.lower(),
                    CameraSighting.image_path.isnot(None),
                    or_(CameraSighting.id.not_in(scanned), CameraSighting.id.in_(unreadable))))
 

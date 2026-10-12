@@ -172,11 +172,11 @@ def test_unscanned_counts_photos_without_usable_deer(env):
         broken = CameraSighting(camera_id=env["cid"], timestamp=iso(NOW), created_at=iso(NOW), is_animal=1,
                                 species="White-tailed Deer", image_path="broken.jpg")
         coon = CameraSighting(camera_id=env["cid"], timestamp=iso(NOW), created_at=iso(NOW), is_animal=1,
-                              species="Raccoon", image_path="coon.jpg")       # not a whitetail: skipped
+                              species="Raccoon", image_path="coon.jpg")       # a deer may be behind it
         s.add_all([old, broken, coon])
         s.flush()
         s.add(DeerDetection(sighting_id=broken.id, box_json="[0,0,1,1]", det_conf=0.9,
                             species="White-tailed Deer", vec=None))   # features couldn't be read
         s.commit()
-    assert bucks.status(1)["unscanned"] == 2
+    assert bucks.status(1)["unscanned"] == 3
     assert bucks.status(2)["unscanned"] == 0

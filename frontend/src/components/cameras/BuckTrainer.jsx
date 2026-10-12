@@ -120,7 +120,7 @@ function BuckTrainer({ onClose, onStatus }) {
                 </>
               ) : status?.unscanned && !scanDone ? (
                 <>
-                  {status.unscanned} deer photo{status.unscanned === 1 ? " hasn't" : "s haven't"} been checked yet.
+                  {status.unscanned} photo{status.unscanned === 1 ? " hasn't" : "s haven't"} been checked for deer yet.
                   <div className="buck-trainer-sub">Photos from before the buck model existed need a one-time scan to outline each deer.</div>
                   <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={findDeer}>Find deer in my photos</button>
                 </>
