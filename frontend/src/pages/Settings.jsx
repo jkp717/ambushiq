@@ -296,7 +296,7 @@ function SettingsPage({ reloadStands }) {
         <Binoculars size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Scouting suggestions
       </div>
       <p className="settings-desc">
-        Controls how the "Scouting Suggestions" map tool analyzes a drawn area for
+        Controls how the "Suggestions" map tool analyzes a drawn area for
         candidate hunting locations — terrain funnels, habitat edges, and how much
         weight your own zones/corridors/sign/cameras carry versus the raw terrain model.
       </p>

@@ -18,7 +18,7 @@ function AddMenu({ drawMode, setDrawMode }) {
     { m: "corridor", label: "Deer corridor",icon: Footprints, color: "#A35A1B" },
     { m: "scrape",   label: "Scrape",       icon: Target,     color: "#E87800" },
     { m: "rub",      label: "Rub",          icon: Target,     color: "#8B3A1A" },
-    { m: "scout",    label: "Scouting Suggestions", icon: Binoculars, color: "#0E8A7D" },
+    { m: "scout",    label: "Suggestions", icon: Binoculars, color: "#0E8A7D" },
   ];
   return (
     <div style={{ position: "relative" }} ref={ref}>
