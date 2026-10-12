@@ -162,3 +162,21 @@ def test_status_counts(env):
     env["add"]()
     st = bucks.status(1)
     assert (st["n_buck"], st["n_not_buck"], st["waiting"], st["enabled"]) == (3, 4, 1, False)
+
+
+def test_unscanned_counts_photos_without_usable_deer(env):
+    env["add"]()                                               # scanned, has a vector: done
+    with Session(engine) as s:
+        old = CameraSighting(camera_id=env["cid"], timestamp=iso(NOW), created_at=iso(NOW), is_animal=1,
+                             species="White-tailed Deer", image_path="old.jpg")
+        broken = CameraSighting(camera_id=env["cid"], timestamp=iso(NOW), created_at=iso(NOW), is_animal=1,
+                                species="White-tailed Deer", image_path="broken.jpg")
+        coon = CameraSighting(camera_id=env["cid"], timestamp=iso(NOW), created_at=iso(NOW), is_animal=1,
+                              species="Raccoon", image_path="coon.jpg")       # not a whitetail: skipped
+        s.add_all([old, broken, coon])
+        s.flush()
+        s.add(DeerDetection(sighting_id=broken.id, box_json="[0,0,1,1]", det_conf=0.9,
+                            species="White-tailed Deer", vec=None))   # features couldn't be read
+        s.commit()
+    assert bucks.status(1)["unscanned"] == 2
+    assert bucks.status(2)["unscanned"] == 0

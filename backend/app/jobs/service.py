@@ -60,7 +60,7 @@ def registry() -> dict[str, dict]:
         },
         "find_deer": {
             "label": "Find deer in existing photos", "icon": "camera", "region_scoped": True, "fn": find_deer_job,
-            "description": "Re-runs detection on this region's photos still on disk to outline each deer, "
+            "description": "Re-runs detection on this region's whitetail photos still on disk to outline each deer, "
                            "so the buck model has deer to learn from.",
         },
         "train_bucks": {

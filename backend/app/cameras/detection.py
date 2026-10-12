@@ -174,31 +174,50 @@ def _load_feature_fallback(device: str):
 
 
 _feature_source_logged = False
+_dfne_features_broken = False   # set once DFNE's features fail, so every later deer uses the same fallback
+
+
+def _features(net, tf, pil, device: str) -> list[float]:
+    import torch  # type: ignore
+    with torch.no_grad():
+        x = tf(pil).unsqueeze(0).to(device)
+        f = net.forward_features(x)
+        f = net.forward_head(f, pre_logits=True) if hasattr(net, "forward_head") else f.mean(dim=tuple(range(2, f.dim())))
+    return [float(v) for v in f.flatten().cpu().numpy()]
 
 
 def deer_features(classifier, crop, device: str) -> tuple[list[float] | None, str | None]:
     """A feature vector describing one deer crop, for the buck model: DFNE's own pre-classification
-    features when its timm network is reachable (no extra model), else the convnext_tiny fallback.
+    features when its timm network is reachable (no extra model), else the convnext_tiny fallback —
+    also used from then on if DFNE's features ever fail, so sources don't flip back and forth.
     Returns (vector, source name) — vectors from different sources aren't comparable — or (None, None)."""
-    global _feature_source_logged
+    global _feature_source_logged, _dfne_features_broken
     try:
-        import torch  # type: ignore
         from PIL import Image  # type: ignore
         pil = Image.fromarray(crop)
-        net = getattr(classifier, "model", None)
-        tf = getattr(classifier, "transform", None) or getattr(classifier, "transforms", None)
-        source = "dfne"
-        if net is None or tf is None or not hasattr(net, "forward_features"):
-            net, tf = _load_feature_fallback(device)
-            source = "convnext_tiny"
+    except Exception as e:
+        log.warning("detection: deer crop unreadable: %s: %s", type(e).__name__, e)
+        return None, None
+    net = getattr(classifier, "model", None)
+    tf = getattr(classifier, "transform", None) or getattr(classifier, "transforms", None)
+    if not _dfne_features_broken and net is not None and tf is not None and hasattr(net, "forward_features"):
+        try:
+            vec = _features(net, tf, pil, device)
+            if not _feature_source_logged:
+                log.info("detection: deer feature vectors from dfne")
+                _feature_source_logged = True
+            return vec, "dfne"
+        except Exception as e:
+            log.warning("detection: DFNE deer features failed (%s: %s) — switching to convnext_tiny",
+                        type(e).__name__, e)
+    _dfne_features_broken = True
+    try:
+        net, tf = _load_feature_fallback(device)
+        vec = _features(net, tf, pil, device)
         if not _feature_source_logged:
-            log.info("detection: deer feature vectors from %s", source)
+            log.info("detection: deer feature vectors from convnext_tiny")
             _feature_source_logged = True
-        with torch.no_grad():
-            x = tf(pil).unsqueeze(0).to(device)
-            f = net.forward_features(x)
-            f = net.forward_head(f, pre_logits=True) if hasattr(net, "forward_head") else f.mean(dim=tuple(range(2, f.dim())))
-        return [float(v) for v in f.flatten().cpu().numpy()], source
+        return vec, "convnext_tiny"
     except Exception as e:
         log.warning("detection: deer feature extraction failed: %s: %s", type(e).__name__, e)
         return None, None

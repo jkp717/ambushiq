@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.cameras import bucks as bucks_mod
@@ -118,15 +118,12 @@ async def _backfill_species_task(sighting_ids: list[int]) -> None:
 
 
 async def find_deer_job(progress, region_id: int) -> str:
-    """Jobs-page entry: run detection again on this region's animal photos that are still on disk
-    and have no deer boxes yet, so the buck trainer has deer to show straight away."""
+    """Jobs-page entry: run detection again on this region's whitetail photos that are still on disk
+    and have no usable deer boxes yet (none at all, or a deer whose features couldn't be read), so the
+    buck trainer has deer to show straight away."""
     with Session(engine) as s:
-        have = select(DeerDetection.sighting_id)
-        ids = list(s.scalars(
-            select(CameraSighting.id).join(Camera, Camera.id == CameraSighting.camera_id)
-            .where(Camera.region_id == region_id, Camera.is_deleted == 0, CameraSighting.is_animal == 1,
-                   CameraSighting.image_path.isnot(None), CameraSighting.id.not_in(have))
-            .order_by(CameraSighting.timestamp.desc())).all())
+        ids = list(s.scalars(bucks_mod.unscanned_query(region_id, select(CameraSighting.id))
+                             .order_by(CameraSighting.timestamp.desc())).all())
     progress.set_total(len(ids))
     found = 0
     try:
@@ -142,6 +139,9 @@ async def find_deer_job(progress, region_id: int) -> str:
                     progress.fail(str(sid), det.get("detector", "error"))
                     continue
                 if det.get("detections"):
+                    # replace an earlier attempt's boxes (kept only if someone already labeled them)
+                    s.execute(delete(DeerDetection).where(DeerDetection.sighting_id == sid,
+                                                          DeerDetection.label.is_(None)))
                     bucks_mod.record_detections(s, sid, det["detections"])
                     found += sum(1 for d in det["detections"] if d.get("features"))
                     s.commit()

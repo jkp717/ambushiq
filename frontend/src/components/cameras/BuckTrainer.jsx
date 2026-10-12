@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { X, Maximize2, Check } from "lucide-react";
+import { X, Maximize2, Check, Loader2 } from "lucide-react";
 import { api, withToken } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
+
+const FIND_DEER_JOB = "find_deer";
+const SCAN_POLL_MS = 2000;
 
 /* Buck model trainer: shows whitetail deer in batches, one crop each. Tap every buck, then "Next batch":
    the tapped deer are saved as bucks and every other deer shown as "not a buck" (implied — there is no
@@ -26,6 +29,35 @@ function BuckTrainer({ onClose, onStatus }) {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // The "Find deer in existing photos" job, run from here when older photos haven't been scanned yet.
+  const [scan, setScan] = useState(null);             // {processed, total} while it runs
+  const [scanDone, setScanDone] = useState(false);
+  const pollScan = useCallback(async () => {
+    try {
+      const job = (await api("/jobs")).find((j) => j.id === FIND_DEER_JOB);
+      if (job?.running) {
+        const r = job.last_run || {};
+        setScan({ processed: (r.done || 0) + (r.failed || 0), total: r.total || 0 });
+        return true;
+      }
+    } catch { /* keep polling */ return true; }
+    setScan(null);
+    return false;
+  }, []);
+  useEffect(() => { pollScan(); }, [pollScan]);          // already running from the Jobs list?
+  const scanning = !!scan;
+  useEffect(() => {
+    if (!scanning) return;
+    const t = setInterval(async () => { if (!(await pollScan())) { setScanDone(true); load(); } }, SCAN_POLL_MS);
+    return () => clearInterval(t);
+  }, [scanning, pollScan, load]);
+
+  async function findDeer() {
+    setScan({ processed: 0, total: 0 });
+    try { await api(`/jobs/${FIND_DEER_JOB}/run`, { method: "POST" }); }
+    catch (e) { if (e.code !== 409) { setScan(null); setErr("Couldn't start looking for deer."); } }
+  }
 
   const toggle = (id) => setPicked((prev) => {
     const next = new Set(prev);
@@ -79,8 +111,25 @@ function BuckTrainer({ onClose, onStatus }) {
         {loading ? <div className="buck-trainer-empty">Loading…</div>
           : !items.length ? (
             <div className="buck-trainer-empty">
-              Nothing left to review.
-              <div className="buck-trainer-sub">New deer appear here as cameras sync. "Find deer in existing photos" on the Jobs list adds deer from photos you already have.</div>
+              {scan ? (
+                <>
+                  <Loader2 size={18} className="spin" /> Looking for deer in your photos…
+                  <div className="buck-trainer-sub">
+                    {scan.total ? `${Math.min(scan.processed + 1, scan.total)} of ${scan.total} photos` : "Starting…"} — deer show up here when it's done. You can close this and come back.
+                  </div>
+                </>
+              ) : status?.unscanned && !scanDone ? (
+                <>
+                  {status.unscanned} deer photo{status.unscanned === 1 ? " hasn't" : "s haven't"} been checked yet.
+                  <div className="buck-trainer-sub">Photos from before the buck model existed need a one-time scan to outline each deer.</div>
+                  <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={findDeer}>Find deer in my photos</button>
+                </>
+              ) : (
+                <>
+                  {scanDone ? "Finished looking — no deer to review." : "Nothing left to review."}
+                  <div className="buck-trainer-sub">New deer appear here as your cameras sync.</div>
+                </>
+              )}
             </div>
           ) : (
             <div className="buck-grid">

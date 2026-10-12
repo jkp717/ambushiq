@@ -30,6 +30,7 @@ function BuckModelSection() {
     if (need || needOther) line += ` — needs ${st.min_each} of each to turn on.`;
     else if (st.cv_accuracy != null) line += ` — ${Math.round(st.cv_accuracy * 100)}% accurate, needs ${Math.round(st.min_accuracy * 100)}%. Review more deer to improve it.`;
     line += ` ${st.waiting} deer waiting for review.`;
+    if (st.unscanned) line += ` ${st.unscanned} older photo${st.unscanned === 1 ? "" : "s"} not checked for deer yet — Train the model can scan them.`;
   }
 
   return (

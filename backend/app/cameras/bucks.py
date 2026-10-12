@@ -312,6 +312,23 @@ def queue(region_id: int, limit: int = 16) -> list[dict]:
     return out
 
 
+def unscanned_query(region_id: int, q):
+    """Restrict a CameraSighting query to this region's whitetail photos still on file that have no
+    usable deer boxes: never scanned (taken before the buck model existed), or a deer whose features
+    couldn't be read. "Find deer in existing photos" works through these. Only photos already
+    classified as white-tailed deer are rescanned, which skips the slow detector on every raccoon and
+    turkey; a deer behind another animal in an older photo is the rare miss."""
+    from app.cameras.detection import DEER_SPECIES
+    unreadable = select(DeerDetection.sighting_id).where(
+        DeerDetection.vec.is_(None), func.lower(DeerDetection.species) == DEER_SPECIES.lower())
+    scanned = select(DeerDetection.sighting_id)
+    return (q.join(Camera, Camera.id == CameraSighting.camera_id)
+            .where(Camera.region_id == region_id, Camera.is_deleted == 0, CameraSighting.is_animal == 1,
+                   func.lower(CameraSighting.species) == DEER_SPECIES.lower(),
+                   CameraSighting.image_path.isnot(None),
+                   or_(CameraSighting.id.not_in(scanned), CameraSighting.id.in_(unreadable))))
+
+
 def status(region_id: int) -> dict:
     from app.cameras import detection
     model = load_model() or {}
@@ -320,12 +337,14 @@ def status(region_id: int) -> dict:
                                 .where(DeerDetection.label.isnot(None), DeerDetection.vec.isnot(None))
                                 .group_by(DeerDetection.label)).all())
         waiting = s.scalar(_queue_filter(select(func.count(DeerDetection.id)), region_id))
+        unscanned = s.scalar(unscanned_query(region_id, select(func.count(CameraSighting.id))))
     return {
         "available": detection.species_available(),
         "enabled": bool(model.get("enabled")), "cv_accuracy": model.get("cv_accuracy"),
         "trained_at": model.get("trained_at"),
         "n_buck": counts.get("buck", 0), "n_not_buck": counts.get("not_buck", 0),
-        "waiting": waiting or 0, "min_each": MIN_EACH, "min_accuracy": MIN_CV_ACCURACY,
+        "waiting": waiting or 0, "unscanned": unscanned or 0,
+        "min_each": MIN_EACH, "min_accuracy": MIN_CV_ACCURACY,
     }
 
 
