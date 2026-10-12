@@ -68,6 +68,8 @@ class CameraSighting(Base):
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     def to_dict(self) -> dict:
+        """The sighting itself. Its deer (boxes + buck marks) are added in bulk by the gallery —
+        see cameras/bucks.py `attach_detections` — rather than queried per row here."""
         img = None
         if self.image_path and os.path.exists(self.image_path):
             img = f"/api/camera-sightings/{self.id}/image"
@@ -78,3 +80,21 @@ class CameraSighting(Base):
             "is_animal": bool(self.is_animal), "is_favorite": bool(self.is_favorite),
             "image_url": img, "created_at": self.created_at,
         }
+
+
+class DeerDetection(Base):
+    """One animal box in a photo (a photo can hold several deer). White-tailed deer carry a feature
+    vector for the buck model; the vector is kept after the photo file is cleaned up, so every buck
+    label keeps counting toward training."""
+    __tablename__ = "deer_detections"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sighting_id: Mapped[int] = mapped_column(Integer, index=True)
+    box_json: Mapped[str] = mapped_column(Text)            # [x1, y1, x2, y2] as fractions of the image
+    det_conf: Mapped[float] = mapped_column(Float, default=0.0)
+    species: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    vec: Mapped[Optional[str]] = mapped_column(Text, nullable=True)            # base64 float16 feature vector
+    vec_source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # which network made it
+    buck_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # NULL while no model is on
+    label: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)    # "buck" | "not_buck" | NULL
+    label_source: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # "trainer" | "viewer"
+    labeled_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)

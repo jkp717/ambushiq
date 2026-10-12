@@ -14,9 +14,10 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.cameras import bucks as bucks_mod
 from app.cameras import detection as detection_mod
 from app.cameras import providers as cameras_mod
-from app.cameras.models import Camera, CameraSighting
+from app.cameras.models import Camera, CameraSighting, DeerDetection
 from app.core.config import CAMERA_IMAGE_DIR
 from app.core.database import engine
 from app.core.security import decrypt_credentials
@@ -114,6 +115,40 @@ async def _backfill_species_task(sighting_ids: list[int]) -> None:
         detection_mod.unload_models()
     log.info("backfill_species: done — checked=%d reclassified=%d missing_file=%d errors=%d",
               len(sighting_ids), reclassified, missing_file, errors)
+
+
+async def find_deer_job(progress, region_id: int) -> str:
+    """Jobs-page entry: run detection again on this region's animal photos that are still on disk
+    and have no deer boxes yet, so the buck trainer has deer to show straight away."""
+    with Session(engine) as s:
+        have = select(DeerDetection.sighting_id)
+        ids = list(s.scalars(
+            select(CameraSighting.id).join(Camera, Camera.id == CameraSighting.camera_id)
+            .where(Camera.region_id == region_id, Camera.is_deleted == 0, CameraSighting.is_animal == 1,
+                   CameraSighting.image_path.isnot(None), CameraSighting.id.not_in(have))
+            .order_by(CameraSighting.timestamp.desc())).all())
+    progress.set_total(len(ids))
+    found = 0
+    try:
+        for sid in ids:
+            with Session(engine) as s:
+                row = s.get(CameraSighting, sid)
+                if not row or not row.image_path or not os.path.exists(row.image_path):
+                    progress.step()
+                    continue
+                progress.begin(os.path.basename(row.image_path))
+                det = await asyncio.to_thread(detection_mod.detect_animal, row.image_path)
+                if str(det.get("detector", "")).startswith("error"):
+                    progress.fail(str(sid), det.get("detector", "error"))
+                    continue
+                if det.get("detections"):
+                    bucks_mod.record_detections(s, sid, det["detections"])
+                    found += sum(1 for d in det["detections"] if d.get("features"))
+                    s.commit()
+                progress.step()
+    finally:
+        detection_mod.unload_models()
+    return f"found {found} deer in {len(ids)} photo{'' if len(ids) == 1 else 's'}"
 
 
 SYNC_OVERLAP = timedelta(days=3)     # each sync re-lists this much history so late-uploaded photos are caught
@@ -250,14 +285,19 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
     failed_at: list[datetime] = []      # taken-times of photos we couldn't get, so the cursor can hold back
 
     def record(taken_at: str, key: Optional[str], fpath: str, *, animal: bool, conf: float,
-               species: Optional[str] = None, species_conf: Optional[float] = None) -> None:
+               species: Optional[str] = None, species_conf: Optional[float] = None,
+               detections: Optional[list] = None) -> None:
         with Session(engine) as s:
-            s.add(CameraSighting(
+            sg = CameraSighting(
                 stand_id=stand_id, camera_id=cid, timestamp=taken_at, confidence_score=conf,
                 species=species, species_confidence=species_conf, image_path=fpath,
                 provider_photo_id=key, is_animal=1 if animal else 0,
                 created_at=datetime.now(timezone.utc).isoformat(),
-            ))
+            )
+            s.add(sg)
+            s.flush()
+            if detections:
+                bucks_mod.record_detections(s, sg.id, detections)   # each animal box, for the buck model
             s.commit()
         if key:
             known[key] = None
@@ -353,7 +393,8 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
                 record(taken_at, key, fpath, animal=False, conf=det.get("confidence", 0.0))
             else:
                 record(taken_at, key, fpath, animal=True, conf=det.get("confidence", 0.0),
-                       species=det.get("species"), species_conf=det.get("species_confidence"))
+                       species=det.get("species"), species_conf=det.get("species_confidence"),
+                       detections=det.get("detections"))
                 new += 1
 
     log.info("cam %s (%s): sync complete — downloaded=%d animals=%d no_animal=%d det_errors=%d failed=%d retimed=%d",

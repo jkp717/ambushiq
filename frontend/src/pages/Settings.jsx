@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch } from "lucide-react";
 import { api } from "../services/api.js";
 import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -8,6 +8,7 @@ import Field from "../components/ui/Field.jsx";
 import SliderRow from "../components/ui/SliderRow.jsx";
 import InfoTip from "../components/ui/InfoTip.jsx";
 import JobsPanel from "../components/JobsPanel.jsx";
+import BuckModelSection from "../components/cameras/BuckModelSection.jsx";
 import { mToYd, ydToM, fmtYd, fmtDist } from "../utils/units.js";
 
 function SettingsPage({ reloadStands }) {
@@ -283,6 +284,12 @@ function SettingsPage({ reloadStands }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
       </div>
+
+      {/* ── Model training (buck model) ── */}
+      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
+        <ScanSearch size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Model training
+      </div>
+      <BuckModelSection />
 
       {/* ── Scouting suggestions ── */}
       <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>

@@ -39,6 +39,8 @@ def registry() -> dict[str, dict]:
     """Jobs in display order. Built on demand: the job functions live in modules (scheduler,
     stands) that would otherwise import-cycle with this one."""
     from app import scheduler as sch
+    from app.cameras.bucks import train_job as train_bucks_job
+    from app.cameras.service import find_deer_job
     from app.regions.terrain import fetch_property_terrain
     from app.stands.service import terrain_reanalyze_job
     return {
@@ -55,6 +57,15 @@ def registry() -> dict[str, dict]:
         "sync_cameras": {
             "label": "Sync trail cameras", "icon": "camera", "fn": sch.sync_cameras_job,
             "description": "Downloads new photos from every active camera and runs deer detection.",
+        },
+        "find_deer": {
+            "label": "Find deer in existing photos", "icon": "camera", "region_scoped": True, "fn": find_deer_job,
+            "description": "Re-runs detection on this region's photos still on disk to outline each deer, "
+                           "so the buck model has deer to learn from.",
+        },
+        "train_bucks": {
+            "label": "Train buck model", "icon": "camera", "fn": train_bucks_job,
+            "description": "Retrains the buck model on every deer you've marked, then re-scores all deer.",
         },
         "warm_forecast": {
             "label": "Refresh weather forecast", "icon": "weather", "fn": sch.warm_forecast_job,

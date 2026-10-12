@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete as sa_delete, func, select, update as sa_update
 from sqlalchemy.orm import Session
 
-from app.cameras.models import Camera, CameraSighting
+from app.cameras.models import Camera, CameraSighting, DeerDetection
 from app.core.config import CAMERA_IMAGE_DIR
 from app.core.database import engine
 from app.corridors.models import Corridor
@@ -107,9 +107,10 @@ def delete_region(region_id: int, _=Depends(require_token)):
         # both, even though every sighting today is always written with both set).
         stand_ids = select(Stand.id).where(Stand.region_id == region_id)
         camera_ids = select(Camera.id).where(Camera.region_id == region_id)
-        s.execute(sa_delete(CameraSighting).where(
-            CameraSighting.camera_id.in_(camera_ids) | CameraSighting.stand_id.in_(stand_ids)
-        ))
+        in_region = CameraSighting.camera_id.in_(camera_ids) | CameraSighting.stand_id.in_(stand_ids)
+        s.execute(sa_delete(DeerDetection).where(
+            DeerDetection.sighting_id.in_(select(CameraSighting.id).where(in_region))))
+        s.execute(sa_delete(CameraSighting).where(in_region))
         for model in (ScoutingSuggestion, DeerSign, Corridor, Zone, Camera, Stand):
             s.execute(sa_delete(model).where(model.region_id == region_id))
 

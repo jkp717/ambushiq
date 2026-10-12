@@ -28,7 +28,10 @@ import threading
 
 _MODEL = None
 _CLASSIFIER = None
+_FEATURE_FALLBACK = None   # (timm model, transform) used only when DFNE's own features can't be reached
 _LOCK = threading.Lock()
+
+MAX_ANIMALS = 8            # animal boxes kept per photo (each deer gets its own buck label)
 _MODE = os.environ.get("DETECTOR_MODE", "fallback")  # "megadetector" | "fallback"
 
 log = logging.getLogger(__name__)
@@ -131,21 +134,85 @@ def unload_models() -> None:
     don't keep them resident between sync batches — only load happens lazily
     when a batch actually has a new photo to process, so this is a no-op on
     ticks where nothing needed detection."""
-    global _MODEL, _CLASSIFIER
+    global _MODEL, _CLASSIFIER, _FEATURE_FALLBACK
     with _LOCK:
-        if _MODEL is None and _CLASSIFIER is None:
+        if _MODEL is None and _CLASSIFIER is None and _FEATURE_FALLBACK is None:
             return
         _MODEL = None
         _CLASSIFIER = None
+        _FEATURE_FALLBACK = None
     import gc
     gc.collect()
     log.info("detection: models unloaded")
 
 
+def _classify(classifier, crop) -> tuple[str | None, float | None]:
+    """Species + confidence for one animal crop. PytorchWildlife's TIMM-based classifiers (DFNE,
+    Deepfaune) return {"prediction": ..., "confidence": ...}, not "class_name" — keyed off the actual
+    `results_generation()` output shape, not assumed."""
+    res = classifier.single_image_classification(crop)
+    if isinstance(res, dict) and "prediction" in res:
+        conf = res.get("confidence")
+        return res.get("prediction"), (round(float(conf), 3) if conf is not None else None)
+    return str(res), None
+
+
+def _load_feature_fallback(device: str):
+    """A small ImageNet backbone (convnext_tiny), used for deer feature vectors only if DFNE's own
+    network can't be reached. Loaded lazily and released by unload_models like the others."""
+    global _FEATURE_FALLBACK
+    if _FEATURE_FALLBACK is not None:
+        return _FEATURE_FALLBACK
+    with _LOCK:
+        if _FEATURE_FALLBACK is None:
+            import timm  # type: ignore
+            from timm.data import create_transform, resolve_data_config  # type: ignore
+            net = timm.create_model("convnext_tiny", pretrained=True, num_classes=0).to(device).eval()
+            _FEATURE_FALLBACK = (net, create_transform(**resolve_data_config({}, model=net)))
+            log.info("detection: using convnext_tiny for deer feature vectors")
+    return _FEATURE_FALLBACK
+
+
+_feature_source_logged = False
+
+
+def deer_features(classifier, crop, device: str) -> tuple[list[float] | None, str | None]:
+    """A feature vector describing one deer crop, for the buck model: DFNE's own pre-classification
+    features when its timm network is reachable (no extra model), else the convnext_tiny fallback.
+    Returns (vector, source name) — vectors from different sources aren't comparable — or (None, None)."""
+    global _feature_source_logged
+    try:
+        import torch  # type: ignore
+        from PIL import Image  # type: ignore
+        pil = Image.fromarray(crop)
+        net = getattr(classifier, "model", None)
+        tf = getattr(classifier, "transform", None) or getattr(classifier, "transforms", None)
+        source = "dfne"
+        if net is None or tf is None or not hasattr(net, "forward_features"):
+            net, tf = _load_feature_fallback(device)
+            source = "convnext_tiny"
+        if not _feature_source_logged:
+            log.info("detection: deer feature vectors from %s", source)
+            _feature_source_logged = True
+        with torch.no_grad():
+            x = tf(pil).unsqueeze(0).to(device)
+            f = net.forward_features(x)
+            f = net.forward_head(f, pre_logits=True) if hasattr(net, "forward_head") else f.mean(dim=tuple(range(2, f.dim())))
+        return [float(v) for v in f.flatten().cpu().numpy()], source
+    except Exception as e:
+        log.warning("detection: deer feature extraction failed: %s: %s", type(e).__name__, e)
+        return None, None
+
+
 def detect_animal(image_path: str) -> dict:
     """
     Return {"is_animal": bool, "confidence": float, "detector": str,
-            "species": str | None, "species_confidence": float | None}.
+            "species": str | None, "species_confidence": float | None,
+            "detections": [{box, det_conf, species, species_confidence, features, feature_source}]}.
+
+    The top-level fields describe the most confident animal (as before). `detections` lists every
+    animal box (up to MAX_ANIMALS), with `box` as fractions of the image (x1, y1, x2, y2), and a
+    feature vector for each white-tailed deer — used by the buck model.
 
     Never raises. On model failure returns is_animal=False with detector="error(...)"
     so the caller can decide what to do (currently: save at conf=0 so photos are
@@ -153,7 +220,7 @@ def detect_animal(image_path: str) -> dict:
     """
     if _MODE == "fallback":
         return {"is_animal": True, "confidence": 0.0, "detector": "fallback",
-                "species": None, "species_confidence": None}
+                "species": None, "species_confidence": None, "detections": []}
 
     try:
         import numpy as np          # type: ignore
@@ -162,18 +229,18 @@ def detect_animal(image_path: str) -> dict:
         model = _load_model()
 
         img = np.array(Image.open(image_path).convert("RGB"))
+        h, w = img.shape[:2]
         results = model.single_image_detection(img, img_path=image_path)
 
+        # 1. Every animal box at or above the threshold, most confident first
         dets = results.get("detections")
-        best_conf = 0.0
-        best_box = None
-        
-        # 1. Find the highest-confidence animal bounding box
+        boxes: list[tuple[float, object]] = []
         if dets is not None and dets.confidence is not None and dets.class_id is not None:
             for i, (cls_id, conf) in enumerate(zip(dets.class_id, dets.confidence)):
-                if int(cls_id) == ANIMAL_CLASS_ID and conf > best_conf:
-                    best_conf = float(conf)
-                    best_box = dets.xyxy[i]
+                if int(cls_id) == ANIMAL_CLASS_ID:
+                    boxes.append((float(conf), dets.xyxy[i]))
+        boxes.sort(key=lambda b: b[0], reverse=True)
+        best_conf = boxes[0][0] if boxes else 0.0
 
         is_animal = best_conf >= CONF_THRESHOLD
         response = {
@@ -182,35 +249,34 @@ def detect_animal(image_path: str) -> dict:
             "detector": "megadetector",
             "species": None,
             "species_confidence": None,
+            "detections": [],
         }
 
-        # 2. If an animal is detected, run the classifier on that specific crop
-        if is_animal and best_box is not None:
+        # 2. Classify each animal crop; deer also get a feature vector for the buck model
+        if is_animal:
             # Determine the device MegaDetector is currently utilizing
             device = "cuda" if "cuda" in str(getattr(model, "device", "cpu")) else "cpu"
             classifier = _load_classifier(device=device)
-
-            # Extract coordinates and crop the numpy array
-            x1, y1, x2, y2 = map(int, best_box)
-            animal_crop = img[max(0, y1):y2, max(0, x1):x2]
-
-            # Pass the cropped image into the classification model
-            clf_results = classifier.single_image_classification(animal_crop)
-
-            # Extract the top predicted class name. Note: PytorchWildlife's
-            # TIMM-based classifiers (DFNE, Deepfaune) return {"prediction": ...,
-            # "confidence": ...}, not "class_name" — keyed off the actual
-            # `results_generation()` output shape, not assumed.
-            if isinstance(clf_results, dict) and "prediction" in clf_results:
-                response["species"] = clf_results.get("prediction")
-                conf = clf_results.get("confidence")
-                response["species_confidence"] = round(float(conf), 3) if conf is not None else None
-            else:
-                response["species"] = str(clf_results)
+            for conf, box in [b for b in boxes if b[0] >= CONF_THRESHOLD][:MAX_ANIMALS]:
+                x1, y1, x2, y2 = map(int, box)
+                x1, y1 = max(0, x1), max(0, y1)
+                crop = img[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
+                species, species_conf = _classify(classifier, crop)
+                features, source = deer_features(classifier, crop, device) if is_deer(species) else (None, None)
+                response["detections"].append({
+                    "box": [round(x1 / w, 4), round(y1 / h, 4), round(min(x2, w) / w, 4), round(min(y2, h) / h, 4)],
+                    "det_conf": round(conf, 3), "species": species, "species_confidence": species_conf,
+                    "features": features, "feature_source": source,
+                })
+            if response["detections"]:
+                top = response["detections"][0]
+                response["species"], response["species_confidence"] = top["species"], top["species_confidence"]
 
         return response
 
     except Exception as e:
         log.warning("Detection/Classification failed on %s: %s: %s", image_path, type(e).__name__, e)
         return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})",
-                "species": None, "species_confidence": None}
+                "species": None, "species_confidence": None, "detections": []}

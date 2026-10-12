@@ -29,3 +29,12 @@ class CameraDiscoverIn(BaseModel):
 
 class FavoriteIn(BaseModel):
     favorite: bool
+
+
+class BuckIn(BaseModel):
+    buck: bool
+
+
+class BuckBatchIn(BaseModel):
+    shown: list[int]     # every deer shown in the trainer batch
+    bucks: list[int]     # the ones tapped as bucks; the rest of `shown` are "not a buck"

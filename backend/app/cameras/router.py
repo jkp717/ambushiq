@@ -7,14 +7,15 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
-from sqlalchemy import and_, or_, select
+from fastapi.responses import FileResponse, Response
+from sqlalchemy import and_, delete as sa_delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.cameras import activity
+from app.cameras import bucks as bucks_mod
 from app.cameras import providers as cameras_mod
-from app.cameras.models import Camera, CameraSighting
-from app.cameras.schemas import CameraDiscoverIn, CameraIn, CameraUpdateIn, FavoriteIn
+from app.cameras.models import Camera, CameraSighting, DeerDetection
+from app.cameras.schemas import BuckBatchIn, BuckIn, CameraDiscoverIn, CameraIn, CameraUpdateIn, FavoriteIn
 from app.cameras.service import (
     _backfill_species_task,
     _sync_one_camera_task,
@@ -231,12 +232,18 @@ def delete_camera(camera_id: int, delete_images: bool = False,
             if delete_images:
                 deleted_dir = get_camera_dir(cam.brand, cam.name, cam.region_id)
             # Delete this camera's sightings, except favorites (they stay in the gallery)
+            gone: list[int] = []
             for sg in s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all():
                 if sg.is_favorite:
                     if sg.image_path:
                         keep.add(os.path.normcase(os.path.abspath(sg.image_path)))
                 else:
+                    gone.append(sg.id)
                     s.delete(sg)
+            # Their deer go too — except ones marked for the buck model, which keep training it
+            if gone:
+                s.execute(sa_delete(DeerDetection).where(DeerDetection.sighting_id.in_(gone),
+                                                         DeerDetection.label.is_(None)))
             # Soft-delete so this camera is never auto-recreated by discover
             cam.is_deleted = 1
             s.commit()
@@ -373,16 +380,20 @@ def camera_activity(
     species: list[str] = Query(default=[]),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    bucks: bool = False,
     region_id: int = Depends(get_active_region_id),
     _=Depends(require_token),
 ):
     """Average sightings per day for each hour of the (property-local) day, over the filtered date range.
-    Empty brand / camera_id / species lists mean "all"; species may include "__none__" for unclassified."""
+    Empty brand / camera_id / species lists mean "all"; species may include "__none__" for unclassified.
+    `bucks` counts only photos with a buck in them."""
     tz = activity.region_tz(get_region_dict(region_id)["property_timezone"])
     with Session(engine) as s:
-        rows = s.execute(_scoped(select(CameraSighting.camera_id, CameraSighting.species,
-                                        CameraSighting.timestamp), region_id, brand, camera_id)
-                         .where(CameraSighting.is_animal == 1)).all()
+        q = _scoped(select(CameraSighting.camera_id, CameraSighting.species,
+                           CameraSighting.timestamp), region_id, brand, camera_id).where(CameraSighting.is_animal == 1)
+        if bucks:
+            q = q.where(CameraSighting.id.in_(bucks_mod.buck_sighting_ids()))
+        rows = s.execute(q).all()
     parsed = [(cid, sp or None, t) for cid, sp, ts in rows if (t := activity.parse_utc(ts)) is not None]
     recorded_since = min((t.astimezone(tz).date() for _c, _s, t in parsed), default=None)
     matching = [r for r in parsed if activity.species_matches(r[1], species)]
@@ -401,6 +412,7 @@ def camera_gallery(
     hour_to: Optional[int] = Query(default=None, ge=0, le=24),
     include_empty: bool = False,
     favorites: bool = False,
+    bucks: bool = False,
     before_ts: Optional[str] = None,
     before_id: Optional[int] = None,
     limit: int = 48,
@@ -421,6 +433,8 @@ def camera_gallery(
             q = q.where(CameraSighting.is_favorite == 1)     # every favorite, "no animal" ones included
         elif not include_empty:
             q = q.where(CameraSighting.is_animal == 1)
+        if bucks:
+            q = q.where(CameraSighting.id.in_(bucks_mod.buck_sighting_ids()))
         if species:
             named = [x for x in species if x != activity.UNCLASSIFIED]
             conds = [CameraSighting.species.in_(named)] if named else []
@@ -458,5 +472,64 @@ def camera_gallery(
                     break
 
     more = len(items) > limit
-    items = items[:limit]
+    items = bucks_mod.attach_detections(items[:limit])
     return {"items": items, "next": {"ts": items[-1]["timestamp"], "id": items[-1]["id"]} if more else None}
+
+
+# ---------- buck model ----------
+
+@router.get("/api/bucks/model")
+def buck_model_status(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    """Training progress: deer marked, accuracy, whether the model is on, deer waiting for review."""
+    return bucks_mod.status(region_id)
+
+
+@router.get("/api/bucks/queue")
+def buck_queue(limit: int = Query(default=16, ge=1, le=48),
+               region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    """The next deer for the trainer to show (unmarked, photo still on disk)."""
+    return {"items": bucks_mod.queue(region_id, limit)}
+
+
+@router.post("/api/bucks/batch")
+async def buck_batch(body: BuckBatchIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    """A finished trainer batch: tapped deer are bucks, the rest shown are not. Retrains."""
+    import asyncio
+    return await asyncio.to_thread(bucks_mod.label_batch, region_id, body.shown, body.bucks)
+
+
+@router.post("/api/bucks/train")
+async def buck_train(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
+    import asyncio
+    await asyncio.to_thread(bucks_mod.train)
+    return bucks_mod.status(region_id)
+
+
+@router.put("/api/deer-detections/{det_id}/buck")
+async def set_deer_buck(det_id: int, body: BuckIn, region_id: int = Depends(get_active_region_id),
+                        _=Depends(require_token)):
+    """Photo-viewer correction: tag a missed buck, or switch off a wrong one."""
+    import asyncio
+    out = await asyncio.to_thread(bucks_mod.set_buck, region_id, det_id, body.buck)
+    if out is None:
+        raise HTTPException(404, "not found")
+    return out
+
+
+@router.get("/api/deer-detections/{det_id}/crop")
+def deer_crop(det_id: int, _=Depends(require_token_or_query)):
+    """The deer's box cut out of its photo (with a little padding), for the trainer grid. Loaded by an
+    <img> tag, so like the full image it's token-checked but can't carry the region header."""
+    import json
+    with Session(engine) as s:
+        d = s.get(DeerDetection, det_id)
+        sg = s.get(CameraSighting, d.sighting_id) if d else None
+        if not sg or not sg.image_path or not os.path.exists(sg.image_path):
+            raise HTTPException(404, "image not found")
+        path, box = sg.image_path, json.loads(d.box_json)
+    try:
+        data = bucks_mod.crop_jpeg(path, box)
+    except Exception as exc:
+        log.warning("deer_crop: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(404, "image not found")
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})

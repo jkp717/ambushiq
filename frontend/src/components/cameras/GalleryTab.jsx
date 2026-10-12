@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
-import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight, Heart } from "lucide-react";
+import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight, Heart, Scan } from "lucide-react";
 import { api, withToken } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
 import Banner from "../ui/Banner.jsx";
@@ -11,6 +11,8 @@ const PAGE = 48;
 // width or flick speed that turns a drag into a swipe, and how much a drag toward no photo is damped.
 const DRAG_START_PX = 10, SWIPE_FRACTION = 0.2, FLICK_PX_PER_MS = 0.4, EDGE_RESIST = 3;
 const SLIDE_MS = 250;
+const OUTLINES_KEY = "ambushiq.gallery.outlines";
+const circled = (n) => String.fromCharCode(0x2460 + n);   // ① ② ③ …
 
 function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup }) {
   const [items, setItems] = useState([]);
@@ -29,6 +31,12 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
   const sliding = useRef(0);         // direction of a swipe animating to the next slide, else 0
   const frame = useRef(0);
   const [filtering, setFiltering] = useState(false);
+  // Deer outlines on the open photo (remembered per device), and where the photo actually sits inside
+  // its <img> box — object-fit: contain can leave bars, so outlines are placed on the visible photo.
+  const [showOutlines, setShowOutlines] = useState(() => { try { return localStorage.getItem(OUTLINES_KEY) !== "0"; } catch { return true; } });
+  const [photoRect, setPhotoRect] = useState(null);
+  const [activeDeer, setActiveDeer] = useState(null);
+  const curImg = useRef(null);
   const query = filterParams(filters, { time: true }).toString();
   const count = activeFilterCount(filters, { time: true });
 
@@ -77,6 +85,45 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
       setErr("Couldn't update the favorite. Try again when you have a connection.");
     }
   }
+
+  // Buck toggle on one deer: shown at once, then saved; the server's answer (which also reflects
+  // whether this overrides the model) replaces it, and a failure puts it back.
+  async function toggleBuck(photo, deer) {
+    const swap = (d) => setItems((prev) => prev.map((it) => {
+      if (it.id !== photo.id) return it;
+      const detections = it.detections.map((x) => (x.id === deer.id ? d : x));
+      return { ...it, detections, buck_count: detections.filter((x) => x.is_buck).length };
+    }));
+    swap({ ...deer, is_buck: !deer.is_buck });
+    try {
+      swap(await api(`/deer-detections/${deer.id}/buck`, { method: "PUT", body: JSON.stringify({ buck: !deer.is_buck }) }));
+    } catch {
+      swap(deer);
+      setErr("Couldn't save the buck mark. Try again when you have a connection.");
+    }
+  }
+
+  function toggleOutlines() {
+    setShowOutlines((v) => {
+      try { localStorage.setItem(OUTLINES_KEY, v ? "0" : "1"); } catch { /* private mode */ }
+      return !v;
+    });
+  }
+
+  // Where the photo is drawn inside the current <img> (object-fit: contain keeps its shape).
+  const measurePhoto = useCallback(() => {
+    const img = curImg.current;
+    if (!img || !img.naturalWidth || !img.clientWidth) { setPhotoRect(null); return; }
+    const scale = Math.min(img.clientWidth / img.naturalWidth, img.clientHeight / img.naturalHeight);
+    const width = img.naturalWidth * scale, height = img.naturalHeight * scale;
+    setPhotoRect({ left: img.offsetLeft + (img.clientWidth - width) / 2, top: img.offsetTop + (img.clientHeight - height) / 2,
+                   width, height });
+  }, []);
+  useLayoutEffect(() => { setActiveDeer(null); measurePhoto(); }, [viewIdx, measurePhoto]);
+  useEffect(() => {
+    window.addEventListener("resize", measurePhoto);
+    return () => window.removeEventListener("resize", measurePhoto);
+  }, [measurePhoto]);
 
   // Nearest index from `from` in direction `dir` (±1) that has a photo to show, or -1.
   const photoIdx = (from, dir) => {
@@ -184,6 +231,8 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
     setViewIdx(null);
   }
   const slideIdx = viewIdx == null ? [] : [photoIdx(viewIdx, -1), viewIdx, photoIdx(viewIdx, 1)];
+  // the open photo's whitetail deer (other animals get no Buck toggle)
+  const deer = viewIdx == null ? [] : (items[viewIdx]?.detections || []).filter((d) => d.is_deer);
 
   if (!cameras.length) {
     return (
@@ -225,6 +274,7 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
                 ? <img src={s.image_url} alt="sighting" className="sighting-thumb" loading="lazy" />
                 : <div className="sighting-nophoto"><Camera size={22} color="var(--bord2)" /></div>}
               {s.is_favorite && <span className="sighting-fav" title="Favorite"><Heart size={12} fill="currentColor" /></span>}
+              {s.buck_count > 0 && <span className="sighting-buck">Buck{s.buck_count > 1 ? ` ×${s.buck_count}` : ""}</span>}
               <div className="sighting-cam" title={s.camera_name}>{s.camera_name}</div>
               <div className="sighting-meta">
                 <span className="sighting-ts">{formatDateTime(s.timestamp)}</span>
@@ -250,16 +300,43 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
               // keyed by photo so, after a swipe, the slide already showing the new photo is kept
               <div className="lightbox-slide" key={j >= 0 ? items[j].id : `none-${k}`}>
                 {j >= 0 && <img src={items[j].image_url} alt={j === viewIdx ? "full-size sighting" : ""}
+                  ref={j === viewIdx ? curImg : undefined} onLoad={j === viewIdx ? measurePhoto : undefined}
                   className="lightbox-img" draggable={false} onClick={(e) => e.stopPropagation()} />}
+                {j === viewIdx && showOutlines && photoRect && deer.map((d, n) => (
+                  <span key={d.id} className={"deer-outline" + (d.is_buck ? " on" : "") + (activeDeer === d.id ? " active" : "")}
+                    style={{ left: photoRect.left + d.box[0] * photoRect.width, top: photoRect.top + d.box[1] * photoRect.height,
+                             width: (d.box[2] - d.box[0]) * photoRect.width, height: (d.box[3] - d.box[1]) * photoRect.height }}
+                    onClick={(e) => { e.stopPropagation(); setActiveDeer(d.id); }}>
+                    {deer.length > 1 && <span className="deer-num">{circled(n)}</span>}
+                  </span>
+                ))}
               </div>
             ))}
           </div>
+          {deer.length > 0 && (
+            // one Buck toggle per deer; touches here never start a swipe
+            <div className="lightbox-bucks" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+              {deer.map((d, n) => (
+                <span key={d.id} className={"lightbox-buck-row" + (activeDeer === d.id ? " active" : "")}>
+                  {deer.length > 1 && <span className="deer-num">{circled(n)}</span>}
+                  <button type="button" className={"lightbox-buck-btn" + (d.is_buck ? " on" : "")} aria-pressed={d.is_buck}
+                    onClick={() => toggleBuck(items[viewIdx], d)}>Buck</button>
+                  {!d.label && d.is_buck && d.buck_score != null && <span className="lightbox-buck-model">Model {Math.round(d.buck_score * 100)}%</span>}
+                </span>
+              ))}
+            </div>
+          )}
           <button className={"lightbox-fav" + (items[viewIdx].is_favorite ? " on" : "")} aria-pressed={!!items[viewIdx].is_favorite}
             aria-label={items[viewIdx].is_favorite ? "Remove from favorites" : "Add to favorites (never auto-deleted)"}
             title={items[viewIdx].is_favorite ? "Favorite — kept forever" : "Favorite (never auto-deleted)"}
             onClick={(e) => { e.stopPropagation(); toggleFavorite(items[viewIdx]); }}>
             <Heart size={20} fill={items[viewIdx].is_favorite ? "currentColor" : "none"} />
           </button>
+          {deer.length > 0 && (
+            <button className={"lightbox-outlines" + (showOutlines ? " on" : "")} aria-pressed={showOutlines}
+              aria-label={showOutlines ? "Hide deer outlines" : "Show deer outlines"} title={showOutlines ? "Hide deer outlines" : "Show deer outlines"}
+              onClick={(e) => { e.stopPropagation(); toggleOutlines(); }}><Scan size={20} /></button>
+          )}
           <button className="lightbox-close" onClick={() => setViewIdx(null)}><X size={20} /></button>
           {hasPrev && (
             <button className="lightbox-nav lightbox-prev" aria-label="Previous photo"

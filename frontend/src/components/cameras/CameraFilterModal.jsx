@@ -107,6 +107,14 @@ function CameraFilterModal({ filters, cameras, speciesOptions, showTime, onApply
             </section>
           )}
 
+          <section>
+            <label className="filter-check">
+              <input type="checkbox" checked={!!draft.bucksOnly} onChange={(e) => set({ bucksOnly: e.target.checked })} />
+              <span>Bucks only</span>
+            </label>
+            <div className="filter-none">Bucks you've marked, plus ones the buck model finds once it's trained (Settings → Model training).</div>
+          </section>
+
           {showTime && (
             <section>
               <label className="filter-check">
