@@ -1114,14 +1114,14 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   flex: 0 0 100%; min-width: 0; box-sizing: border-box; padding: 0 16px;
   display: flex; align-items: flex-start; justify-content: center;
 }
-/* Scaled to fit both ways: no wider than the slide (and 1200px), no taller than the screen minus the
-   lightbox's 48px top / 24px bottom padding — so on a wide desktop window the whole photo shows
-   without scrolling. */
+/* Fills the space left inside the lightbox (its 48px top / 24px bottom padding) and scales the photo
+   up or down to fit it, aspect kept by object-fit — so on desktop the photo is as large as the window
+   allows without scrolling. Phones override this below. */
 .lightbox-img {
-  max-width: min(100%, 1200px);
-  max-height: calc(100dvh - 72px);
-  width: auto;
-  height: auto;
+  max-width: none;
+  max-height: none;
+  width: 100%;
+  height: calc(100dvh - 72px);
   object-fit: contain; border-radius: 8px;
   cursor: default;
   display: block;
@@ -1156,7 +1156,8 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
    (which stay where they are). */
 @media (orientation: portrait) and (max-width: 600px) {
   .lightbox { padding-top: 68px; }
-  .lightbox-img { max-height: calc(100dvh - 92px); }
+  /* sized to the photo itself (not the whole screen height), so it sits at the top as before */
+  .lightbox-img { width: auto; height: auto; max-width: 100%; max-height: calc(100dvh - 92px); }
 }
 /* Phones turned sideways: the photo fills the screen top to bottom, whole photo visible (no crop).
    max-height keeps tablets and desktops on the layout above. */
