@@ -11,6 +11,7 @@ response mapping in the marked TODO sections.
 
 Providers return a list of "photo" dicts:
     {"url": str, "taken_at": iso8601 str, "camera_ref": str, "id": str | None}
+    plus an optional "uploaded_at" (iso8601) when the provider's capture and upload times differ.
 ("id" is the provider's own photo id when it has one; the sync engine falls back to the URL.)
 The caller downloads images, runs detection, and records sightings.
 
@@ -71,7 +72,7 @@ class SpyPointProvider(CameraProvider):
     Flow (from community-documented behavior):
       POST /api/v3/user/login {username,password} -> {token}
       GET  /api/v3/camera/all  (Bearer token)     -> [{id, config{name}...}]
-      POST /api/v3/photo/all   {camera:[ids], ...} -> {photos:[{date, urls{...}}]}
+      POST /api/v3/photo/all   {camera:[ids], ...} -> {photos:[{originDate (taken), date (uploaded), urls{...}}]}
     Photo URLs are usually pre-signed storage links assembled from a host + path.
     This is undocumented/unofficial and may break or violate ToS. Adjust as needed
     once run against a real account.
@@ -196,15 +197,19 @@ class SpyPointProvider(CameraProvider):
                     if isinstance(img, dict) and img.get("host") and img.get("path"):
                         url = f"https://{img['host']}/{img['path']}"
                         break
-                taken = p.get("date") or p.get("originDate")
+                # `originDate` is when the camera took the photo; `date` is when it reached SpyPoint's
+                # servers. Cameras that upload in batches give a whole batch the same `date`, so it's
+                # only the fallback. `uploaded_at` lets rows saved under the old upload time be matched.
+                taken = p.get("originDate") or p.get("date")
                 photo_id = p.get("id") or p.get("_id")
                 key = photo_id or url
                 if key in seen:
                     continue            # a photo on the boundary of two split windows
                 seen.add(key)
-                log.info("SpyPoint: photo cam=%s taken=%s url=%s", p.get("camera"), taken, url[:80] if url else None)
-                out.append({"url": url, "taken_at": taken, "camera_ref": str(p.get("camera")),
-                            "id": str(photo_id) if photo_id else None})
+                log.info("SpyPoint: photo cam=%s taken=%s uploaded=%s url=%s",
+                         p.get("camera"), taken, p.get("date"), url[:80] if url else None)
+                out.append({"url": url, "taken_at": taken, "uploaded_at": p.get("date"),
+                            "camera_ref": str(p.get("camera")), "id": str(photo_id) if photo_id else None})
         log.info("SpyPoint: returning %d photo(s) to sync engine", len(out))
         return out
 

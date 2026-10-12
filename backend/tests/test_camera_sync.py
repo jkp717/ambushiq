@@ -192,6 +192,28 @@ def test_rows_saved_before_photo_ids_existed_are_adopted_not_duplicated(env):
     assert sync(env)["fetched"] == 0                                            # and both are known from now on
 
 
+def test_a_stored_photo_with_the_wrong_time_is_corrected_not_redownloaded(env):
+    uploaded = NOW - timedelta(hours=1)
+    env["use"]([photo("a", uploaded), photo("b", uploaded)])                   # saved under the batch upload time
+    sync(env)
+    taken_a, taken_b = NOW - timedelta(hours=5), NOW - timedelta(hours=3)
+    env["use"]([photo("a", taken_a), photo("b", taken_b)])                      # now listed with capture times
+    out = sync(env)
+    assert out["retimed"] == 2 and out["fetched"] == 0 and len(env["downloads"]) == 2
+    assert sorted(r.timestamp for r in rows()) == sorted([iso(taken_a), iso(taken_b)])
+
+
+def test_a_legacy_row_saved_under_the_upload_time_is_adopted_and_retimed(env):
+    uploaded, taken = NOW - timedelta(hours=1), NOW - timedelta(hours=4)
+    with Session(engine) as s:                                                  # old row: upload time, no photo id
+        s.add(CameraSighting(camera_id=env["cid"], timestamp=iso(uploaded), confidence_score=0.9, is_animal=1))
+        s.commit()
+    env["use"]([dict(photo("a", taken), uploaded_at=iso(uploaded))])
+    out = sync(env)
+    assert out["new"] == 0 and len(rows()) == 1
+    assert rows()[0].provider_photo_id == "id:a" and rows()[0].timestamp == iso(taken)
+
+
 def test_reimport_reaches_back_the_requested_number_of_days(env):
     prov = env["use"]([])
     sync(env)                                                                   # normal sync sets a recent cursor
@@ -238,6 +260,22 @@ def test_spypoint_splits_the_date_window_when_the_photo_limit_is_hit(monkeypatch
     prov = providers.SpyPointProvider({"username": "u", "password": "p"})
     out = asyncio.run(prov.fetch_recent_photos(since=base - timedelta(hours=1), camera_ref="cam-A"))
     assert sorted(p["id"] for p in out) == sorted(p["id"] for p in all_photos)   # nothing lost, nothing doubled
+
+
+def test_spypoint_uses_the_capture_time_not_the_upload_time(monkeypatch):
+    taken, uploaded = NOW - timedelta(hours=6), NOW - timedelta(hours=1)
+
+    def handler(request):
+        if request.url.path.endswith("/camera/all"):
+            return httpx.Response(200, json=[{"id": "cam-A", "config": {"name": "A"}}])
+        return httpx.Response(200, json={"photos": [{"id": "p1", "camera": "cam-A", "originDate": iso(taken),
+                                                     "date": iso(uploaded), "large": {"host": "h.example", "path": "p1.jpg"}}]})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr(providers.SpyPointProvider, "_login", lambda self, client: _async("tok"))
+    out = asyncio.run(providers.SpyPointProvider({"username": "u", "password": "p"}).fetch_recent_photos(camera_ref="cam-A"))
+    assert out[0]["taken_at"] == iso(taken) and out[0]["uploaded_at"] == iso(uploaded)
 
 
 async def _async(value):

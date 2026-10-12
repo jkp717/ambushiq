@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { api, withToken } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
@@ -7,7 +7,10 @@ import CameraFilterModal from "./CameraFilterModal.jsx";
 import { activeFilterCount, filterParams } from "./filters.js";
 
 const PAGE = 48;
-const SWIPE_PX = 50;   // horizontal travel that counts as a swipe rather than a tap
+// Lightbox drag: movement before a touch counts as a drag (and picks its direction), the share of the
+// width or flick speed that turns a drag into a swipe, and how much a drag toward no photo is damped.
+const DRAG_START_PX = 10, SWIPE_FRACTION = 0.2, FLICK_PX_PER_MS = 0.4, EDGE_RESIST = 3;
+const SLIDE_MS = 250;
 
 function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup }) {
   const [items, setItems] = useState([]);
@@ -18,7 +21,13 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
   // follow exactly what the gallery shows under the current filters.
   const [viewIdx, setViewIdx] = useState(null);
   const [pendingNext, setPendingNext] = useState(false);   // stepping past the loaded page
-  const touch = useRef(null);
+  // Drag-to-swipe: the track holds prev / current / next slides and follows the finger. Its position
+  // is written straight to the DOM (not React state) so dragging stays smooth on slow phones.
+  const trackRef = useRef(null);
+  const drag = useRef(null);         // {x, y, t, dx, axis} while a finger is down
+  const dragged = useRef(false);     // the last touch was a drag, so its trailing click must not close
+  const sliding = useRef(0);         // direction of a swipe animating to the next slide, else 0
+  const frame = useRef(0);
   const [filtering, setFiltering] = useState(false);
   const query = filterParams(filters, { time: true }).toString();
   const count = activeFilterCount(filters, { time: true });
@@ -97,17 +106,70 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
     [photoIdx(viewIdx, -1), photoIdx(viewIdx, 1)].forEach((j) => { if (j >= 0) new Image().src = items[j].image_url; });
   }, [viewIdx, items]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Place the track: `offset` px from centred on the current photo, or `slide` (±1) a whole photo over.
+  const placeTrack = (offset, animate, slide = 0) => {
+    const el = trackRef.current;
+    if (!el) return;
+    el.style.transition = animate ? `transform ${SLIDE_MS}ms ease-out` : "none";
+    el.style.transform = slide ? `translateX(${-100 - slide * 100}%)` : `translateX(calc(-100% + ${offset}px))`;
+  };
+  // Whenever the photo changes (swipe, arrows, keys), re-centre before the browser paints, so the
+  // slides React just reordered never show at the old position.
+  useLayoutEffect(() => { placeTrack(0, false); }, [viewIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function onTouchStart(e) {
+    if (sliding.current || e.touches.length > 1) { drag.current = null; return; }
     const t = e.touches[0];
-    touch.current = { x: t.clientX, y: t.clientY };
+    drag.current = { x: t.clientX, y: t.clientY, t: performance.now(), dx: 0, axis: null };
+    dragged.current = false;
   }
-  function onTouchEnd(e) {
-    if (!touch.current) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - touch.current.x, dy = t.clientY - touch.current.y;
-    touch.current = null;
-    if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
+  function onTouchMove(e) {
+    const d = drag.current;
+    if (!d) return;
+    const t = e.touches[0];
+    const dx = t.clientX - d.x, dy = t.clientY - d.y;
+    if (!d.axis) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_START_PX) return;
+      d.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";   // a vertical drag is left to scroll the page
+      dragged.current = true;
+    }
+    if (d.axis !== "x") return;
+    d.dx = dx;
+    const toward = dx < 0 ? 1 : -1;
+    const shown = photoIdx(viewIdx, toward) >= 0 ? dx : dx / EDGE_RESIST;   // feel the end of the photos
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => placeTrack(shown, false));
   }
+  function onTouchEnd() {
+    const d = drag.current;
+    drag.current = null;
+    if (!d || d.axis !== "x") return;
+    cancelAnimationFrame(frame.current);
+    const width = trackRef.current?.clientWidth || window.innerWidth;
+    const speed = Math.abs(d.dx) / Math.max(1, performance.now() - d.t);
+    const dir = d.dx < 0 ? 1 : -1;
+    const swipe = Math.abs(d.dx) > width * SWIPE_FRACTION || speed > FLICK_PX_PER_MS;
+    if (swipe && photoIdx(viewIdx, dir) >= 0) {
+      sliding.current = dir;
+      placeTrack(0, true, dir);            // finish in onTrackSlid
+      // backstop in case transitionend never fires (e.g. the app was backgrounded mid-slide)
+      setTimeout(() => onTrackSlid({ target: trackRef.current }), SLIDE_MS + 100);
+      return;
+    }
+    placeTrack(0, true);                   // spring back
+    if (swipe && dir > 0 && next) step(1); // next photo is on a page not loaded yet: load it and move on
+  }
+  function onTrackSlid(e) {
+    if (e.target !== trackRef.current || !sliding.current) return;
+    const dir = sliding.current;
+    sliding.current = 0;
+    step(dir);                             // the layout effect re-centres on the new photo
+  }
+  function onBackdropClick() {
+    if (dragged.current) { dragged.current = false; return; }
+    setViewIdx(null);
+  }
+  const slideIdx = viewIdx == null ? [] : [photoIdx(viewIdx, -1), viewIdx, photoIdx(viewIdx, 1)];
 
   if (!cameras.length) {
     return (
@@ -166,8 +228,17 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
       )}
 
       {viewIdx != null && items[viewIdx] && (
-        <div className="lightbox" onClick={() => setViewIdx(null)} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-          <img src={items[viewIdx].image_url} alt="full-size sighting" className="lightbox-img" onClick={(e) => e.stopPropagation()} />
+        <div className="lightbox" onClick={onBackdropClick}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
+          <div className="lightbox-track" ref={trackRef} onTransitionEnd={onTrackSlid}>
+            {slideIdx.map((j, k) => (
+              // keyed by photo so, after a swipe, the slide already showing the new photo is kept
+              <div className="lightbox-slide" key={j >= 0 ? items[j].id : `none-${k}`}>
+                {j >= 0 && <img src={items[j].image_url} alt={j === viewIdx ? "full-size sighting" : ""}
+                  className="lightbox-img" draggable={false} onClick={(e) => e.stopPropagation()} />}
+              </div>
+            ))}
+          </div>
           <button className="lightbox-close" onClick={() => setViewIdx(null)}><X size={20} /></button>
           {hasPrev && (
             <button className="lightbox-nav lightbox-prev" aria-label="Previous photo"

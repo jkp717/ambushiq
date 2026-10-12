@@ -143,6 +143,15 @@ def _photo_key(p: dict) -> Optional[str]:
     return f"url:{parts.netloc}{parts.path}"[:400]
 
 
+def _retime(sighting_id: int, taken_at: str) -> None:
+    """Correct a stored photo's taken time."""
+    with Session(engine) as s:
+        row = s.get(CameraSighting, sighting_id)
+        if row:
+            row.timestamp = taken_at
+            s.commit()
+
+
 async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> dict:
     """Fetch recent photos for a camera, run detection, and record every photo: animal photos as
     sightings, photos with no animal kept but flagged (is_animal=0).
@@ -154,7 +163,7 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
     (up to RETRY_HORIZON) so the photo is retried. `since_days` forces a re-import of that many days.
 
     Returns {new, fetched, no_animal, detection_errors, failed}. Best-effort: never raises to the scheduler."""
-    empty = {"new": 0, "fetched": 0, "no_animal": 0, "detection_errors": 0, "failed": 0}
+    empty = {"new": 0, "fetched": 0, "no_animal": 0, "detection_errors": 0, "failed": 0, "retimed": 0}
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if not cam or not cam.is_active or cam.is_deleted:
@@ -164,15 +173,16 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
         region_id = cam.region_id
         cam_provider_ref = cam.provider_ref  # Spypoint cam ID for photo filtering
         cursor = _parse_iso(cam.sync_cursor_at or cam.last_sync_at)
-        # What we already have for this camera, by photo identity. Rows from before photo ids were
-        # stored are matched by timestamp instead and adopt the id of the photo that matches them.
-        known: set[str] = set()
+        # What we already have for this camera, by photo identity -> (row id, stored timestamp), so a
+        # re-listed photo whose taken time was stored wrong can be corrected. Rows from before photo ids
+        # were stored are matched by timestamp instead and adopt the id of the photo that matches them.
+        known: dict[str, Optional[tuple[int, str]]] = {}
         legacy_by_ts: dict[str, list[int]] = defaultdict(list)
         for rid, ts, pid in s.execute(select(CameraSighting.id, CameraSighting.timestamp,
                                               CameraSighting.provider_photo_id)
                                        .where(CameraSighting.camera_id == cid)).all():
             if pid:
-                known.add(pid)
+                known[pid] = (rid, ts)
             else:
                 legacy_by_ts[ts].append(rid)
 
@@ -236,7 +246,7 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
     # User-defined directory structure: [User defined directory]/region_{id}/[Camera Brand]/[Camera Name]/
     cam_dir = get_camera_dir(brand, camera_name, region_id)
     os.makedirs(cam_dir, exist_ok=True)
-    new = no_animal = detection_errors = fetched = saved = 0
+    new = no_animal = detection_errors = fetched = saved = retimed = 0
     failed_at: list[datetime] = []      # taken-times of photos we couldn't get, so the cursor can hold back
 
     def record(taken_at: str, key: Optional[str], fpath: str, *, animal: bool, conf: float,
@@ -250,7 +260,7 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
             ))
             s.commit()
         if key:
-            known.add(key)
+            known[key] = None
 
     async with httpx.AsyncClient() as client:
         for idx, p in enumerate(photos):
@@ -269,16 +279,30 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
 
             key = _photo_key(p)
             if key in known:
+                stored = known[key]
+                if stored and stored[1] != taken_at:
+                    # Saved under a different time — e.g. SpyPoint's upload time, before its capture
+                    # time was used. Correct it in place; the photo itself doesn't need re-downloading.
+                    _retime(stored[0], taken_at)
+                    known[key] = (stored[0], taken_at)
+                    retimed += 1
                 continue
-            if legacy_by_ts.get(taken_at):
-                # An older row (saved before photo ids were kept) already stands for this photo.
-                rid = legacy_by_ts[taken_at].pop()
+            # An older row (saved before photo ids were kept) may already stand for this photo, stored
+            # under the capture time or, for SpyPoint before 3.31.5, the upload time.
+            raw_up = p.get("uploaded_at")
+            uploaded_at = _to_utc_iso(str(raw_up), prop_tz_name) if raw_up else None
+            legacy_ts = next((t for t in (taken_at, uploaded_at) if t and legacy_by_ts.get(t)), None)
+            if legacy_ts:
+                rid = legacy_by_ts[legacy_ts].pop()
                 with Session(engine) as s:
                     row = s.get(CameraSighting, rid)
                     if row:
                         row.provider_photo_id = key
+                        if row.timestamp != taken_at:
+                            row.timestamp = taken_at
+                            retimed += 1
                         s.commit()
-                known.add(key)
+                known[key] = (rid, taken_at)
                 continue
 
             log.info("cam %s (%s): photo[%d] taken_at=%s — downloading %s", cid, brand, idx, taken_at, url[:100])
@@ -332,8 +356,8 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
                        species=det.get("species"), species_conf=det.get("species_confidence"))
                 new += 1
 
-    log.info("cam %s (%s): sync complete — downloaded=%d animals=%d no_animal=%d det_errors=%d failed=%d",
-             cid, brand, fetched, new, no_animal, detection_errors, len(failed_at))
+    log.info("cam %s (%s): sync complete — downloaded=%d animals=%d no_animal=%d det_errors=%d failed=%d retimed=%d",
+             cid, brand, fetched, new, no_animal, detection_errors, len(failed_at), retimed)
 
     # Move the cursor to when this sync began — unless a download failed, in which case hold it just
     # before the earliest failure (within the retry horizon) so the next sync tries again.
@@ -347,4 +371,4 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
             s.commit()
 
     return {"new": new, "fetched": fetched, "no_animal": no_animal,
-            "detection_errors": detection_errors, "failed": len(failed_at)}
+            "detection_errors": detection_errors, "failed": len(failed_at), "retimed": retimed}

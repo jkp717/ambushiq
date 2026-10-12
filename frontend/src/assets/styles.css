@@ -1097,9 +1097,17 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   position: fixed; inset: 0; z-index: 9000;
   background: rgba(0,0,0,.88);
   display: flex; align-items: flex-start; justify-content: center;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   cursor: zoom-out;
-  padding: 48px 16px 24px;
+  padding: 48px 0 24px;
+  /* the browser keeps vertical scrolling; horizontal drags go to the swipe handler */
+  touch-action: pan-y;
+}
+/* prev / current / next photos side by side; the track is moved from GalleryTab while dragging */
+.lightbox-track { display: flex; width: 100%; transform: translateX(-100%); will-change: transform; }
+.lightbox-slide {
+  flex: 0 0 100%; min-width: 0; box-sizing: border-box; padding: 0 16px;
+  display: flex; align-items: flex-start; justify-content: center;
 }
 .lightbox-img {
   max-width: min(92vw, 1200px);
@@ -1126,6 +1134,16 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .lightbox-nav:disabled { opacity: .4; cursor: wait; }
 .lightbox-prev { left: 12px; }
 .lightbox-next { right: 12px; }
+/* Phones turned sideways: the photo fills the screen top to bottom, whole photo visible (no crop).
+   max-height keeps tablets and desktops on the layout above. */
+@media (orientation: landscape) and (max-height: 540px) {
+  .lightbox { padding: 0; overflow: hidden; align-items: center; }
+  .lightbox-slide { padding: 0; height: 100dvh; align-items: center; }
+  .lightbox-img { width: 100%; height: 100%; max-width: none; object-fit: contain; border-radius: 0; }
+  .lightbox-close { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+  .lightbox-prev { left: max(8px, env(safe-area-inset-left)); }
+  .lightbox-next { right: max(8px, env(safe-area-inset-right)); }
+}
 
 .pixelated-overlay {
   image-rendering: pixelated;
