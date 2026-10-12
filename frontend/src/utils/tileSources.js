@@ -11,7 +11,8 @@
    given `opacity` and a CSS `blend` mode. `overlayOnly` sources are never a
    base layer on their own; `toggle` ones are also offered as on/off overlays
    in the layer picker. `needsKey` sources carry a `{key}` placeholder and are
-   hidden until a MapTiler key is saved in Settings.
+   hidden until a MapTiler key is saved in Settings. `imagery` bases are photos: the dark map dims
+   them instead of inverting them (see .map-dark in styles.css).
 
    The /api/tiles overlays (hillshade, contours, woods & water) come from the
    backend, which renders them from USGS 3DEP elevation and NLCD land cover
@@ -27,21 +28,21 @@ const USGS_3DEP_ATTR = "USGS 3DEP";
 const TILE_SOURCES = [
   { id: "topo", label: "USGS Topo", nativeMaxZoom: 16, attribution: "USGS The National Map",
     url: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}" },
-  { id: "imagery", label: "USGS Imagery+Topo", nativeMaxZoom: 16, attribution: "USGS The National Map",
+  { id: "imagery", label: "USGS Imagery+Topo", nativeMaxZoom: 16, attribution: "USGS The National Map", imagery: true,
     url: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}" },
   { id: "esri_topo", label: "Esri Topo", nativeMaxZoom: 19, attribution: ESRI_ATTR,
     url: `${ESRI}/World_Topo_Map/MapServer/tile/{z}/{y}/{x}` },
   { id: "esri_topo_shaded", label: "Esri Topo Shaded",
     parts: [{ id: "esri_topo" }, { id: "landcover", blend: "multiply", opacity: 0.8 }, { id: "hillshade", blend: "multiply", opacity: 0.55 }] },
-  { id: "esri_imagery", label: "Esri Imagery", nativeMaxZoom: 19, attribution: ESRI_ATTR,
+  { id: "esri_imagery", label: "Esri Imagery", nativeMaxZoom: 19, attribution: ESRI_ATTR, imagery: true,
     url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}` },
-  { id: "esri_imagery_topo", label: "Esri Imagery+Topo",
+  { id: "esri_imagery_topo", label: "Esri Imagery+Topo", imagery: true,
     parts: [{ id: "esri_imagery" }, { id: "contours" }, { id: "esri_reference" }] },
   { id: "esri_reference", label: "Esri Roads & Labels", nativeMaxZoom: 19, attribution: ESRI_ATTR, overlayOnly: true,
     url: `${ESRI}/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}` },
   { id: "mt_outdoor", label: "MapTiler Outdoor", nativeMaxZoom: 20, attribution: MT_ATTR, needsKey: true,
     url: "https://api.maptiler.com/maps/outdoor-v2/256/{z}/{x}/{y}.png?key={key}" },
-  { id: "mt_hybrid", label: "MapTiler Satellite", nativeMaxZoom: 20, attribution: MT_ATTR, needsKey: true,
+  { id: "mt_hybrid", label: "MapTiler Satellite", nativeMaxZoom: 20, attribution: MT_ATTR, needsKey: true, imagery: true,
     url: "https://api.maptiler.com/maps/hybrid/256/{z}/{x}/{y}.jpg?key={key}" },
   { id: "contours", label: "Contour lines (10 ft)", nativeMaxZoom: 18, minZoom: 13, attribution: USGS_3DEP_ATTR,
     overlayOnly: true, toggle: true, loadingLabel: "contour lines", url: "/api/tiles/contours/{z}/{x}/{y}.png" },

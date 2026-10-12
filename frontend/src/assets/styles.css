@@ -566,14 +566,14 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   animation: user-loc-pulse 2s ease-out infinite;
 }
 @keyframes user-loc-pulse { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(3.2); opacity: 0; } }
-/* heading beam: a soft wedge pointing up (rotated from JS), fading outward and toward its edges */
+/* heading beam, like Google's: a solid 70° wedge pointing up (rotated from JS), starting at the dot's ring
+   and fading with distance — even color edge to edge so it reads on busy topo and imagery */
 .user-loc-beam {
   display: none; position: absolute; left: 50%; top: 50%;
-  width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%;
-  background: conic-gradient(from -34deg at 50% 50%,
-    rgba(66, 133, 244, 0) 0deg, rgba(66, 133, 244, .55) 34deg, rgba(66, 133, 244, 0) 68deg, transparent 68deg);
-  -webkit-mask-image: radial-gradient(circle, transparent 0, transparent 9px, #000 14px, transparent 68%);
-  mask-image: radial-gradient(circle, transparent 0, transparent 9px, #000 14px, transparent 68%);
+  width: 150px; height: 150px; margin: -75px 0 0 -75px; border-radius: 50%;
+  background: conic-gradient(from -35deg at 50% 50%, rgba(66, 133, 244, .8) 0deg 70deg, transparent 70deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 9px, #000 12px, rgba(0, 0, 0, .55) 45%, transparent 70%);
+  mask-image: radial-gradient(circle, transparent 9px, #000 12px, rgba(0, 0, 0, .55) 45%, transparent 70%);
 }
 /* off-screen location arrow: a full-size click-through layer holding one blue button placed on the map edge */
 .loc-edge-layer { position: absolute; inset: 0; z-index: 500; pointer-events: none; }
@@ -1282,3 +1282,19 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 }
 .gallery-divider::after { content: ""; flex: 1; height: 1px; background: var(--bord); }
 .gallery-divider:first-child { margin-top: 0; }
+
+/* ── Dark map (HuntMap's moon button / the phone's dark mode) ──
+   A filter on the tile pane only, so stands, zones, arrows and popups keep their real colors. Topo maps
+   are inverted and hue-rotated back (dark ground, light lines, water and woods keep their hue) — the
+   "night" look; imagery bases are photos, so they're only dimmed. */
+.map-dark.leaflet-container { background: #1b1b19; }
+.map-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) saturate(.8); }
+.map-dark.map-dark-imagery .leaflet-tile-pane { filter: brightness(.6) contrast(1.05); }
+.map-theme-ctl a { display: flex; align-items: center; justify-content: center; color: #333; }
+.map-dark .leaflet-bar a,
+.map-dark .leaflet-control-layers { background: #2a2a27; color: #f1f0ec; border-color: rgba(255,255,255,0.14); }
+.map-dark .leaflet-bar a:hover { background: #34342f; }
+.map-dark .leaflet-bar a.leaflet-disabled { background: #242421; color: #6f6e69; }
+.map-dark .leaflet-control-layers-toggle { filter: invert(1); }
+.map-dark .leaflet-control-attribution { background: rgba(31,31,29,0.8); color: #a8a7a1; }
+.map-dark .leaflet-control-attribution a { color: #c9c8c2; }

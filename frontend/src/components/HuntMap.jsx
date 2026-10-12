@@ -28,6 +28,13 @@ function statusFlag(counts, setLabels, label) {
 const BASE_LAYER_KEY = "sa_base_layer";   // localStorage: id of the last base layer picked
 const OVERLAYS_KEY = "sa_overlays";       // localStorage: ids of the on/off overlays that are on
 const DEFAULT_BASE = "topo";
+const MAP_THEME_KEY = "sa_map_theme";     // localStorage: "dark" | "light"; absent = follow the phone's dark mode
+const IMAGERY_BASES = new Set(TILE_SOURCES.filter((t) => t.imagery).map((t) => t.id));
+// Moon / sun for the dark-map button (lucide's "moon" and "sun"), drawn in the Leaflet control's own DOM
+const SVG = (body) => `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const MOON_SVG = SVG('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>');
+const SUN_SVG = SVG('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>');
+const darkQuery = () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null);
 
 const COLORS = {
   wind: "#0C447C",
@@ -493,6 +500,30 @@ const HuntMap = forwardRef(function HuntMap({
   const scoutDraftLayer = useRef(null);
   const [ready, setReady] = useState(false);
 
+  // Dark map: follows the phone's dark mode ("auto") unless the moon button picked dark or light.
+  const [mapTheme, setMapTheme] = useState(() => { try { return localStorage.getItem(MAP_THEME_KEY) || "auto"; } catch { return "auto"; } });
+  const [phoneDark, setPhoneDark] = useState(() => !!darkQuery()?.matches);
+  const [imageryBase, setImageryBase] = useState(false);
+  const dark = mapTheme === "auto" ? phoneDark : mapTheme === "dark";
+  const themeBtn = useRef(null);
+  const darkNow = useRef({ dark, phoneDark });
+  darkNow.current = { dark, phoneDark };
+  useEffect(() => {
+    const mq = darkQuery();
+    if (!mq) return undefined;
+    const on = (e) => setPhoneDark(e.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  // Flip what's showing; landing back on the phone's own setting returns to following it.
+  const toggleDark = useCallback(() => {
+    const next = !darkNow.current.dark;
+    const theme = next === darkNow.current.phoneDark ? "auto" : next ? "dark" : "light";
+    setMapTheme(theme);
+    try { if (theme === "auto") localStorage.removeItem(MAP_THEME_KEY); else localStorage.setItem(MAP_THEME_KEY, theme); }
+    catch { /* storage blocked: just not remembered */ }
+  }, []);
+
   // Exposes the underlying Leaflet map + base tile layers for callers that need
   // to drive them directly (currently: the offline-tile download panel).
   useImperativeHandle(ref, () => ({
@@ -603,6 +634,7 @@ const HuntMap = forwardRef(function HuntMap({
     const pick = [...idOf.entries()].find(([, id]) => id === saved) || [...idOf.entries()].find(([, id]) => id === DEFAULT_BASE);
     pick[0].addTo(map);
     activeBase.current = pick[1];
+    setImageryBase(IMAGERY_BASES.has(pick[1]));
 
     let onOverlays = [];
     try { onOverlays = JSON.parse(localStorage.getItem(OVERLAYS_KEY) || "[]"); } catch { onOverlays = []; }
@@ -614,6 +646,7 @@ const HuntMap = forwardRef(function HuntMap({
       const id = idOf.get(e.layer);
       if (!id) return;
       activeBase.current = id;
+      setImageryBase(IMAGERY_BASES.has(id));
       try { localStorage.setItem(BASE_LAYER_KEY, id); } catch { /* storage blocked: just not remembered */ }
     };
     const onOverlay = (e) => {
@@ -631,6 +664,41 @@ const HuntMap = forwardRef(function HuntMap({
       [...Object.values(bases), ...Object.values(overlays)].forEach((l) => map.removeLayer(l));
     };
   }, [ready, maptilerKey]);
+
+  // Dark-map button, under the zoom buttons.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const Ctl = L.Control.extend({
+      onAdd() {
+        const bar = L.DomUtil.create("div", "leaflet-bar map-theme-ctl");
+        const a = L.DomUtil.create("a", "", bar);
+        a.href = "#";
+        a.setAttribute("role", "button");
+        L.DomEvent.disableClickPropagation(bar);
+        L.DomEvent.on(a, "click", (e) => { L.DomEvent.preventDefault(e); toggleDark(); });
+        themeBtn.current = a;
+        return bar;
+      },
+    });
+    const ctl = new Ctl({ position: "topleft" }).addTo(map);
+    return () => { ctl.remove(); themeBtn.current = null; };
+  }, [ready, toggleDark]);
+
+  // The dark look is a CSS filter on the tile pane (styles.css .map-dark), so stands, zones and arrows keep
+  // their colors. Classes are toggled directly: Leaflet owns this element's className.
+  useEffect(() => {
+    const el = mapEl.current;
+    if (!el) return;
+    el.classList.toggle("map-dark", dark);
+    el.classList.toggle("map-dark-imagery", dark && imageryBase);
+    const a = themeBtn.current;
+    if (a) {
+      a.innerHTML = dark ? SUN_SVG : MOON_SVG;
+      a.title = dark ? "Light map" : "Dark map";
+      a.setAttribute("aria-label", a.title);
+    }
+  }, [ready, dark, imageryBase]);
 
   // map click handler (for drawing)
   useEffect(() => {
