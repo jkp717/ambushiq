@@ -1273,3 +1273,12 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   .tab-btn span { font-size: 12px; }
   .list-card-map { width: 100px; }
 }
+
+/* Gallery date headings ("Today", "Last week", …) span the whole grid row */
+.gallery-divider {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 0 2px; font-size: 14px; font-weight: 700; color: var(--sub);
+}
+.gallery-divider::after { content: ""; flex: 1; height: 1px; background: var(--bord); }
+.gallery-divider:first-child { margin-top: 0; }

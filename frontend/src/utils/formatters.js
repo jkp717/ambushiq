@@ -40,6 +40,29 @@ function formatDateTime(iso) {
   } catch { return iso; }
 }
 
+/* Relative heading for a photo's date, for the gallery's dividers: Today, Yesterday, Earlier this week,
+   Last week, Earlier this month, Last month, then the month name ("August", or "August 2025" in an
+   earlier year). Local time, like formatDateTime; weeks start on Sunday. A date takes the first heading
+   whose start it falls after, so newest-first photos always get headings in order. */
+function dateGroupLabel(iso, now = new Date()) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return "Unknown date";
+  const day = (y, m, dd) => new Date(y, m, dd);
+  const today = day(now.getFullYear(), now.getMonth(), now.getDate());
+  const shift = (n) => day(today.getFullYear(), today.getMonth(), today.getDate() + n);
+  const weekStart = shift(-today.getDay());
+  const groups = [
+    ["Today", today],
+    ["Yesterday", shift(-1)],
+    ["Earlier this week", weekStart],
+    ["Last week", day(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() - 7)],
+    ["Earlier this month", day(today.getFullYear(), today.getMonth(), 1)],
+    ["Last month", day(today.getFullYear(), today.getMonth() - 1, 1)],
+  ];
+  for (const [label, start] of groups) if (d >= start) return label;
+  return d.toLocaleDateString("en-US", d.getFullYear() === now.getFullYear() ? { month: "long" } : { month: "long", year: "numeric" });
+}
+
 /* ── helper: slot position (quarter-hour units) closest to 15 min before sunrise ── */
 function morningStartIdx(day) {
   if (!day) return 0;
@@ -56,4 +79,4 @@ function ratingScore5(rating) {
   return rating.score_5 != null ? rating.score_5.toFixed(1) : rating.rating;
 }
 
-export { localDate, corridorLengthFt, formatRelTime, formatDateTime, morningStartIdx, ratingScore5 };
+export { localDate, corridorLengthFt, formatRelTime, formatDateTime, dateGroupLabel, morningStartIdx, ratingScore5 };

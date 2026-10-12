@@ -1,7 +1,7 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import { Fragment, useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight, Heart, Scan } from "lucide-react";
 import { api, withToken } from "../../services/api.js";
-import { formatDateTime } from "../../utils/formatters.js";
+import { formatDateTime, dateGroupLabel } from "../../utils/formatters.js";
 import Banner from "../ui/Banner.jsx";
 import CameraFilterModal from "./CameraFilterModal.jsx";
 import { activeFilterCount, filterParams } from "./filters.js";
@@ -244,6 +244,7 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
     );
   }
 
+  const now = new Date();   // one "today" for every date heading in this render
   return (
     <div>
       <div className="cam-toolbar">
@@ -262,11 +263,16 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
       )}
 
       <div className="sightings-grid gallery-grid">
-        {items.map((s) => {
+        {items.map((s, i) => {
           const conf = s.confidence_score;
           const confCls = conf >= 0.7 ? "conf-high" : conf >= 0.4 ? "conf-med" : "conf-low";
+          // newest first, so a heading goes wherever the date group changes
+          const group = dateGroupLabel(s.timestamp, now);
+          const newGroup = i === 0 || group !== dateGroupLabel(items[i - 1].timestamp, now);
           return (
-            <div key={s.id} className="sighting-card" onClick={() => s.image_url && setViewIdx(items.indexOf(s))}>
+            <Fragment key={s.id}>
+            {newGroup && <h3 className="gallery-divider">{group}</h3>}
+            <div className="sighting-card" onClick={() => s.image_url && setViewIdx(i)}>
               {!s.is_animal
                 ? <span className="sighting-species sighting-empty">No animal detected</span>
                 : s.species && <span className="sighting-species">{s.species}</span>}
@@ -281,6 +287,7 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
                 {s.is_animal && <span className={"conf-badge " + confCls}>{Math.round(conf * 100)}%</span>}
               </div>
             </div>
+            </Fragment>
           );
         })}
         {loading && Array.from({ length: 6 }).map((_, i) => <div key={"sk" + i} className="sighting-card sighting-skeleton" />)}
