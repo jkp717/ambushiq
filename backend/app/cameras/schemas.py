@@ -25,3 +25,7 @@ class CameraDiscoverIn(BaseModel):
     # keyed by provider_ref, true meaning "include this camera" (also un-skips
     # a previously-removed one); omitted refs default to included.
     selections: dict[str, bool] | None = None
+
+
+class FavoriteIn(BaseModel):
+    favorite: bool

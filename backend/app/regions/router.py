@@ -81,6 +81,17 @@ def set_default_region(region_id: int, _=Depends(require_token)):
         return region.to_dict()
 
 
+@router.get("/{region_id}/favorites")
+def region_favorite_count(region_id: int, _=Depends(require_token)):
+    """How many favorited camera photos the region has — deleting the region is the one thing that
+    removes them, so the delete confirmation warns about these."""
+    with Session(engine) as s:
+        camera_ids = select(Camera.id).where(Camera.region_id == region_id)
+        count = s.execute(select(func.count(CameraSighting.id)).where(
+            CameraSighting.camera_id.in_(camera_ids), CameraSighting.is_favorite == 1)).scalar_one()
+    return {"count": count}
+
+
 @router.delete("/{region_id}")
 def delete_region(region_id: int, _=Depends(require_token)):
     with Session(engine) as s:

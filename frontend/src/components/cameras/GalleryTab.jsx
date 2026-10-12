@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
-import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { SlidersHorizontal, Camera, X, ChevronLeft, ChevronRight, Heart } from "lucide-react";
 import { api, withToken } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
 import Banner from "../ui/Banner.jsx";
@@ -62,6 +62,20 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
       setNext(j.next);
     } catch { setErr("Couldn't load more photos."); }
     finally { setLoading(false); }
+  }
+
+  // Favorite / un-favorite: shown at once, undone if the server refuses. The photo stays in the list
+  // either way (even under "Favorites only") so an open slideshow doesn't jump.
+  async function toggleFavorite(photo) {
+    const want = !photo.is_favorite;
+    const mark = (v) => setItems((prev) => prev.map((it) => (it.id === photo.id ? { ...it, is_favorite: v } : it)));
+    mark(want);
+    try {
+      await api(`/camera-sightings/${photo.id}/favorite`, { method: "PUT", body: JSON.stringify({ favorite: want }) });
+    } catch {
+      mark(!want);
+      setErr("Couldn't update the favorite. Try again when you have a connection.");
+    }
   }
 
   // Nearest index from `from` in direction `dir` (±1) that has a photo to show, or -1.
@@ -210,6 +224,7 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
               {s.image_url
                 ? <img src={s.image_url} alt="sighting" className="sighting-thumb" loading="lazy" />
                 : <div className="sighting-nophoto"><Camera size={22} color="var(--bord2)" /></div>}
+              {s.is_favorite && <span className="sighting-fav" title="Favorite"><Heart size={12} fill="currentColor" /></span>}
               <div className="sighting-cam" title={s.camera_name}>{s.camera_name}</div>
               <div className="sighting-meta">
                 <span className="sighting-ts">{formatDateTime(s.timestamp)}</span>
@@ -239,6 +254,12 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
               </div>
             ))}
           </div>
+          <button className={"lightbox-fav" + (items[viewIdx].is_favorite ? " on" : "")} aria-pressed={!!items[viewIdx].is_favorite}
+            aria-label={items[viewIdx].is_favorite ? "Remove from favorites" : "Add to favorites (never auto-deleted)"}
+            title={items[viewIdx].is_favorite ? "Favorite — kept forever" : "Favorite (never auto-deleted)"}
+            onClick={(e) => { e.stopPropagation(); toggleFavorite(items[viewIdx]); }}>
+            <Heart size={20} fill={items[viewIdx].is_favorite ? "currentColor" : "none"} />
+          </button>
           <button className="lightbox-close" onClick={() => setViewIdx(null)}><X size={20} /></button>
           {hasPrev && (
             <button className="lightbox-nav lightbox-prev" aria-label="Previous photo"

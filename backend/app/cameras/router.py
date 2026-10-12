@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.cameras import activity
 from app.cameras import providers as cameras_mod
 from app.cameras.models import Camera, CameraSighting
-from app.cameras.schemas import CameraDiscoverIn, CameraIn, CameraUpdateIn
+from app.cameras.schemas import CameraDiscoverIn, CameraIn, CameraUpdateIn, FavoriteIn
 from app.cameras.service import (
     _backfill_species_task,
     _sync_one_camera_task,
@@ -40,6 +40,22 @@ def get_sighting_image(sighting_id: int, _=Depends(require_token_or_query)):
         if not sighting or not sighting.image_path or not os.path.exists(sighting.image_path):
             raise HTTPException(404, "image not found")
         return FileResponse(sighting.image_path)
+
+
+@router.put("/api/camera-sightings/{sighting_id}/favorite")
+def set_sighting_favorite(sighting_id: int, body: FavoriteIn, region_id: int = Depends(get_active_region_id),
+                          _=Depends(require_token)):
+    """Favorite / un-favorite a photo. Favorites are never removed by the nightly cleanup or by deleting
+    their camera — only by deleting the region. Works on a deleted camera's favorites too."""
+    with Session(engine) as s:
+        sighting = s.get(CameraSighting, sighting_id)
+        cam = s.get(Camera, sighting.camera_id) if sighting and sighting.camera_id else None
+        if not sighting or not cam or cam.region_id != region_id:
+            raise HTTPException(404, "not found")
+        sighting.is_favorite = 1 if body.favorite else 0
+        s.commit()
+        s.refresh(sighting)
+        return sighting.to_dict()
 
 
 @router.get("/static/camera_images/{subpath:path}")
@@ -208,25 +224,41 @@ def update_camera(camera_id: int, body: CameraUpdateIn, region_id: int = Depends
 def delete_camera(camera_id: int, delete_images: bool = False,
                    region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     deleted_dir = None
+    keep: set[str] = set()      # favorites' photo files, which survive the camera
     with Session(engine) as s:
         cam = s.get(Camera, camera_id)
         if cam and cam.region_id == region_id:
             if delete_images:
                 deleted_dir = get_camera_dir(cam.brand, cam.name, cam.region_id)
-            # Delete all sightings for this camera
+            # Delete this camera's sightings, except favorites (they stay in the gallery)
             for sg in s.scalars(select(CameraSighting).where(CameraSighting.camera_id == camera_id)).all():
-                s.delete(sg)
+                if sg.is_favorite:
+                    if sg.image_path:
+                        keep.add(os.path.normcase(os.path.abspath(sg.image_path)))
+                else:
+                    s.delete(sg)
             # Soft-delete so this camera is never auto-recreated by discover
             cam.is_deleted = 1
             s.commit()
-    if delete_images and deleted_dir:
-        import shutil
-        if os.path.isdir(deleted_dir):
+    if delete_images and deleted_dir and os.path.isdir(deleted_dir):
+        # File by file rather than the whole folder, so favorited photos are kept
+        removed = 0
+        for root, _dirs, files in os.walk(deleted_dir):
+            for name in files:
+                path = os.path.join(root, name)
+                if os.path.normcase(os.path.abspath(path)) in keep:
+                    continue
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError as exc:
+                    log.warning("delete_camera: failed to remove %s: %s", path, exc)
+        for root, _dirs, _files in os.walk(deleted_dir, topdown=False):
             try:
-                shutil.rmtree(deleted_dir)
-                log.info("delete_camera: removed image dir %s", deleted_dir)
-            except Exception as exc:
-                log.warning("delete_camera: failed to remove %s: %s", deleted_dir, exc)
+                os.rmdir(root)          # only succeeds once a folder is empty
+            except OSError:
+                pass
+        log.info("delete_camera: removed %d photo file(s) from %s, kept %d favorite(s)", removed, deleted_dir, len(keep))
     return {"ok": True}
 
 
@@ -312,10 +344,12 @@ def camera_sightings(
 
 # ---------- activity + gallery (filterable across cameras) ----------
 
-def _scoped(q, region_id: int, brands: list[str], camera_ids: list[int]):
-    """Restrict a sightings query to live cameras in the active region, optionally narrowed by brand / camera."""
+def _scoped(q, region_id: int, brands: list[str], camera_ids: list[int], keep_favorites: bool = False):
+    """Restrict a sightings query to live cameras in the active region, optionally narrowed by brand / camera.
+    With `keep_favorites`, favorites from deleted cameras are included too (they outlive their camera)."""
+    live = Camera.is_deleted == 0
     q = q.join(Camera, Camera.id == CameraSighting.camera_id).where(
-        Camera.region_id == region_id, Camera.is_deleted == 0)
+        Camera.region_id == region_id, or_(live, CameraSighting.is_favorite == 1) if keep_favorites else live)
     if brands:
         q = q.where(Camera.brand.in_(brands))
     if camera_ids:
@@ -366,6 +400,7 @@ def camera_gallery(
     hour_from: Optional[int] = Query(default=None, ge=0, le=24),
     hour_to: Optional[int] = Query(default=None, ge=0, le=24),
     include_empty: bool = False,
+    favorites: bool = False,
     before_ts: Optional[str] = None,
     before_id: Optional[int] = None,
     limit: int = 48,
@@ -381,8 +416,10 @@ def camera_gallery(
     cursor = (before_ts, before_id) if before_ts and before_id is not None else None
 
     with Session(engine) as s:
-        q = _scoped(select(CameraSighting, Camera), region_id, brand, camera_id)
-        if not include_empty:
+        q = _scoped(select(CameraSighting, Camera), region_id, brand, camera_id, keep_favorites=True)
+        if favorites:
+            q = q.where(CameraSighting.is_favorite == 1)     # every favorite, "no animal" ones included
+        elif not include_empty:
             q = q.where(CameraSighting.is_animal == 1)
         if species:
             named = [x for x in species if x != activity.UNCLASSIFIED]

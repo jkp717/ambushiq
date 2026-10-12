@@ -2,7 +2,8 @@
    Empty lists / empty dates / null hours all mean "no limit". */
 const UNCLASSIFIED = "__none__";   // matches the backend's stand-in for sightings with no species
 
-const EMPTY_FILTERS = { brands: [], cameraIds: [], species: [], dateFrom: "", dateTo: "", hourFrom: null, hourTo: null, includeEmpty: false };
+const EMPTY_FILTERS = { brands: [], cameraIds: [], species: [], dateFrom: "", dateTo: "", hourFrom: null, hourTo: null, includeEmpty: false,
+                        favoritesOnly: false };
 
 function isoDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -18,7 +19,7 @@ function lastDaysFrom(n) {
 function activeFilterCount(f, { time = false } = {}) {
   return (f.brands.length ? 1 : 0) + (f.cameraIds.length ? 1 : 0) + (f.species.length ? 1 : 0)
     + (f.dateFrom || f.dateTo ? 1 : 0) + (time && f.hourFrom != null && f.hourTo != null ? 1 : 0)
-    + (time && f.includeEmpty ? 1 : 0);
+    + (time && f.includeEmpty ? 1 : 0) + (time && f.favoritesOnly ? 1 : 0);
 }
 
 function filterParams(f, { time = false } = {}) {
@@ -30,6 +31,7 @@ function filterParams(f, { time = false } = {}) {
   if (f.dateTo) p.set("date_to", f.dateTo);
   if (time && f.hourFrom != null && f.hourTo != null) { p.set("hour_from", f.hourFrom); p.set("hour_to", f.hourTo); }
   if (time && f.includeEmpty) p.set("include_empty", "true");
+  if (time && f.favoritesOnly) p.set("favorites", "true");
   return p;
 }
 

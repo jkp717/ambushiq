@@ -155,7 +155,13 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   }
 
   async function confirmDeleteRegion(region) {
-    if (!window.confirm(`Delete "${region.name}"? This removes all its stands, zones, corridors, cameras, and scouting suggestions. This can't be undone.`)) return;
+    // Deleting the region is the one thing that removes favorited photos, so say so when it has any.
+    let favs = 0;
+    try { favs = (await api(`/regions/${region.id}/favorites`)).count || 0; } catch {}
+    const favNote = favs > 0
+      ? `\n\nIt also has ${favs} favorited photo${favs === 1 ? "" : "s"} — ${favs === 1 ? "it" : "they"} will be permanently deleted with the region.`
+      : "";
+    if (!window.confirm(`Delete "${region.name}"? This removes all its stands, zones, corridors, cameras, and scouting suggestions. This can't be undone.${favNote}`)) return;
     try {
       await api(`/regions/${region.id}`, { method: "DELETE" });
       pruneSavedAreasForRegion(region.id);

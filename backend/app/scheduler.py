@@ -111,7 +111,8 @@ def auto_cleanup_job(progress):
     cutoff = datetime.now(timezone.utc) - _dt.timedelta(days=retention)
     removed = 0
     with Session(engine) as s:
-        rows = s.scalars(select(CameraSighting).where(CameraSighting.image_path.isnot(None))).all()
+        rows = s.scalars(select(CameraSighting).where(CameraSighting.image_path.isnot(None),
+                                                      CameraSighting.is_favorite == 0)).all()   # favorites are kept
         for row in rows:
             raw_ts = row.created_at or row.timestamp
             if not raw_ts:

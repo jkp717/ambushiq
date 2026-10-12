@@ -102,6 +102,12 @@ def init_db(retries: int = 30):
                     conn.commit()
                 except Exception:
                     pass
+                # v3.33: favorited camera photos are never auto-deleted
+                try:
+                    conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS is_favorite INTEGER NOT NULL DEFAULT 0"))
+                    conn.commit()
+                except Exception:
+                    pass
                 # deer_sign table
                 try:
                     conn.execute(text("""

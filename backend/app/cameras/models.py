@@ -62,6 +62,9 @@ class CameraSighting(Base):
     # 0 = the detector found no animal; the photo is kept (so nothing silently vanishes) but is excluded
     # from scoring and the activity graph and hidden from the gallery unless asked for.
     is_animal: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # 1 = the user favorited this photo: the nightly cleanup and camera deletion never remove it (only
+    # deleting its whole region does), and it stays in the gallery even after its camera is deleted.
+    is_favorite: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     def to_dict(self) -> dict:
@@ -72,6 +75,6 @@ class CameraSighting(Base):
             "id": self.id, "stand_id": self.stand_id, "camera_id": self.camera_id,
             "timestamp": self.timestamp, "confidence_score": self.confidence_score,
             "species": self.species, "species_confidence": self.species_confidence,
-            "is_animal": bool(self.is_animal),
+            "is_animal": bool(self.is_animal), "is_favorite": bool(self.is_favorite),
             "image_url": img, "created_at": self.created_at,
         }

@@ -110,6 +110,16 @@ function CameraFilterModal({ filters, cameras, speciesOptions, showTime, onApply
           {showTime && (
             <section>
               <label className="filter-check">
+                <input type="checkbox" checked={!!draft.favoritesOnly} onChange={(e) => set({ favoritesOnly: e.target.checked })} />
+                <span>Favorites only</span>
+              </label>
+              <div className="filter-none">Favorited photos are never deleted automatically.</div>
+            </section>
+          )}
+
+          {showTime && (
+            <section>
+              <label className="filter-check">
                 <input type="checkbox" checked={draft.includeEmpty} onChange={(e) => set({ includeEmpty: e.target.checked })} />
                 <span>Include photos where no animal was detected</span>
               </label>

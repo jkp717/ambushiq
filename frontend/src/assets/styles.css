@@ -977,6 +977,11 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   padding: 1px 5px; border-radius: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* favorited: a heart on the bottom-right of the thumbnail, clear of the species label */
+.sighting-fav {
+  position: absolute; top: 74px; right: 4px; z-index: 2; display: flex;
+  padding: 3px; border-radius: 50%; background: rgba(0,0,0,.55); color: #E53935;
+}
 .sighting-species.sighting-empty { background: rgba(120,120,120,.85); font-weight: 500; }
 .sighting-thumb {
   width: 100%; height: 96px;
@@ -1109,14 +1114,27 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   flex: 0 0 100%; min-width: 0; box-sizing: border-box; padding: 0 16px;
   display: flex; align-items: flex-start; justify-content: center;
 }
+/* Scaled to fit both ways: no wider than the slide (and 1200px), no taller than the screen minus the
+   lightbox's 48px top / 24px bottom padding — so on a wide desktop window the whole photo shows
+   without scrolling. */
 .lightbox-img {
-  max-width: min(92vw, 1200px);
-  width: 100%;
+  max-width: min(100%, 1200px);
+  max-height: calc(100dvh - 72px);
+  width: auto;
   height: auto;
   object-fit: contain; border-radius: 8px;
   cursor: default;
   display: block;
 }
+/* favorite (heart) toggle, just left of the close button and styled like it */
+.lightbox-fav {
+  position: absolute; top: 14px; right: 58px;
+  background: rgba(255,255,255,.15); border: none; border-radius: 50%;
+  padding: 8px; cursor: pointer; color: #fff; display: flex;
+  transition: background .15s;
+}
+.lightbox-fav:hover { background: rgba(255,255,255,.3); }
+.lightbox-fav.on { color: #E53935; }
 .lightbox-close {
   position: absolute; top: 14px; right: 14px;
   background: rgba(255,255,255,.15); border: none; border-radius: 50%;
@@ -1134,13 +1152,20 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .lightbox-nav:disabled { opacity: .4; cursor: wait; }
 .lightbox-prev { left: 12px; }
 .lightbox-next { right: 12px; }
+/* Phones held upright: start the photo 20px lower so it sits clear of the heart and close buttons
+   (which stay where they are). */
+@media (orientation: portrait) and (max-width: 600px) {
+  .lightbox { padding-top: 68px; }
+  .lightbox-img { max-height: calc(100dvh - 92px); }
+}
 /* Phones turned sideways: the photo fills the screen top to bottom, whole photo visible (no crop).
    max-height keeps tablets and desktops on the layout above. */
 @media (orientation: landscape) and (max-height: 540px) {
   .lightbox { padding: 0; overflow: hidden; align-items: center; }
   .lightbox-slide { padding: 0; height: 100dvh; align-items: center; }
-  .lightbox-img { width: 100%; height: 100%; max-width: none; object-fit: contain; border-radius: 0; }
+  .lightbox-img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; border-radius: 0; }
   .lightbox-close { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+  .lightbox-fav { top: max(8px, env(safe-area-inset-top)); right: calc(max(8px, env(safe-area-inset-right)) + 44px); }
   .lightbox-prev { left: max(8px, env(safe-area-inset-left)); }
   .lightbox-next { right: max(8px, env(safe-area-inset-right)); }
 }
