@@ -1077,7 +1077,16 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .filter-none { font-size: 12px; color: var(--sub); margin-top: 4px; }
 .filter-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
 .filter-range { display: flex; gap: 10px; flex-wrap: wrap; }
-.filter-range label { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; font-size: 12px; color: var(--sub); }
+.filter-range label { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 150px; font-size: 12px; color: var(--sub); }
+/* Mobile date inputs have a built-in minimum width wider than half a phone screen, so they spilled
+   out of their column into each other. Let them shrink to the column (iOS Safari only honors that
+   with its native styling off, which also collapses an empty field — hence the min-height), and the
+   150px column minimum above wraps the two onto separate rows when they can't sit side by side. */
+.filter-range input[type="date"] {
+  min-width: 0; max-width: 100%; min-height: 40px;
+  -webkit-appearance: none; appearance: none;
+}
+.filter-range input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .filter-modal-ft {
   position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px;
   padding: 12px 16px; border-top: 1px solid var(--bord); background: var(--bg);

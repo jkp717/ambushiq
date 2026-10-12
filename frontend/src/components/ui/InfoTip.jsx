@@ -12,9 +12,13 @@ function InfoTip({ text }) {
   }, [open]);
   return (
     <span ref={ref} style={{ position: "relative", display: "inline-flex" }}>
-      <button type="button" className="icon-btn" title="What does this do?" onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ width: 16, height: 16, padding: 0, minHeight: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-        <Info size={12} color="var(--sub)" />
+      {/* 32×28 tap target for fingers; the negative margin keeps it taking only 16px of layout, and the
+          shorter height keeps it from reaching into the tightly stacked deer-rating rows */}
+      <button type="button" className="icon-btn" title="What does this do?" aria-label="What does this do?" aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        style={{ width: 32, height: 28, margin: "-6px -8px", padding: 0, minHeight: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                 position: "relative", zIndex: 1, touchAction: "manipulation" }}>
+        <Info size={14} color="var(--sub)" />
       </button>
       {open && (
         <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, width: 210,
