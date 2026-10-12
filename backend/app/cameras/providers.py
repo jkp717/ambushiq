@@ -29,6 +29,16 @@ import httpx
 log = logging.getLogger(__name__)
 
 
+def _strip_utc(ts: Optional[str]) -> Optional[str]:
+    """Remove a UTC marker ("Z" or "+00:00") from a timestamp that is really local wall-clock time."""
+    if not ts:
+        return ts
+    s = str(ts).strip()
+    if s.upper().endswith("Z"):
+        return s[:-1]
+    return s[:-6] if s.endswith(("+00:00", "-00:00")) else s
+
+
 class CameraError(Exception):
     pass
 
@@ -200,7 +210,10 @@ class SpyPointProvider(CameraProvider):
                 # `originDate` is when the camera took the photo; `date` is when it reached SpyPoint's
                 # servers. Cameras that upload in batches give a whole batch the same `date`, so it's
                 # only the fallback. `uploaded_at` lets rows saved under the old upload time be matched.
-                taken = p.get("originDate") or p.get("date")
+                # `originDate` comes from the camera's clock, which is set to local time, yet SpyPoint
+                # stamps it with a "Z". Drop the "Z" so the sync reads it as the property's local time.
+                # `date` is a real UTC time and keeps its "Z".
+                taken = _strip_utc(p.get("originDate")) or p.get("date")
                 photo_id = p.get("id") or p.get("_id")
                 key = photo_id or url
                 if key in seen:

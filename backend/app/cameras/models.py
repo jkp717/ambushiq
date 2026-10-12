@@ -32,6 +32,10 @@ class Camera(Base):
     last_seen_at: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     photo_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     photo_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 1 once this camera's stored photo times have been re-checked after the 3.37.2 fix (SpyPoint's
+    # capture time is the camera's local clock, not UTC). Until then the next sync reaches back over
+    # every stored photo and corrects their times.
+    times_rechecked: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     def to_dict(self) -> dict:
         # NEVER expose credentials

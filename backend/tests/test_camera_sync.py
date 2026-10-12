@@ -275,7 +275,34 @@ def test_spypoint_uses_the_capture_time_not_the_upload_time(monkeypatch):
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
     monkeypatch.setattr(providers.SpyPointProvider, "_login", lambda self, client: _async("tok"))
     out = asyncio.run(providers.SpyPointProvider({"username": "u", "password": "p"}).fetch_recent_photos(camera_ref="cam-A"))
-    assert out[0]["taken_at"] == iso(taken) and out[0]["uploaded_at"] == iso(uploaded)
+    # the capture time is the camera's local clock: its bogus "Z" is dropped, the real-UTC upload time keeps it
+    assert out[0]["taken_at"] == iso(taken)[:-1] and out[0]["uploaded_at"] == iso(uploaded)
+
+
+def test_a_spypoint_capture_time_is_read_as_property_local_time(env):
+    env["use"]([dict(photo("a", NOW), taken_at="2026-10-10T07:00:00")])           # 7 AM on the camera's clock
+    sync(env)
+    assert rows()[0].timestamp == "2026-10-10T12:00:00Z"                         # 7 AM CDT = 12:00 UTC
+
+
+def test_the_first_sync_after_the_fix_corrects_every_stored_photo_time_once(env):
+    old_local = (NOW - timedelta(days=40)).replace(tzinfo=None)
+    with Session(engine) as s:                     # stored by 3.32–3.37.1: local clock time saved as UTC
+        s.add(CameraSighting(camera_id=env["cid"], timestamp=iso(old_local), provider_photo_id="id:old",
+                             confidence_score=0.9, is_animal=1))
+        s.commit()
+    with Session(engine) as s:
+        s.get(Camera, env["cid"]).sync_cursor_at = (NOW - timedelta(hours=1)).isoformat()
+        s.commit()
+    gone = old_local + timedelta(hours=1)          # on SpyPoint but not stored here (deleted): not re-downloaded
+    prov = env["use"]([dict(photo("old", NOW), taken_at=old_local.isoformat()),
+                       dict(photo("gone", NOW), taken_at=gone.isoformat())])
+    out = sync(env)
+    assert prov.calls[0]["since"] <= NOW - timedelta(days=41) + timedelta(hours=1)   # reached back past the oldest
+    assert out["retimed"] == 1 and out["fetched"] == 0 and len(rows()) == 1
+    assert rows()[0].timestamp != iso(old_local) and camera().times_rechecked == 1
+    sync(env)
+    assert prov.calls[1]["since"] > NOW - timedelta(days=4)                          # only once
 
 
 async def _async(value):

@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.cameras import bucks as bucks_mod
@@ -232,6 +232,7 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
         region_id = cam.region_id
         cam_provider_ref = cam.provider_ref  # Spypoint cam ID for photo filtering
         cursor = _parse_iso(cam.sync_cursor_at or cam.last_sync_at)
+        recheck = brand == "spypoint" and not cam.times_rechecked
         # What we already have for this camera, by photo identity -> (row id, stored timestamp), so a
         # re-listed photo whose taken time was stored wrong can be corrected. Rows from before photo ids
         # were stored are matched by timestamp instead and adopt the id of the photo that matches them.
@@ -244,6 +245,8 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
                 known[pid] = (rid, ts)
             else:
                 legacy_by_ts[ts].append(rid)
+        oldest = _parse_iso(s.scalar(select(func.min(CameraSighting.timestamp))
+                                     .where(CameraSighting.camera_id == cid))) if recheck else None
 
     # Resolve the property timezone (now a per-region field) once for taken_at
     # normalization below.
@@ -261,6 +264,13 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
         # First sync — start from backfill_days ago instead of the beginning of time.
         since_dt = sync_started - timedelta(days=backfill_days)
         log.info("cam %s (%s): first sync — backfilling %d day(s)", camera_id, brand, backfill_days)
+    # One time after 3.37.2: SpyPoint capture times were stored as if UTC, but they're local. Reach back over
+    # every stored photo so the retime below corrects them. Photos older than the normal window that we
+    # don't have (e.g. deleted here) are not downloaded again.
+    recheck_before: Optional[datetime] = None
+    if oldest and oldest - timedelta(days=1) < since_dt:
+        recheck_before, since_dt = since_dt, oldest - timedelta(days=1)
+        log.info("cam %s (%s): re-checking stored photo times back to %s", camera_id, brand, since_dt.isoformat())
 
     log.info("cam %s (%s): starting sync — since=%s known=%d",
              camera_id, brand, since_dt.isoformat(), len(known) + sum(len(v) for v in legacy_by_ts.values()))
@@ -335,7 +345,10 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
                 log.warning("cam %s (%s): photo[%d] has no taken_at timestamp — skipped (raw=%s)", cid, brand, idx, p)
                 continue
             taken_dt = _parse_iso(taken_at)
+            old = bool(recheck_before and taken_dt and taken_dt < recheck_before)   # only here for the time re-check
             if not url:
+                if old:
+                    continue
                 log.warning("cam %s (%s): photo[%d] taken_at=%s has no URL — will retry", cid, brand, idx, taken_at)
                 if taken_dt:
                     failed_at.append(taken_dt)
@@ -367,6 +380,8 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
                             retimed += 1
                         s.commit()
                 known[key] = (rid, taken_at)
+                continue
+            if old:
                 continue
 
             log.info("cam %s (%s): photo[%d] taken_at=%s — downloading %s", cid, brand, idx, taken_at, url[:100])
@@ -433,6 +448,7 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
         if cam2:
             cam2.last_sync_at = datetime.now(timezone.utc).isoformat()
             cam2.sync_cursor_at = cursor_new.isoformat()
+            cam2.times_rechecked = 1
             s.commit()
 
     return {"new": new, "fetched": fetched, "no_animal": no_animal,
