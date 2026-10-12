@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections import defaultdict
@@ -11,7 +12,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cameras import bucks as bucks_mod
@@ -118,15 +119,38 @@ async def _backfill_species_task(sighting_ids: list[int]) -> None:
 
 
 async def find_deer_job(progress, region_id: int) -> str:
-    """Jobs-page entry: run detection again on this region's animal photos that are still on disk
-    and have no usable deer boxes yet (none at all, or a deer whose features couldn't be read), so the
-    buck trainer has deer to show straight away."""
+    """Jobs-page entry, newest photos first: (1) deer already outlined whose vector is missing or from
+    an older network get a fresh one from their saved box — classifier only, labels kept; (2) animal
+    photos never scanned (from before the buck model) run the full detector to outline each deer."""
     with Session(engine) as s:
+        stale = s.execute(bucks_mod.stale_vec_query(region_id, select(DeerDetection.id, CameraSighting.id))
+                          .order_by(CameraSighting.timestamp.desc())).all()
         ids = list(s.scalars(bucks_mod.unscanned_query(region_id, select(CameraSighting.id))
                              .order_by(CameraSighting.timestamp.desc())).all())
-    progress.set_total(len(ids))
-    found = 0
+    by_photo: dict[int, list[int]] = defaultdict(list)
+    for det_id, sid in stale:
+        by_photo[sid].append(det_id)
+    progress.set_total(len(by_photo) + len(ids))
+    found = refreshed = 0
     try:
+        for sid, det_ids in by_photo.items():
+            with Session(engine) as s:
+                row = s.get(CameraSighting, sid)
+                if not row or not row.image_path or not os.path.exists(row.image_path):
+                    progress.step()
+                    continue
+                progress.begin(os.path.basename(row.image_path))
+                dets = [s.get(DeerDetection, i) for i in det_ids]
+                vecs = await asyncio.to_thread(detection_mod.deer_vectors, row.image_path,
+                                               [json.loads(d.box_json) for d in dets])
+                model = bucks_mod.load_model()
+                for d, (vec, source) in zip(dets, vecs):
+                    if vec:
+                        d.vec, d.vec_source = bucks_mod.encode_vec(vec), source
+                        d.buck_score = bucks_mod.score(model, bucks_mod.decode_vec(d.vec), source)
+                        refreshed += 1
+                s.commit()
+                progress.step()
         for sid in ids:
             with Session(engine) as s:
                 row = s.get(CameraSighting, sid)
@@ -139,16 +163,16 @@ async def find_deer_job(progress, region_id: int) -> str:
                     progress.fail(str(sid), det.get("detector", "error"))
                     continue
                 if det.get("detections"):
-                    # replace an earlier attempt's boxes (kept only if someone already labeled them)
-                    s.execute(delete(DeerDetection).where(DeerDetection.sighting_id == sid,
-                                                          DeerDetection.label.is_(None)))
                     bucks_mod.record_detections(s, sid, det["detections"])
                     found += sum(1 for d in det["detections"] if d.get("features"))
                     s.commit()
                 progress.step()
     finally:
         detection_mod.unload_models()
-    return f"found {found} deer in {len(ids)} photo{'' if len(ids) == 1 else 's'}"
+    if refreshed:
+        await asyncio.to_thread(bucks_mod.train)    # tags made on the old vectors count again
+    out = f"found {found} deer in {len(ids)} photo{'' if len(ids) == 1 else 's'}"
+    return out + (f" · updated {refreshed} deer already found" if refreshed else "")
 
 
 SYNC_OVERLAP = timedelta(days=3)     # each sync re-lists this much history so late-uploaded photos are caught

@@ -157,6 +157,66 @@ def _classify(classifier, crop) -> tuple[str | None, float | None]:
     return str(res), None
 
 
+FEATURE_SOURCE = "dfne"   # the network deer vectors should come from; others get recomputed
+
+
+def _dfne_parts(classifier):
+    """(timm network, transform, class names) of a PytorchWildlife TIMM classifier, or None. DFNE keeps
+    its ViT in `.predictor` (see TIMM_BaseClassifierInference)."""
+    net = getattr(classifier, "predictor", None)
+    tf = getattr(classifier, "transform", None)
+    names = getattr(classifier, "CLASS_NAMES", None)
+    if net is None or tf is None or not names or not hasattr(net, "forward_head"):
+        return None
+    return net, tf, names
+
+
+def _dfne_pass(parts, crop) -> tuple[str, float, list[float]]:
+    """One DFNE forward pass on a crop: species, its confidence, and the pre-classification features —
+    the same species single_image_classification gives, without running the network twice."""
+    import torch  # type: ignore
+    from PIL import Image  # type: ignore
+    net, tf, names = parts
+    x = tf(Image.fromarray(crop)).unsqueeze(0).to(next(net.parameters()).device)
+    pre = net.forward_head(net.forward_features(x), pre_logits=True)
+    probs = torch.softmax(net.get_classifier()(pre), dim=1)[0]
+    i = int(probs.argmax())
+    return names[i], round(float(probs[i]), 3), [float(v) for v in pre.flatten().cpu().numpy()]
+
+
+def _crop(img, box_px):
+    x1, y1, x2, y2 = map(int, box_px)
+    return img[max(0, y1):y2, max(0, x1):x2]
+
+
+def deer_vectors(image_path: str, boxes: list[list[float]]) -> list[tuple[list[float] | None, str | None]]:
+    """Feature vectors for deer already outlined in a photo (boxes as fractions), without re-running
+    the detector — used to bring older vectors up to FEATURE_SOURCE. Never raises."""
+    try:
+        import numpy as np          # type: ignore
+        import torch                # type: ignore
+        from PIL import Image       # type: ignore
+        img = np.array(Image.open(image_path).convert("RGB"))
+        h, w = img.shape[:2]
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        classifier = _load_classifier(device=device)
+        parts = _dfne_parts(classifier)
+        out = []
+        with torch.inference_mode():
+            for b in boxes:
+                crop = _crop(img, (b[0] * w, b[1] * h, b[2] * w, b[3] * h))
+                if crop.size == 0:
+                    out.append((None, None))
+                elif parts:
+                    out.append((_dfne_pass(parts, crop)[2], FEATURE_SOURCE))
+                else:
+                    out.append(deer_features(classifier, crop, device))
+        return out
+    except Exception as e:
+        log.warning("detection: deer vectors failed on %s: %s: %s", image_path, type(e).__name__, e)
+        return [(None, None)] * len(boxes)
+
+
 def _load_feature_fallback(device: str):
     """A small ImageNet backbone (convnext_tiny), used for deer feature vectors only if DFNE's own
     network can't be reached. Loaded lazily and released by unload_models like the others."""
@@ -173,51 +233,15 @@ def _load_feature_fallback(device: str):
     return _FEATURE_FALLBACK
 
 
-_feature_source_logged = False
-_dfne_features_broken = False   # set once DFNE's features fail, so every later deer uses the same fallback
-
-
-def _features(net, tf, pil, device: str) -> list[float]:
-    import torch  # type: ignore
-    with torch.no_grad():
-        x = tf(pil).unsqueeze(0).to(device)
-        f = net.forward_features(x)
-        f = net.forward_head(f, pre_logits=True) if hasattr(net, "forward_head") else f.mean(dim=tuple(range(2, f.dim())))
-    return [float(v) for v in f.flatten().cpu().numpy()]
-
-
 def deer_features(classifier, crop, device: str) -> tuple[list[float] | None, str | None]:
-    """A feature vector describing one deer crop, for the buck model: DFNE's own pre-classification
-    features when its timm network is reachable (no extra model), else the convnext_tiny fallback —
-    also used from then on if DFNE's features ever fail, so sources don't flip back and forth.
-    Returns (vector, source name) — vectors from different sources aren't comparable — or (None, None)."""
-    global _feature_source_logged, _dfne_features_broken
+    """Fallback deer vector from convnext_tiny, for when the classifier isn't a TIMM model whose
+    features can be read (see _dfne_parts). Returns (vector, source) or (None, None)."""
     try:
         from PIL import Image  # type: ignore
-        pil = Image.fromarray(crop)
-    except Exception as e:
-        log.warning("detection: deer crop unreadable: %s: %s", type(e).__name__, e)
-        return None, None
-    net = getattr(classifier, "model", None)
-    tf = getattr(classifier, "transform", None) or getattr(classifier, "transforms", None)
-    if not _dfne_features_broken and net is not None and tf is not None and hasattr(net, "forward_features"):
-        try:
-            vec = _features(net, tf, pil, device)
-            if not _feature_source_logged:
-                log.info("detection: deer feature vectors from dfne")
-                _feature_source_logged = True
-            return vec, "dfne"
-        except Exception as e:
-            log.warning("detection: DFNE deer features failed (%s: %s) — switching to convnext_tiny",
-                        type(e).__name__, e)
-    _dfne_features_broken = True
-    try:
         net, tf = _load_feature_fallback(device)
-        vec = _features(net, tf, pil, device)
-        if not _feature_source_logged:
-            log.info("detection: deer feature vectors from convnext_tiny")
-            _feature_source_logged = True
-        return vec, "convnext_tiny"
+        x = tf(Image.fromarray(crop)).unsqueeze(0).to(device)
+        f = net.forward_head(net.forward_features(x), pre_logits=True)
+        return [float(v) for v in f.flatten().cpu().numpy()], "convnext_tiny"
     except Exception as e:
         log.warning("detection: deer feature extraction failed: %s: %s", type(e).__name__, e)
         return None, None
@@ -242,60 +266,78 @@ def detect_animal(image_path: str) -> dict:
                 "species": None, "species_confidence": None, "detections": []}
 
     try:
-        import numpy as np          # type: ignore
-        from PIL import Image       # type: ignore
-
-        model = _load_model()
-
-        img = np.array(Image.open(image_path).convert("RGB"))
-        h, w = img.shape[:2]
-        results = model.single_image_detection(img, img_path=image_path)
-
-        # 1. Every animal box at or above the threshold, most confident first
-        dets = results.get("detections")
-        boxes: list[tuple[float, object]] = []
-        if dets is not None and dets.confidence is not None and dets.class_id is not None:
-            for i, (cls_id, conf) in enumerate(zip(dets.class_id, dets.confidence)):
-                if int(cls_id) == ANIMAL_CLASS_ID:
-                    boxes.append((float(conf), dets.xyxy[i]))
-        boxes.sort(key=lambda b: b[0], reverse=True)
-        best_conf = boxes[0][0] if boxes else 0.0
-
-        is_animal = best_conf >= CONF_THRESHOLD
-        response = {
-            "is_animal": is_animal,
-            "confidence": round(best_conf, 3),
-            "detector": "megadetector",
-            "species": None,
-            "species_confidence": None,
-            "detections": [],
-        }
-
-        # 2. Classify each animal crop; deer also get a feature vector for the buck model
-        if is_animal:
-            # Determine the device MegaDetector is currently utilizing
-            device = "cuda" if "cuda" in str(getattr(model, "device", "cpu")) else "cpu"
-            classifier = _load_classifier(device=device)
-            for conf, box in [b for b in boxes if b[0] >= CONF_THRESHOLD][:MAX_ANIMALS]:
-                x1, y1, x2, y2 = map(int, box)
-                x1, y1 = max(0, x1), max(0, y1)
-                crop = img[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
-                species, species_conf = _classify(classifier, crop)
-                features, source = deer_features(classifier, crop, device) if is_deer(species) else (None, None)
-                response["detections"].append({
-                    "box": [round(x1 / w, 4), round(y1 / h, 4), round(min(x2, w) / w, 4), round(min(y2, h) / h, 4)],
-                    "det_conf": round(conf, 3), "species": species, "species_confidence": species_conf,
-                    "features": features, "feature_source": source,
-                })
-            if response["detections"]:
-                top = response["detections"][0]
-                response["species"], response["species_confidence"] = top["species"], top["species_confidence"]
-
-        return response
-
+        import torch                # type: ignore
+        # PytorchWildlife doesn't turn off autograd itself; inference mode is faster and leaner
+        with torch.inference_mode():
+            return _detect(image_path)
     except Exception as e:
         log.warning("Detection/Classification failed on %s: %s: %s", image_path, type(e).__name__, e)
         return {"is_animal": False, "confidence": 0.0, "detector": f"error ({type(e).__name__})",
                 "species": None, "species_confidence": None, "detections": []}
+
+
+_feature_source_logged = False
+
+
+def _detect(image_path: str) -> dict:
+    global _feature_source_logged
+    import numpy as np          # type: ignore
+    from PIL import Image       # type: ignore
+
+    model = _load_model()
+    img = np.array(Image.open(image_path).convert("RGB"))
+    h, w = img.shape[:2]
+    results = model.single_image_detection(img, img_path=image_path)
+
+    # 1. Every animal box at or above the threshold, most confident first
+    dets = results.get("detections")
+    boxes: list[tuple[float, object]] = []
+    if dets is not None and dets.confidence is not None and dets.class_id is not None:
+        for i, (cls_id, conf) in enumerate(zip(dets.class_id, dets.confidence)):
+            if int(cls_id) == ANIMAL_CLASS_ID:
+                boxes.append((float(conf), dets.xyxy[i]))
+    boxes.sort(key=lambda b: b[0], reverse=True)
+    best_conf = boxes[0][0] if boxes else 0.0
+
+    is_animal = best_conf >= CONF_THRESHOLD
+    response = {
+        "is_animal": is_animal,
+        "confidence": round(best_conf, 3),
+        "detector": "megadetector",
+        "species": None,
+        "species_confidence": None,
+        "detections": [],
+    }
+
+    # 2. Classify each animal crop; deer also get a feature vector for the buck model. With DFNE, one
+    #    forward pass gives both the species and the features.
+    if is_animal:
+        # Determine the device MegaDetector is currently utilizing
+        device = "cuda" if "cuda" in str(getattr(model, "device", "cpu")) else "cpu"
+        classifier = _load_classifier(device=device)
+        parts = _dfne_parts(classifier)
+        if not _feature_source_logged:
+            log.info("detection: deer feature vectors from %s", FEATURE_SOURCE if parts else "convnext_tiny")
+            _feature_source_logged = True
+        for conf, box in [b for b in boxes if b[0] >= CONF_THRESHOLD][:MAX_ANIMALS]:
+            x1, y1, x2, y2 = map(int, box)
+            x1, y1 = max(0, x1), max(0, y1)
+            crop = img[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            if parts:
+                species, species_conf, vec = _dfne_pass(parts, crop)
+                features, source = (vec, FEATURE_SOURCE) if is_deer(species) else (None, None)
+            else:
+                species, species_conf = _classify(classifier, crop)
+                features, source = deer_features(classifier, crop, device) if is_deer(species) else (None, None)
+            response["detections"].append({
+                "box": [round(x1 / w, 4), round(y1 / h, 4), round(min(x2, w) / w, 4), round(min(y2, h) / h, 4)],
+                "det_conf": round(conf, 3), "species": species, "species_confidence": species_conf,
+                "features": features, "feature_source": source,
+            })
+        if response["detections"]:
+            top = response["detections"][0]
+            response["species"], response["species_confidence"] = top["species"], top["species_confidence"]
+
+    return response

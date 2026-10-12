@@ -169,7 +169,11 @@ def _cv_accuracy(X, y) -> float:
 
 
 def _current_source(s: Session) -> Optional[str]:
-    """The network the newest deer vectors come from — vectors from different networks don't mix."""
+    """The network to train on — vectors from different networks don't mix. The preferred one
+    (detection.FEATURE_SOURCE) as soon as any deer has it, else whatever the newest deer has."""
+    from app.cameras.detection import FEATURE_SOURCE
+    if s.scalar(select(DeerDetection.id).where(DeerDetection.vec_source == FEATURE_SOURCE).limit(1)):
+        return FEATURE_SOURCE
     return s.scalar(select(DeerDetection.vec_source).where(DeerDetection.vec.isnot(None))
                     .order_by(DeerDetection.id.desc()).limit(1))
 
@@ -313,19 +317,25 @@ def queue(region_id: int, limit: int = 16) -> list[dict]:
 
 
 def unscanned_query(region_id: int, q):
-    """Restrict a CameraSighting query to this region's animal photos still on file that have no usable
-    deer boxes: never scanned (taken before the buck model existed), or a white-tailed deer whose
-    features couldn't be read. "Find deer in existing photos" works through these. Every animal photo
-    is included, not just ones labeled whitetail: a photo labeled for another animal can still have a
-    deer in it."""
-    from app.cameras.detection import DEER_SPECIES
-    unreadable = select(DeerDetection.sighting_id).where(
-        DeerDetection.vec.is_(None), func.lower(DeerDetection.species) == DEER_SPECIES.lower())
-    scanned = select(DeerDetection.sighting_id)
+    """Restrict a CameraSighting query to this region's animal photos still on file that were never
+    scanned for deer boxes (taken before the buck model existed). Every animal photo is included, not
+    just ones labeled whitetail: a photo labeled for another animal can still have a deer in it."""
     return (q.join(Camera, Camera.id == CameraSighting.camera_id)
             .where(Camera.region_id == region_id, Camera.is_deleted == 0, CameraSighting.is_animal == 1,
                    CameraSighting.image_path.isnot(None),
-                   or_(CameraSighting.id.not_in(scanned), CameraSighting.id.in_(unreadable))))
+                   CameraSighting.id.not_in(select(DeerDetection.sighting_id))))
+
+
+def stale_vec_query(region_id: int, q):
+    """Restrict a DeerDetection query to this region's deer (photo still on file) whose vector is missing
+    or came from another network than detection.FEATURE_SOURCE. Their boxes are kept, so only the
+    classifier has to run again — not the detector."""
+    from app.cameras.detection import DEER_SPECIES, FEATURE_SOURCE
+    return _in_region(q.select_from(DeerDetection), region_id).where(
+        Camera.is_deleted == 0, CameraSighting.image_path.isnot(None),
+        func.lower(DeerDetection.species) == DEER_SPECIES.lower(),
+        or_(DeerDetection.vec.is_(None), DeerDetection.vec_source.is_(None),
+            DeerDetection.vec_source != FEATURE_SOURCE))
 
 
 def status(region_id: int) -> dict:
@@ -336,7 +346,8 @@ def status(region_id: int) -> dict:
                                 .where(DeerDetection.label.isnot(None), DeerDetection.vec.isnot(None))
                                 .group_by(DeerDetection.label)).all())
         waiting = s.scalar(_queue_filter(select(func.count(DeerDetection.id)), region_id))
-        unscanned = s.scalar(unscanned_query(region_id, select(func.count(CameraSighting.id))))
+        unscanned = (s.scalar(unscanned_query(region_id, select(func.count(CameraSighting.id))))
+                     + s.scalar(stale_vec_query(region_id, select(func.count(func.distinct(CameraSighting.id))))))
     return {
         "available": detection.species_available(),
         "enabled": bool(model.get("enabled")), "cv_accuracy": model.get("cv_accuracy"),

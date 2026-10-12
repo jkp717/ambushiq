@@ -180,3 +180,30 @@ def test_unscanned_counts_photos_without_usable_deer(env):
         s.commit()
     assert bucks.status(1)["unscanned"] == 3
     assert bucks.status(2)["unscanned"] == 0
+
+
+def test_find_deer_refreshes_old_vectors_from_saved_boxes_and_keeps_tags(env, monkeypatch):
+    import asyncio
+    from app.cameras import detection, service
+    _s, d = env["add"](vec(True), label="buck")
+    with Session(engine) as s:
+        s.get(DeerDetection, d).vec_source = "convnext_tiny"          # from before DFNE features worked
+        s.commit()
+    assert bucks.status(1)["unscanned"] == 1
+    calls = []
+    monkeypatch.setattr(detection, "deer_vectors", lambda path, boxes: calls.append(boxes) or
+                        [(list(vec(True)), detection.FEATURE_SOURCE)] * len(boxes))
+    monkeypatch.setattr(detection, "detect_animal", lambda path: pytest.fail("detector should not run"))
+    trained = []
+    monkeypatch.setattr(bucks, "train", lambda *a: trained.append(1))   # (in-memory SQLite is per thread)
+
+    class P:
+        def set_total(self, n): pass
+        def begin(self, name): pass
+        def step(self): pass
+        def fail(self, key, msg): pass
+
+    out = asyncio.run(service.find_deer_job(P(), 1))
+    assert calls == [[[0.1, 0.1, 0.6, 0.9]]] and "updated 1" in out and trained == [1]
+    assert (det(d).vec_source, det(d).label) == (detection.FEATURE_SOURCE, "buck")
+    assert bucks.status(1)["unscanned"] == 0

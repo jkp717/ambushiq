@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { X, Maximize2, Check, Loader2 } from "lucide-react";
 import { api, withToken } from "../../services/api.js";
 import { formatDateTime } from "../../utils/formatters.js";
@@ -19,9 +19,11 @@ function BuckTrainer({ onClose, onStatus }) {
   const [batch, setBatch] = useState(1);
   const [preview, setPreview] = useState(null);       // a deer shown on its full photo
   const [justEnabled, setJustEnabled] = useState(false);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     try {
       const [q, st] = await Promise.all([api("/bucks/queue?limit=16"), api("/bucks/model")]);
       setItems(q.items); setStatus(st); setPicked(new Set()); setErr(null);
@@ -49,7 +51,10 @@ function BuckTrainer({ onClose, onStatus }) {
   const scanning = !!scan;
   useEffect(() => {
     if (!scanning) return;
-    const t = setInterval(async () => { if (!(await pollScan())) { setScanDone(true); load(); } }, SCAN_POLL_MS);
+    const t = setInterval(async () => {
+      if (!(await pollScan())) { setScanDone(true); if (!itemsRef.current.length) load(); }   // never wipe a batch mid-tap
+      else if (!itemsRef.current.length) load({ quiet: true });   // deer found so far can be tagged now
+    }, SCAN_POLL_MS);
     return () => clearInterval(t);
   }, [scanning, pollScan, load]);
 
@@ -104,6 +109,11 @@ function BuckTrainer({ onClose, onStatus }) {
 
       {justEnabled && (
         <div className="buck-trainer-note">Buck model is on — new photos will be marked automatically.</div>
+      )}
+      {scan && items.length > 0 && (
+        <div className="buck-trainer-note">
+          Still looking for deer in your photos{scan.total ? ` — ${Math.min(scan.processed + 1, scan.total)} of ${scan.total}` : ""}. More will show up in later batches.
+        </div>
       )}
       {err && <div className="buck-trainer-note warn">{err}</div>}
 
