@@ -1,282 +1,181 @@
-# AmbushIQ — self-hosted
+# AmbushIQ
 
-Ranks your hunting stands by wind, terrain-driven thermals, and scent direction.
-Each stand pulls a real USGS elevation grid and maps cold-air drainage channels
-(D8 flow accumulation) so dawn/dusk thermal calls are based on your actual terrain.
+**Know which stand to hunt before you leave the truck.**
 
-Runs as a Docker stack on your Debian server: a FastAPI app + PostgreSQL. The app
-is published on a local host port for your **existing nginx reverse proxy** to
-handle HTTPS and public traffic. All elevation and forecast calls happen
-server-side, so there's no browser sandbox to fight — your server reaches USGS
-and your chosen weather provider (Open-Meteo by default) directly.
+AmbushIQ is a self-hosted hunting planner. It ranks your stands for every sit based on the wind, the thermals on your own terrain, and where the deer actually are. It reads the real elevation of your property to work out where cold air drains at dawn and where thermals rise by mid-morning. It combines that with the hour-by-hour forecast to show where your scent will go. Then it adds what your trail cameras are seeing and what you've scouted on the ground. The result is a clear answer to the question every hunter asks: *where should I sit today?*
 
-## What's in the box
+It runs on your own server, keeps your spots private, and installs on your phone like a native app, with maps and forecasts that keep working where there's no signal.
 
-- **app** — FastAPI backend (terrain analysis, scoring engine, REST API) that also
-  serves the built React frontend as static files. Published on a host port.
-- **db** — PostgreSQL 17. Stores your stands and caches each stand's terrain grid,
-  so re-ranking is instant and terrain is only fetched once per location.
+---
 
-HTTPS, certificates, and public routing are handled by your nginx proxy, not here.
+## Features
 
-## Prerequisites
+### Stand ranking that understands your land
+- **Every sit, ranked.** Each morning, midday and evening window gets a ranked list of your stands, with the reasons behind every score.
+- **Scent cones from wind plus thermals.** The direction your scent travels blends the forecast wind with the thermal airflow on your terrain, and stands that blow scent onto deer approaches are flagged.
+- **Terrain-driven thermals.** USGS 3DEP elevation is analyzed across the whole property: slope, aspect, cold-air drainage, and the morning and evening switch between downslope and upslope flow.
+- **Lee-side eddies.** The app finds where wind curls behind ridges and swirls your scent, and explains why.
+- **Proximity scoring.** Stands earn credit for being near bedding, food, corridors and fresh sign. Corridor widths, cover around each stand, and season weighting are all adjustable.
 
-1. A Debian server (amd64) with Docker Engine + the Compose plugin:
-   ```sh
-   sudo apt update && sudo apt install -y docker.io docker-compose-v2
-   sudo systemctl enable --now docker
-   ```
-2. Your existing nginx reverse proxy (for TLS + domain).
+### Deer movement forecast
+- **A daily 1–5 movement rating** for the next two weeks, built on published deer research: the rut, barometric pressure, wind, rain and cold fronts.
+- **Your rut, your region.** Set your local breeding peak and the rating follows it.
+- **Factor breakdowns** show what is driving each day's score and how it changed from yesterday.
+- **Moon phase is left out on purpose.** The research doesn't support it.
 
-## Setup
+### A hunting map built for the woods
+- **Topo, imagery and dark base maps** from USGS, Esri and MapTiler, zoomable to 20, with hillshade, contours, and woods and water overlays.
+- **Live wind and thermal arrows** at every stand, in 15-minute steps, on a drag-up time slider.
+- **Map layers** for:
+  - Public land, from PAD-US and official Arkansas WMA boundaries
+  - Off-road trails from USFS MVUM
+  - Roads
+  - Recreation sites
+  - Drainage
+  - Lee eddies
+- **Draw your hunting picture:** stands with custom icons and colors, bedding and food zones, travel corridors, scrapes and rubs. You can place any of them at your current GPS location.
+- **Scouting suggestions** propose terrain funnels and habitat edges worth a look, which you can color, annotate and keep.
+- **Multi-select and bulk edit** for any mix of items on the map.
+- **Blue-dot location,** plus an edge arrow that points the way when you're off the visible map.
 
+### Trail cameras that do the sorting for you
+- **Automatic sync** with SpyPoint and Tactacam Reveal, with the other major brands ready to connect.
+- **AI photo sorting.** MegaDetector finds the animals and a species classifier names them, so a raccoon never counts as a deer.
+- **Buck identification.** Tag a few bucks and AmbushIQ trains a model on your own photos to spot bucks automatically. You set the minimum accuracy before it's used.
+- **Daily Activity graphs.** See sightings by hour of day or day by day, with an optional weather overlay (temperature, pressure, wind or rain) to see what gets your deer moving.
+- **A filterable gallery** by camera, species, date and time, with a swipeable full-screen viewer, deer outlines, and favorites that are never auto-deleted.
+- **Camera-backed rankings.** Recent daylight deer sightings boost a stand's score.
+
+### Works the way you hunt
+- **Installable phone app** (PWA) with dark mode.
+- **Offline ready.** Download map areas and keep the full forecast on the phone for places with no signal.
+- **Multiple properties,** each with its own map, cameras, timezone and weather.
+- **Your choice of weather source:**
+  - Open-Meteo and the National Weather Service, which are free
+  - OpenWeatherMap, WeatherAPI.com, Visual Crossing and Tomorrow.io, using your own key
+  - Automatic backfill of anything your provider doesn't report
+- **Stored weather history.** Past weather is saved per property, so your camera activity can be compared against real conditions.
+- **Imperial units** throughout.
+- **Background jobs** for camera sync, photo cleanup and weather history, with run-now buttons and live status in Settings.
+
+---
+
+## Getting started
+
+AmbushIQ runs as two Docker containers:
+- **The app:** a FastAPI backend that also serves the React interface.
+- **The database:** PostgreSQL 17.
+
+Your existing reverse proxy, such as nginx, handles HTTPS and your domain.
+
+### 1. Prerequisites
+- **A Linux server** (amd64) with Docker Engine and the Compose plugin:
+  ```sh
+  sudo apt update && sudo apt install -y docker.io docker-compose-v2
+  sudo systemctl enable --now docker
+  ```
+- **A reverse proxy** for TLS. A starting point is in `nginx.example.conf`.
+
+### 2. Configure
 ```sh
 cp .env.example .env
-nano .env            # set APP_TOKEN, POSTGRES_PASSWORD; adjust APP_BIND/APP_PORT if needed
-```
-
-Generate a strong DB password (and optional access key):
-```sh
 openssl rand -base64 24   # use for POSTGRES_PASSWORD
-openssl rand -base64 24   # use for APP_TOKEN (or leave blank if using external auth)
+openssl rand -base64 24   # use for APP_TOKEN (or leave it "unused", see below)
+nano .env
 ```
 
-> **Authentication note**: `APP_TOKEN` can be left blank or set to `unused` if authentication will be handled by another process (such as Authentik, Authelia, or Cloudflare Access forward auth). When unset or `unused`, the app automatically disables its internal login prompt. If `APP_TOKEN` is set to a secret key, the app requires this access key on all API calls and prompts for it in the web UI.
-
-Build and start:
+### 3. Launch
 ```sh
 docker compose up -d --build
-```
-
-The app is now listening on `127.0.0.1:8000` (default). Confirm it's up:
-```sh
 curl -s http://127.0.0.1:8000/api/health
-# {"ok":true,"auth_required":true,"version":"2.21.0"}  (or "auth_required":false if token is blank/unused)
 ```
 
-## Day-to-day
+### 4. Set up your property
+1. Open the app and create a **region** for your property.
+2. Add your **stands** on the Map page.
+3. Run **Analyze terrain** so each stand gets its elevation and drainage model.
+4. Add **zones, corridors and sign** as you scout.
+5. Connect your **trail cameras** in Cameras → Setup.
+6. The **Outlook** page now ranks your stands for every sit.
+
+To put it on your phone, open the site in your phone's browser and use **Settings → Install app**, or your browser's "Add to Home Screen".
+
+### Day-to-day commands
 
 | Action | Command |
 |---|---|
 | View logs | `docker compose logs -f app` |
 | Restart | `docker compose restart` |
-| Update after code changes | `docker compose up -d --build` |
+| Update to a new version | `git pull && docker compose up -d --build` |
 | Stop | `docker compose down` |
-| Stop and wipe the database | `docker compose down -v` *(deletes your stands)* |
+| Stop and **erase all data** | `docker compose down -v` |
 
-## How it works
+---
 
-- **Add a stand**: enter a name + lat/lon, then **Analyze terrain**. The backend
-  samples a 40×40 elevation grid (~800 m box) from USGS 3DEP (falls back to
-  Open-Meteo), computes slope/aspect and the cold-air drainage direction, and
-  caches the result in Postgres.
-- **Choose a sit**: the app pulls a 3-day forecast for your land and offers each
-  morning/evening window. Pick one and your stands are ranked.
-- **Ranking** weighs scent safety (does your combined wind+thermal scent cone blow
-  away from where deer approach), thermal phase (sinking down the drainage at
-  dawn/dusk, rising mid-day), and wind steadiness.
-- **Manual mode**: punch in wind direction/speed/gust and time of day to rank
-  without a forecast — useful as a fallback or for "what if" checks.
+## Advanced configuration
 
-## Backups
+### Environment settings (`.env`)
 
-Your data lives in the `dbdata` Docker volume. To back it up:
+| Setting | Default | What it does |
+|---|---|---|
+| `APP_TOKEN` | `unused` | Access key for the app. Leave it `unused` when another layer handles sign-in (see below). |
+| `APP_BIND` / `APP_PORT` | `127.0.0.1` / `8000` | Where the app listens. Use `0.0.0.0` only if your proxy is on another machine, and firewall the port. |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `ambush` / — / `ambushiq` | Database credentials. The password also protects stored camera and weather-service logins. |
+| `CAMERA_IMAGE_PATH` | `./data/camera_images` | Where trail-camera photos are kept on the host. |
+| `DETECTOR_MODE` | `megadetector` | `megadetector` filters photos with AI. `fallback` skips AI, which gives a much smaller image and counts every photo. |
+| `DETECTOR_MODEL` | `MDV6-yolov10-c` | Which MegaDetector to load. `MDV5A` is lighter. |
+| `DETECTOR_CONF` | `0.2` | Minimum detection confidence. Lower values catch more animals but also more false alarms. |
+| `LOG_LEVEL` | `WARNING` | `INFO` adds camera-sync diagnostics and `DEBUG` gives a full trace. |
+
+### Authentication
+- **Built-in key:** when `APP_TOKEN` is set to a secret, every API call needs the key and the app asks for it at sign-in.
+- **External sign-in:** if you already use Authentik, Authelia, Cloudflare Access or similar forward auth, set `APP_TOKEN=unused` and the app trusts the requests your proxy lets through.
+
+### Weather providers
+Choose a source in **Settings → Weather source**.
+- **No key needed:** Open-Meteo, the default, and the National Weather Service (US only).
+- **Your own key:** the other providers. Keys are encrypted at rest.
+- **Secondary provider:** if your main source doesn't report solar radiation or runs short of days, it fills in hour by hour.
+
+### Trail cameras and AI models
+- **Photo detection:** the first build downloads PyTorch and the MegaDetector weights. These are cached in the `modelcache` volume, so rebuilds stay quick. On low-power hardware, `DETECTOR_MODE=fallback` skips detection entirely.
+- **Detection settings:** sync interval, photo retention, the camera ranking boost and the confidence threshold are all in **Settings → Trail cameras**.
+- **Buck model:** train it in **Settings → Model training**.
+  1. Tag bucks and does in the photo viewer.
+  2. Run **Find deer in my photos**.
+  3. Train.
+
+  The model switches on only when its measured accuracy meets your minimum.
+
+### Tuning the models
+These settings are in Settings, each with an explanation next to it:
+- **Thermal model:** the wind speed where thermals fade, how sharply they fade, and the midday mixing discount.
+- **Daily rating:** your rut peak date and the factor weights.
+- **Proximity weights:** how much bedding, food, corridors and sign count, and the scent-safety gate.
+- **Scouting suggestions:** how candidate spots are chosen.
+
+### Backups
+Everything you've entered lives in the `dbdata` volume, and photos live in `CAMERA_IMAGE_PATH`.
 ```sh
+# back up
 docker compose exec db pg_dump -U ambush ambushiq > ambushiq-backup.sql
-```
-Restore into a fresh stack:
-```sh
+# restore into a fresh stack
 cat ambushiq-backup.sql | docker compose exec -T db psql -U ambush ambushiq
 ```
 
-## Security notes
+### Security
+- **Database:** PostgreSQL is only reachable inside the Docker network.
+- **App port:** with the default `APP_BIND=127.0.0.1`, only a proxy on the same host can reach the app.
+- **Stored logins:** camera and weather-service credentials are encrypted at rest.
+- **Secrets:** keep `.env` out of version control. It is already in `.gitignore`.
 
-- When `APP_TOKEN` is set, all API endpoints (except `/api/health`) require the `APP_TOKEN`
-  bearer key, preventing unauthorized visitors from reading or editing your stands.
-- If authentication is handled upstream (e.g. Authentik forward auth), leave `APP_TOKEN` blank
-  or set to `unused`. The app will trust upstream requests without prompting for a key.
-- Postgres is only reachable inside the Docker network — not published to the host.
-- With the default `APP_BIND=127.0.0.1`, the app port isn't exposed beyond
-  loopback; only your nginx proxy can reach it.
-- Keep `.env` out of version control (`.gitignore` already excludes it).
+### Data sources and limits
+- **Elevation:** USGS 3DEP covers the US. Elsewhere the app falls back to Open-Meteo's coarser global grid.
+- **Trails layer:** covers National Forest land only.
+- **State WMA boundaries:** currently Arkansas.
+- **Thermals and scent:** AmbushIQ applies terrain-aware rules, not an airflow simulation. It knows where drainages run and where cold air pools, but the swirl off a particular field edge still comes from the wind checker in your stand.
 
-## Notes & limits
-
-- USGS 3DEP is US-only; outside the US it uses the Open-Meteo global grid (coarser).
-- This is **terrain analysis driving smarter rules**, not airflow simulation. It
-  nails where drainages run and where cold air pools, but it won't model swirl off
-  a specific field edge or thicket — that last bit still comes from your wind
-  checker in the stand.
-
-## Property map (v2.1)
-
-The main page now shows a topographic map of your whole property:
-
-- **Basemap**: USGS topo tiles (contours + shaded relief), with an Imagery+Topo
-  layer toggle in the map's top-right corner. Tiles load client-side from USGS.
-- **Per-stand indicators**: a solid navy arrow for **wind** direction, a dashed
-  blue arrow for **thermal** drift, and an amber arrow for the stored **deer
-  approach**. The best-ranked stand for the selected hour gets a red ring.
-- **Day picker + hourly slider**: pick a day, then scrub hour by hour. The wind
-  and thermal arrows rotate live, and the selected hour also drives the ranked
-  "Best stand" list below — they stay in sync.
-- **Draw tools**: add **bedding** and **food** zones (click to drop) and trace
-  **deer corridors** (click points along the path, then Finish). These persist
-  in the database and can be deleted from the chips under the map.
-- **Layer toggles**: show/hide wind, thermal, deer, corridors, and zones to keep
-  the view readable.
-
-Leaflet (the map library) loads from a CDN in `index.html`; no extra npm
-dependency. New API endpoints: `/api/zones`, `/api/corridors`, `/api/hours`,
-`/api/map/conditions`. The database gains `zones` and `corridors` tables, created
-automatically on startup — your existing stands are untouched.
-
-## Deer movement day rating (v2.7)
-
-Each forecast day gets a 1–5 deer rating (shown on the Map page under the date
-picker) estimating **daytime** movement — when you can catch deer moving in legal
-light. Tap it to expand the factor breakdown.
-
-The model is grounded in peer-reviewed findings and Arkansas reproduction data:
-
-- **Rut / season** is the dominant driver (partial-migration and fractal-path
-  movement studies). Modeled as a calendar curve for central Arkansas — peak
-  breeding ~Dec 5 (Wilson & Sealander / AGFC), with the best daylight cruising in
-  the seeking/chasing weeks beforehand. Acts as a multiplier on weather.
-- **Barometric pressure** — high and/or rapidly-changing pressure correlates with
-  daylight activity spikes (EKU Taylor Fork study). Sweet spot ~30.0–30.4 inHg.
-- **Wind** — moderate wind *increases* daytime buck movement (scenting); calm and
-  very high wind are mildly suppressive. Modeled as a curve peaking ~9 mph.
-- **Rain** — heavy rain strongly suppresses movement; partially blunted by high wind.
-- **Temperature** — treated as a daytime *shift* factor, not a volume factor: a day
-  cooler than the recent baseline (a front) pushes movement into daylight; a warm
-  spell shifts it to night.
-- **Moon phase — deliberately excluded.** MSU "Lunar Legends" found no statistically
-  significant effect on buck activity; including it would add noise.
-
-Weather inputs are daytime (sunrise–sunset) aggregates from Open-Meteo. The rut peak
-date is currently fixed for central Arkansas; it can be made configurable later.
-The factor weights are a reasoned synthesis of the cited research, not coefficients
-lifted verbatim from any single paper — tune against what you observe on your land.
-
-## v2.15 — Trail cameras, background sync, configurable rut
-
-- **Trail cameras**: connect cameras in Settings → Trail Cameras via a 3-step wizard
-  (brand → credentials → pair to a stand). SpyPoint has a working integration; the
-  other brands (Reveal, Moultrie, Stealth Cam, Browning, Spartan) are scaffolded but
-  not yet wired to real endpoints — they save but won't sync until implemented.
-  Credentials are encrypted at rest with a key derived from POSTGRES_PASSWORD.
-- **Background scheduler** (APScheduler): syncs cameras every N minutes (configurable),
-  runs photos through MegaDetector to keep only real animal detections, and records
-  daylight sightings. A nightly 3 AM job deletes photos older than the retention window
-  while keeping the sighting records for model tuning.
-- **Camera boost**: stands with recent (72h) daylight camera sightings matching the
-  current hunt period get a positive-only ranking boost, capped by max_camera_boost_pct.
-  Never penalizes stands without photos.
-- **Configurable rut date**: set your regional breeding-peak month/day in Settings →
-  Daily Rating (central AR ≈ Dec 5, north AR ≈ Nov 13).
-- **Score breakdowns**: stand rank cards and the daily rating expand to show itemized
-  factor contributions.
-- **Settings** reorganized into three tabs: Best Stand, Daily Rating, Trail Cameras.
-
-### Notes for operators
-- MegaDetector pulls PyTorch + a model download — the image is much larger and the
-  first build is slow. Set DETECTOR_MODE=fallback in .env to skip detection (every
-  photo counts as a low-confidence sighting) if it's too heavy on your host.
-- Camera JPEGs are saved to the user-configured storage directory (defaults to `/app/data/camera_images` in the `camera_images` Docker volume) organized as `[directory]/[Camera Brand]/[Camera Name]/`.
-
-## v2.19 — Thermal coherence model
-
-Real anabatic (upslope) airflow is physically strongest near solar noon, but in
-practice wind dominates scent through the middle of the day — thermals only
-reliably drive scent right after sunrise and right before sunset. The scoring
-engine now models this by splitting thermal influence into two parts:
-
-- **Potential** — the raw, solar-driven strength of upslope/downslope airflow
-  (unchanged from before).
-- **Coherence** — how much of that potential actually survives into the net
-  scent direction, instead of being overwhelmed by wind or midday convective
-  mixing. Coherence decays continuously with wind speed (rather than a blunt
-  on/off cutoff), plus an extra discount during the sun-driven "rising" phase
-  to reflect that thermals are least reliable mid-day even in calm wind.
-
-The wind fade point, fade sharpness, and midday mixing discount are all
-tunable in **Settings → Daily Rating → Thermal model**, with an info icon next
-to each explaining what it changes. Values are stored per-deployment in the
-database.
-
-## v2.20 — Corridor width, stand visibility, camera & map polish
-
-- **Corridor width**: a corridor can now have a width (a travel-zone buffer)
-  instead of being scored as an infinitely thin line. A stand inside that
-  buffer gets full proximity credit; once outside it, distance is measured
-  from the buffer's edge rather than the raw center-line.
-- **Stand visibility**: each stand can set its own visibility/cover radius,
-  overriding the corridor's or global falloff just for that stand — a stand in
-  open hardwoods can "see" a corridor from farther away than one boxed into
-  thick cover.
-- **Camera discovery**: re-connecting a camera brand account now shows a
-  checkbox per discovered camera. Previously-removed ("skipped") cameras are
-  unchecked by default but can be checked to bring them back, instead of being
-  permanently excluded from every future discovery run.
-- **Map UI**: the hour slider now paints its morning/midday/evening color band
-  directly on the track (with the thumb rendered on top), adds hour/15-minute
-  tick marks, and shows a tooltip with the selected time while hovering or
-  dragging. The weather pills (cloud/temp/wind) moved off the cramped top bar
-  into a floating card in the map's bottom-right corner. The layer-toggle
-  button now uses a plus icon.
-- **Fixes**: editing a corridor or zone from the map now switches to the
-  correct Zones sub-tab instead of leaving the edit modal on a hidden tab; the
-  app shell (`index.html`) is now served with no-cache headers while the
-  hashed JS/CSS bundles cache aggressively, so browsers (phones especially)
-  pick up new versions right after a deploy instead of caching a stale shell
-  indefinitely.
-
-## v2.21 — Deer species classification
-
-Trail-camera sightings now go through a species classifier on top of the
-existing MegaDetector animal-detection step, so the camera boost reflects
-actual deer activity instead of "any animal that triggered the camera":
-
-- Each photo's tightest animal crop (from MegaDetector) is classified by
-  **DFNE** (Deepfaune–New England, via PytorchWildlife) into one of 24
-  North-American species, including white-tailed deer.
-- The trail-camera ranking boost now only counts sightings **confirmed as
-  white-tailed deer** — a crow, raccoon, coyote, etc. no longer boosts a
-  stand's score. Non-deer sightings are still recorded and shown in the camera
-  log, labeled with their species.
-- A **"Reclassify existing photos"** button on the Cameras page backfills
-  species for sightings recorded before this feature existed, as long as the
-  original photo is still saved on disk (within your `image_retention_days`
-  window).
-- MegaDetector and the species classifier are unloaded from memory after each
-  sync batch (and only ever load when there's an actual new photo to process),
-  to keep the memory footprint low on modest, GPU-less hardware.
-- Buck/doe (sex) classification isn't included — no lightweight pretrained
-  model does this reliably; this is species identification only.
-
-## v2.25 — Selectable weather providers
-
-The forecast source is now pluggable via **Settings → Weather source**, instead
-of being hard-wired to Open-Meteo:
-
-- **Open-Meteo** remains the default (free, no key, includes solar radiation).
-- **National Weather Service** is a second fully-working, no-key option
-  (US-only coverage).
-- **OpenWeatherMap**, **WeatherAPI.com**, **Visual Crossing**, and
-  **Tomorrow.io** are also available — each needs an API key entered in
-  Settings, encrypted at rest the same way trail-camera credentials are. These
-  four are implemented against each vendor's documented API but, unlike
-  Open-Meteo/NWS, haven't been exercised against a live paid account; treat
-  them the way the non-SpyPoint camera brands are treated — expect to verify
-  once you've got a real key in.
-- **Secondary provider (solar radiation backfill)**: the thermal model needs
-  solar radiation, which NWS, OpenWeatherMap, WeatherAPI.com, and Tomorrow.io
-  don't report. When you pick one of those as primary, Settings offers a
-  secondary provider (Open-Meteo or Visual Crossing, the two that do report
-  it) used only to fill that one field, hour by hour. With no secondary
-  chosen, a rough daylight/cloud-cover estimate is used instead so scoring
-  never breaks — just less precisely.
-- All providers normalize to the same internal forecast shape, so switching
-  providers doesn't change how ranking, the day rating, or the map work —
-  only where the underlying weather data comes from.
+### Development
+- **Backend tests:** from `backend/`, run `python -m pytest tests -q`.
+- **Frontend:** a Vite + React app in `frontend/`. Use `npm install && npm run dev` while developing; the Docker build runs `npm run build`.
+- **Versions:** the current version is in `VERSION` and is reported by `/api/health`.
