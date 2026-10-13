@@ -202,6 +202,31 @@ function recSitePopup(p) {
   </div>`;
 }
 
+// The lee-eddy layer's image for one zone, drawn once and reused: slots from the saved forecast share one
+// zone object per wind direction, so scrubbing the time slider doesn't redraw and re-encode it every step.
+const leeImages = new WeakMap();
+function leeZoneImage(z) {
+  let url = leeImages.get(z);
+  if (url) return url;
+  const rows = z.rows, H = rows.length, W = rows[0].length;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      const val = rows[r][c];
+      if (val === "0") continue;
+      // eddy zone = translucent teal; separating crest = solid darker teal
+      ctx.fillStyle = val === "2" ? "rgba(8, 82, 92, 0.9)" : "rgba(14, 124, 138, 0.38)";
+      ctx.fillRect(c, r, 1, 1);
+    }
+  }
+  url = canvas.toDataURL();
+  leeImages.set(z, url);
+  return url;
+}
+
 // Plain-English lee-eddy explanation for the stand popup: what to expect, then the numbers behind it.
 function eddyNoteHtml(eddy, leeLayerOn) {
   if (!eddy) return "";
@@ -1435,21 +1460,7 @@ const HuntMap = forwardRef(function HuntMap({
     g.clearLayers();
     const z = conditions?.lee_zone;
     if (!layers.leeEddies || !z) return;
-    const rows = z.rows, H = rows.length, W = rows[0].length;
-    const canvas = document.createElement("canvas");
-    canvas.width = W;
-    canvas.height = H;
-    const ctx = canvas.getContext("2d");
-    for (let r = 0; r < H; r++) {
-      for (let c = 0; c < W; c++) {
-        const val = rows[r][c];
-        if (val === "0") continue;
-        // eddy zone = translucent teal; separating crest = solid darker teal
-        ctx.fillStyle = val === "2" ? "rgba(8, 82, 92, 0.9)" : "rgba(14, 124, 138, 0.38)";
-        ctx.fillRect(c, r, 1, 1);
-      }
-    }
-    L.imageOverlay(canvas.toDataURL(), z.bounds, {
+    L.imageOverlay(leeZoneImage(z), z.bounds, {
       opacity: 0.85, interactive: false, className: "pixelated-overlay",
     }).addTo(g);
   }, [conditions, ready, layers.leeEddies]);

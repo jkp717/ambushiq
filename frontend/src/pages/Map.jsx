@@ -123,6 +123,8 @@ const RECSITES_LEGEND = [
   ["#8D6E00", "Trailhead"], ["#2E7D32", "Campground"], ["#EF6C00", "Picnic site"], ["#1565C0", "Day-use area"],
 ];
 
+const THUMB_PX = 18;   // the time slider's thumb width (input[type="range"] in styles.css)
+
 // Add-menu modes that place a single point (vs. drawing a corridor or a scouting area).
 const POINT_ADDS = ["stand", "food", "bedding", "scrape", "rub"];
 
@@ -169,6 +171,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [hourPos, setHourPos] = useState(0);
   const [sliderHovering, setSliderHovering] = useState(false);
   const [sliderDragging, setSliderDragging] = useState(false);
+  const touchDragRef = useRef(false);   // a finger is dragging the time slider (see slotFromTouch)
   const [utcOffset, setUtcOffset] = useState(0);
   const [conditions, setConditions] = useState(null);
   const [playing, setPlaying] = useState(false);
@@ -280,10 +283,10 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
 
   useEffect(() => {
     if (!sliderDragging) return;
-    const end = () => setSliderDragging(false);
-    window.addEventListener("mouseup", end);
-    window.addEventListener("touchend", end);
-    return () => { window.removeEventListener("mouseup", end); window.removeEventListener("touchend", end); };
+    const end = () => { touchDragRef.current = false; setSliderDragging(false); };
+    const evts = ["mouseup", "touchend", "touchcancel"];
+    evts.forEach((ev) => window.addEventListener(ev, end));
+    return () => evts.forEach((ev) => window.removeEventListener(ev, end));
   }, [sliderDragging]);
 
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
@@ -460,8 +463,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       if (hit) { setConditions(hit); headStart = true; }
     }
     // Until the live hours list is in, curHour.index may come from a copy saved on an earlier day,
-    // which would ask the server for the wrong hour.
-    if (!hoursSettled) return () => { cancel = true; };
+    // which would ask the server for the wrong hour. While the slider is being dragged the saved slot is
+    // enough: no request per slot passed; the slot the finger stops on is fetched once it lifts.
+    if (!hoursSettled || (sliderDragging && headStart)) return () => { cancel = true; };
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), headStart ? 4000 : 12000);
     api("/map/conditions", { method: "POST", signal: ctl.signal,
@@ -483,7 +487,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
         if (!cancel) setFirstSlotDone(true);
       });
     return () => { cancel = true; ctl.abort(); clearTimeout(timer); };
-  }, [curIso, curHour?.index, curMinute, layers.leeEddies, hoursSettled]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [curIso, curHour?.index, curMinute, layers.leeEddies, hoursSettled, sliderDragging]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The saved forecast arrived after the slot was requested: show that slot from it now, flagged as the
   // phone's copy when the request failed, or as a head start while the live answer is still on its way.
@@ -736,7 +740,10 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           tab={(() => {
             const h = curHour?.hour ?? 0, ampm = h >= 12 ? "PM" : "AM";
             const time = curHour ? `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}` : "";
-            return <><GripHorizontal size={18} /><span>{[curDay?.label, time].filter(Boolean).join(" · ") || "Time"}</span></>;
+            // the time sits in a fixed-width box so the tab doesn't grow and shrink while scrubbing
+            return <><GripHorizontal size={18} />
+              <span>{curDay?.label || (!time && "Time")}{curDay?.label && time && " ·"}</span>
+              {time && <span className="map-time-fixed">{time}</span>}</>;
           })()}>
         <div className="map-ctrl-panel">
           {/* Single compact row: date nav + time (weather moved to a floating card on the map) */}
@@ -776,6 +783,18 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             const numSlots = curDay.hours.length * 4;
             const hPct = (h) => `${Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100)).toFixed(1)}%`;
             const pctNum = (h) => Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100));
+            // A finger on the slider: the slot under it, measured the way the browser places the thumb (the
+            // track is inset by half the thumb at each end). The only thing that moves the slider during a
+            // touch drag, so it can't flip between two readings of the same finger position.
+            const slotFromTouch = (e) => {
+              const t = e.touches[0];
+              if (!t) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left - THUMB_PX / 2) / Math.max(1, rect.width - THUMB_PX)));
+              const slot = Math.round(ratio * maxSlot);
+              setPlaying(false);
+              setHourPos((p) => (p === slot ? p : slot));
+            };
             const slotPct = (pos) => `${Math.max(0, Math.min(100, (pos / (numSlots - 1)) * 100)).toFixed(1)}%`;
             const clock = (t) => {
               const hh = Math.floor(t), mm = Math.round((t - hh) * 60);
@@ -812,18 +831,15 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                       min={0} max={maxSlot}
                       value={Math.min(hourPos, maxSlot)}
                       style={{ background: trackGradient }}
-                      onChange={(e) => { setPlaying(false); setHourPos(+e.target.value); }}
-                      onTouchMove={(e) => {
-                        const t = e.touches[0];
-                        const rect = e.target.getBoundingClientRect();
-                        const ratio = Math.max(0, Math.min(1, (t.clientX - rect.left) / rect.width));
-                        setPlaying(false);
-                        setHourPos(Math.round(ratio * maxSlot));
+                      onChange={(e) => {
+                        if (touchDragRef.current) return;        // a finger drag is placed by slotFromTouch alone
+                        setPlaying(false); setHourPos(+e.target.value);
                       }}
+                      onTouchStart={(e) => { touchDragRef.current = true; setSliderDragging(true); slotFromTouch(e); }}
+                      onTouchMove={slotFromTouch}
                       onMouseEnter={() => setSliderHovering(true)}
                       onMouseLeave={() => setSliderHovering(false)}
-                      onMouseDown={() => setSliderDragging(true)}
-                      onTouchStart={() => setSliderDragging(true)} />
+                      onMouseDown={() => setSliderDragging(true)} />
                     {(sliderHovering || sliderDragging) && curHour && (() => {
                       const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
                       const thumbPct = maxSlot > 0 ? (Math.min(hourPos, maxSlot) / maxSlot) * 100 : 0;
