@@ -138,8 +138,10 @@ def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int
 
     items = []
     for st in stands:
-        det = ctx.score(st, hour, period, windows)
-        vec = dict(scoring.stand_hour_vectors(st, hour, ctx.thermal_params, ctx.eddy_site(st)))
+        # one wind/thermal/scent pass per stand feeds both its score and its map arrows
+        base = scoring.score_stand_hour(st, hour, ctx.thermal_params, ctx.eddy_site(st))
+        det = ctx.score(st, hour, period, windows, base=base)
+        vec = dict(scoring.stand_hour_vectors(st, hour, ctx.thermal_params, ctx.eddy_site(st), base=base))
         vec["total"] = det["final_score"]
         if ctx.camera_scoring_on and st["id"] in ctx.camera_state:
             vec["camera_boost"] = det["camera"]
@@ -323,8 +325,9 @@ async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=D
             "time": one["time"],
             "lee": eddy_mod.lee_zone_key(hour["wind_dir"], hour["wind_speed"], hour["gust"]),
             "items": [{"stand_id": it["stand"]["id"], "vectors": it["vectors"]} for it in one["stands"]],
-            "ranked": [{"stand_id": r["stand"]["id"], "avg": r["avg"], "sample": r["sample"]}
-                       for r in one["ranked"]],
+            # id + average is all the map reads; each stand's "sample" repeats the slot's weather (about
+            # half the download)
+            "ranked": [{"stand_id": r["stand"]["id"], "avg": r["avg"]} for r in one["ranked"]],
         }
 
     def build() -> tuple[list[dict], dict]:

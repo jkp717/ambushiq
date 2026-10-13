@@ -14,6 +14,20 @@ import DayRankCard from "../components/DayRankCard.jsx";
 
 // Where a day's ranking is kept on the phone: one copy per day and proximity-toggle combination.
 const dayKey = (day, p) => `/day/ranked/${day}/${+p.corridor}${+p.food}${+p.bedding}`;
+
+// A day's ranking, shared while in flight: the day on screen and the background save of every day both ask
+// for today (with the default toggles) at the same moment on open, and should share one request.
+const inFlight = new Map();
+function fetchDayRanked(day, p) {
+  const key = dayKey(day, p);
+  if (!inFlight.has(key)) {
+    const req = apiSaved("/day/ranked", { key, method: "POST",
+      body: JSON.stringify({ day, use_corridor: p.corridor, use_food: p.food, use_bedding: p.bedding }) });
+    inFlight.set(key, req);
+    req.finally(() => inFlight.delete(key)).catch(() => {});
+  }
+  return inFlight.get(key);
+}
 const ALL_ON = { corridor: true, food: true, bedding: true };
 
 function TodayPage({ stands, onGoDraw }) {
@@ -65,9 +79,7 @@ function TodayPage({ stands, onGoDraw }) {
       const next = () => {
         const day = queue.shift();
         if (!day || cancel) return Promise.resolve();
-        return apiSaved("/day/ranked", { key: dayKey(day, ALL_ON), method: "POST",
-                                         body: JSON.stringify({ day, use_corridor: true, use_food: true, use_bedding: true }) })
-          .catch(() => {}).then(next);
+        return fetchDayRanked(day, ALL_ON).catch(() => {}).then(next);
       };
       next(); next();
     }).catch(() => {});
@@ -79,8 +91,7 @@ function TodayPage({ stands, onGoDraw }) {
   useEffect(() => {
     if (!curDay) return;
     let cancel = false;
-    apiSaved("/day/ranked", { key: dayKey(curDay.day, useProx), method: "POST",
-                              body: JSON.stringify({ day: curDay.day, use_corridor: useProx.corridor, use_food: useProx.food, use_bedding: useProx.bedding }) })
+    fetchDayRanked(curDay.day, useProx)
       .then((j) => {
         if (cancel) return;
         setDayRanked(j);

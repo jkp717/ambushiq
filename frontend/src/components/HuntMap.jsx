@@ -202,6 +202,13 @@ function recSitePopup(p) {
   </div>`;
 }
 
+// Every stand, zone and corridor point: what the map fits itself to.
+function featurePoints(stands, zones, corridors) {
+  const pts = [...stands.map((s) => [s.lat, s.lon]), ...zones.map((z) => [z.lat, z.lon])];
+  corridors.forEach((c) => c.points.forEach((p) => pts.push(p)));
+  return pts;
+}
+
 // The lee-eddy layer's image for one zone, drawn once and reused: slots from the saved forecast share one
 // zone object per wind direction, so scrubbing the time slider doesn't redraw and re-encode it every step.
 const leeImages = new WeakMap();
@@ -587,7 +594,15 @@ const HuntMap = forwardRef(function HuntMap({
       ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
-      map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
+      // Open straight onto the property when its features are already known, instead of loading a
+      // screenful of tiles at a default zoom and throwing them away 0.3 s later when the fit kicks in.
+      const pts = featurePoints(stands, zones, corridors);
+      if (pts.length) {
+        map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+        fitted.current = true;
+      } else {
+        map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
+      }
     }
     tryInit();
     return () => { if (timer) clearTimeout(timer); if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
@@ -753,8 +768,7 @@ const HuntMap = forwardRef(function HuntMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || fitted.current) return undefined;
-    const pts = [...stands.map((s) => [s.lat, s.lon]), ...zones.map((z) => [z.lat, z.lon])];
-    corridors.forEach((c) => c.points.forEach((p) => pts.push(p)));
+    const pts = featurePoints(stands, zones, corridors);
     if (!pts.length) return undefined;
     const t = setTimeout(() => {
       if (fitted.current) return;

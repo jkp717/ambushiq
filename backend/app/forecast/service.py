@@ -914,7 +914,7 @@ class ScoringContext:
         return self._eddy[sid]
 
     def score(self, stand: dict, hour: dict, period: Optional[str] = None,
-              windows: Optional[dict] = None) -> dict:
+              windows: Optional[dict] = None, base: Optional[dict] = None) -> dict:
         """Full score for one stand at one forecast hour. `hour["date"]` (ISO) selects the
         season weighting; `period` + `windows` select the camera evidence window."""
         day = hour.get("date")
@@ -933,7 +933,7 @@ class ScoringContext:
             unhealthy_reason=cam["reason"] if cam else None,
             proximity=prox, utc_offset_seconds=self.utc_offset,
             thermal_params=self.thermal_params, camera_boost_saturation=self.saturation,
-            scent_gate_floor=self.scent_gate_floor, windows=windows, eddy_site=self.eddy_site(stand))
+            scent_gate_floor=self.scent_gate_floor, windows=windows, eddy_site=self.eddy_site(stand), base=base)
 
 
 def build_scoring_context(region_id: int, region: dict, settings: dict, utc_offset: int, *,

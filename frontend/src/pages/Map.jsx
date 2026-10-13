@@ -149,7 +149,7 @@ function conditionsByHour(all) {
   const build = (h) => ({
     time: h.time,
     stands: h.items.filter((it) => byId.has(it.stand_id)).map((it) => ({ stand: byId.get(it.stand_id), vectors: it.vectors })),
-    ranked: h.ranked.filter((r) => byId.has(r.stand_id)).map((r) => ({ stand: byId.get(r.stand_id), avg: r.avg, sample: r.sample })),
+    ranked: h.ranked.filter((r) => byId.has(r.stand_id)).map((r) => ({ stand: byId.get(r.stand_id), avg: r.avg })),
     lee_zone: h.lee != null ? zones[String(h.lee)] ?? null : null,
   });
   const out = new Map();

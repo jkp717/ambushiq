@@ -168,13 +168,14 @@ def _terrain_vectors(stand: dict) -> tuple[float, float, float | None, bool]:
 
 
 def stand_hour_vectors(stand: dict, hour: dict, thermal_params: dict | None = None,
-                       eddy_site: eddy_mod.EddySite | None = None) -> dict:
+                       eddy_site: eddy_mod.EddySite | None = None, base: dict | None = None) -> dict:
     """Return separate wind and thermal directions (blowing-TO, degrees) plus the
     blended scent direction and score — for map indicators that show wind and
-    thermals as distinct arrows."""
+    thermals as distinct arrows. `base`: this stand-hour's score_stand_hour() result, when the
+    caller already has it (the map scores and draws every stand for every slot)."""
     wind_to = (hour["wind_dir"] + 180) % 360
 
-    sc = score_stand_hour(stand, hour, thermal_params, eddy_site)
+    sc = base if base is not None else score_stand_hour(stand, hour, thermal_params, eddy_site)
     # The thermal arrow is only meaningful when the drainage direction is known and the
     # phase actually has a coherent flow; in "neutral" hours the direction is noise.
     show_thermal = sc["thermal_known"] and sc["thermal_phase"] != "neutral"
@@ -447,7 +448,8 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
                          camera_boost_saturation: float = CAMERA_BOOST_SATURATION_DEFAULT,
                          scent_gate_floor: float = SCENT_GATE_FLOOR_DEFAULT,
                          windows: dict | None = None,
-                         eddy_site: eddy_mod.EddySite | None = None) -> dict:
+                         eddy_site: eddy_mod.EddySite | None = None,
+                         base: dict | None = None) -> dict:
     """The one stand-scoring function every ranking endpoint uses, so a stand's score
     for a given hour is identical on the map, in sit rankings and in the day view:
 
@@ -458,8 +460,11 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
     camera      trail-camera boost/penalty multiplier for this hunt period
     scent gate  SOFT: bad scent scales the score down to `scent_gate_floor` of its
                 value (default 0.4) but never zeroes it; set the floor to 0 for a hard gate.
+
+    `base`: this stand-hour's score_stand_hour() result, when the caller already has it.
     """
-    base = score_stand_hour(stand, hour, thermal_params, eddy_site)
+    if base is None:
+        base = score_stand_hour(stand, hour, thermal_params, eddy_site)
     breakdown = []
 
     breakdown.append({"factor": "Wind steadiness", "value": base["steadiness"],

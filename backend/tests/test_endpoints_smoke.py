@@ -191,8 +191,8 @@ def test_all_hours_conditions_match_the_single_hour_endpoint(seeded):
         assert saved["time"] == live["time"]
         assert [it["vectors"] for it in saved["items"]] == [it["vectors"] for it in live["stands"]]
         assert [it["stand_id"] for it in saved["items"]] == [it["stand"]["id"] for it in live["stands"]]
-        assert [(r["stand_id"], r["avg"], r["sample"]) for r in saved["ranked"]] == \
-               [(r["stand"]["id"], r["avg"], r["sample"]) for r in live["ranked"]]
+        assert [(r["stand_id"], r["avg"]) for r in saved["ranked"]] == \
+               [(r["stand"]["id"], r["avg"]) for r in live["ranked"]]
         assert "hour" not in live and live["lee_zone"] is None
 
 
