@@ -42,9 +42,10 @@ RUT_PEAK_DAY = 5
 
 # ── combine ──────────────────────────────────────────────────────────────────
 # Weather produces a 0..1 index; rut multiplies it (biology outranks weather):
-# score = weather * (RUT_GAIN_BASE + RUT_GAIN_SLOPE * rut).
-RUT_GAIN_BASE = 0.35
-RUT_GAIN_SLOPE = 0.65
+# score = weather * (1 - RUT_IMPACT * (1 - rut)). RUT_IMPACT is the user's "Rut impact" setting:
+# 0 ignores the season, 1 scales off-season days down to the rut floor; peak rut is never reduced.
+# The default 0.65 gives 0.35 + 0.65 * rut, the original calibration.
+RUT_IMPACT = 0.65
 WEATHER_WEIGHTS = {
     "pressure": 0.32,
     "wind": 0.20,
@@ -209,12 +210,14 @@ def rating_from_score(score: float) -> int:
 
 
 def rate_day(d: date, wx: dict, weights: dict | None = None,
-             rut_peak_month: int = RUT_PEAK_MONTH, rut_peak_day: int = RUT_PEAK_DAY) -> dict:
+             rut_peak_month: int = RUT_PEAK_MONTH, rut_peak_day: int = RUT_PEAK_DAY,
+             rut_impact: float | None = None) -> dict:
     """wx keys (daytime aggregates):
         pressure_inhg, pressure_hpa, pressure_trend_inhg, pressure_trend_hpa, wind_mph, rain_mm, day_high_f, baseline_f
     weights: optional {pressure,wind,rain,temp} relative weights (any scale; they
         are normalized to sum to 1 so the score stays calibrated 0-1).
     rut_peak_month/day: configurable regional breeding peak.
+    rut_impact: 0-1, how much the season scales the score (default RUT_IMPACT).
     Returns {rating 1-5, score 0-1, rut:{...}, factors:{...}, breakdown:[...]}.
     """
     w = dict(WEATHER_WEIGHTS)
@@ -253,7 +256,8 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
     # perfect weather in the off-season (rut≈0.15) reaches ~0.45 (a 3), and terrible
     # weather bottoms out near 0.1-0.25 in either season, so the whole 1-5 scale is
     # reachable. There is deliberately no additive floor — it compressed the range.
-    rut_gain = RUT_GAIN_BASE + RUT_GAIN_SLOPE * rut
+    impact = RUT_IMPACT if rut_impact is None else max(0.0, min(1.0, float(rut_impact)))
+    rut_gain = 1.0 - impact * (1.0 - rut)
     score = weather * rut_gain
     # a genuinely heavy-rain day suppresses regardless of rut
     if wx.get("rain_mm") and wx["rain_mm"] >= HEAVY_RAIN_MM:
@@ -277,7 +281,7 @@ def rate_day(d: date, wx: dict, weights: dict | None = None,
 
     breakdown = [
         {"factor": "Rut / season", "value": round(rut, 2),
-         "impact": f"{phase}, {_lbl(rut)} seasonal drive", "weight": "multiplier"},
+         "impact": f"{phase}, {_lbl(rut)} seasonal drive (rut impact {round(impact * 100)}%)", "weight": "multiplier"},
         {"factor": "Barometric pressure", "value": round(pf, 2),
          "impact": f"{_lbl(pf)} ({round(raw_p, 2) if raw_p else 'N/A'}\" )", "weight": round(w['pressure'], 2)},
         {"factor": "Wind", "value": round(wf, 2),

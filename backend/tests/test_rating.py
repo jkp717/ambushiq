@@ -85,3 +85,39 @@ def test_rain_is_reported_in_inches():
     wx = {**PERFECT, "rain_mm": 6.35}
     rain = next(b for b in rating.rate_day(PEAK_RUT_DAY, wx)["breakdown"] if b["factor"] == "Rain")
     assert rain["impact"].endswith("(0.25 in)")
+
+
+# ---------- rut impact (Settings -> Daily rating) ----------
+
+MILD = {**PERFECT, "pressure_inhg": 29.7, "wind_mph": 4.0}   # middling weather, so no factor sits at a cap
+
+
+def _score(day, impact=None):
+    return rating.rate_day(day, MILD, rut_impact=impact)["score"]
+
+
+def test_default_rut_impact_keeps_the_original_calibration():
+    r = rating.rate_day(OFF_SEASON_DAY, MILD)
+    rut = r["rut"]["intensity"]
+    weather = _score(OFF_SEASON_DAY, 0.0)                       # 0% impact = weather alone
+    assert _score(OFF_SEASON_DAY) == _score(OFF_SEASON_DAY, 0.65)
+    assert r["score"] == pytest.approx(weather * (0.35 + 0.65 * rut), abs=0.01)
+    assert "rut impact 65%" in r["breakdown"][0]["impact"]
+
+
+def test_zero_rut_impact_ignores_the_season():
+    assert _score(OFF_SEASON_DAY, 0.0) == _score(PEAK_RUT_DAY, 0.0)
+
+
+def test_full_rut_impact_holds_the_off_season_down_but_never_the_peak():
+    rut_off = rating.rate_day(OFF_SEASON_DAY, MILD)["rut"]["intensity"]
+    rut_peak = rating.rate_day(PEAK_RUT_DAY, MILD)["rut"]["intensity"]
+    assert _score(OFF_SEASON_DAY, 1.0) == pytest.approx(_score(OFF_SEASON_DAY, 0.0) * rut_off, abs=0.01)
+    assert _score(OFF_SEASON_DAY, 1.0) < _score(OFF_SEASON_DAY) < _score(OFF_SEASON_DAY, 0.0)
+    assert _score(PEAK_RUT_DAY, 1.0) == pytest.approx(_score(PEAK_RUT_DAY, 0.0) * rut_peak, abs=0.01)
+    assert rut_peak > 0.95                                       # so the peak is (all but) untouched
+
+
+def test_rut_impact_is_clamped():
+    assert _score(OFF_SEASON_DAY, -1) == _score(OFF_SEASON_DAY, 0.0)
+    assert _score(OFF_SEASON_DAY, 5) == _score(OFF_SEASON_DAY, 1.0)

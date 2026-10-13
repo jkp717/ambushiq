@@ -21,6 +21,7 @@ class SettingsIn(BaseModel):
     rate_w_wind: float | None = None
     rate_w_rain: float | None = None
     rate_w_temp: float | None = None
+    rate_rut_impact: float | None = Field(default=None, ge=0, le=1)   # how much the season scales the day rating
     max_camera_boost_pct: float | None = None
     camera_boost_saturation: float | None = None
     max_camera_penalty_pct: float | None = None

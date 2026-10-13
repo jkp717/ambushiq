@@ -42,6 +42,8 @@ DEFAULT_SETTINGS = {
     "rut_weight_strength": 1.0,
     # deer day-rating weather factor weights (relative; normalized at use)
     "rate_w_pressure": 0.32, "rate_w_wind": 0.20, "rate_w_rain": 0.28, "rate_w_temp": 0.20,
+    # how much the rut season scales the day rating (0 = weather only; see rating.RUT_IMPACT)
+    "rate_rut_impact": 0.65,
     # thermal coherence model (scoring.thermal_coherence) — how much of a thermal's
     # directional potential survives into the scent blend vs. being overwhelmed by
     # ambient wind / midday convective mixing

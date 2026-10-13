@@ -83,7 +83,7 @@ function SettingsPage({ reloadStands }) {
     catch { setErr("Couldn't clear key."); }
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80, scent_gate_floor: 0.4, rut_weight_strength: 1.0 }); }
-  function resetRating() { setS({ ...s, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
+  function resetRating() { setS({ ...s, rate_rut_impact: 0.65, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
   function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3, drainage_margin_m: 457.2 }); }
   function resetScouting() {
     setS({ ...s,
@@ -256,16 +256,21 @@ function SettingsPage({ reloadStands }) {
           value={s.rut_weight_strength ?? 1.0}
           display={`${Math.round((s.rut_weight_strength ?? 1.0) * 100)}%`}
           onChange={(v) => setS({ ...s, rut_weight_strength: v })}
-          info="How strongly the rut phase re-weights the bonuses above — e.g. scrapes and rubs count more pre-rut, food counts more after the rut. 0% = the same weights all season." />
+          info="How strongly the rut phase re-weights the bonuses above — e.g. scrapes and rubs count more pre-rut, food counts more after the rut. 0% = the same weights all season. (Stand ranking only — the daily rating uses Rut impact.)" />
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={reset}>Reset defaults</button>
       </div>
 
-      <SectionTitle id="daily-rating" icon={Gauge}>Daily rating — weather weights</SectionTitle>
-      <p className="settings-desc">Tunes the 1–5 daily movement rating. Values are relative — they balance against each other automatically.</p>
+      <SectionTitle id="daily-rating" icon={Gauge}>Daily rating</SectionTitle>
+      <p className="settings-desc">Tunes the 1–5 daily movement rating: how much the rut season counts, then the weather weights. The weather weights are relative — they balance against each other automatically.</p>
       <div className="settings-section">
+        <SliderRow label="Rut impact" min={0} max={1} step={0.05}
+          value={s.rate_rut_impact ?? 0.65}
+          display={`${Math.round((s.rate_rut_impact ?? 0.65) * 100)}%`}
+          onChange={(v) => setS({ ...s, rate_rut_impact: v })}
+          info="How much the time of year (relative to your rut peak date) scales the rating. 0% = weather only, all season. Higher = off-season days are held lower, and only near the rut can the best weather earn a 5. Peak-rut days are never reduced." />
         {RW.map((r) => (
           <SliderRow key={r.key} label={`${r.label} — ${Math.round((s[r.key] ?? 0) / sum * 100)}%`}
             min={0} max={1} step={0.01} value={s[r.key] ?? 0}

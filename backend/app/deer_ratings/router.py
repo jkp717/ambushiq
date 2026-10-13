@@ -56,6 +56,7 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
         "pressure": _set.get("rate_w_pressure"), "wind": _set.get("rate_w_wind"),
         "rain": _set.get("rate_w_rain"), "temp": _set.get("rate_w_temp"),
     }
+    rut_impact = _set.get("rate_rut_impact")
     # The pressure sweet spot is a sea-level range: use the provider's sea-level series,
     # or reduce station pressure with the forecast elevation; None → neutral factor.
     pressures = pressure_msl_series(h, fc.get("elevation"))
@@ -128,7 +129,7 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
         y, m, d = (int(x) for x in dk.split("-"))
         rating = deer_rating.rate_day(_date(y, m, d), wx, rate_weights,
                                       rut_peak_month=int(region["rut_peak_month"]),
-                                      rut_peak_day=int(region["rut_peak_day"]))
+                                      rut_peak_day=int(region["rut_peak_day"]), rut_impact=rut_impact)
         label = format_day_label(datetime.fromisoformat(dk + "T12:00"))
         rating["day"] = dk
         rating["label"] = label
@@ -150,7 +151,7 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     if hist_wx and sum(hist_wx.get(k) is not None for k in core_inputs) >= 3:
         prev_rating = deer_rating.rate_day(yesterday, hist_wx, rate_weights,
                                             rut_peak_month=int(region["rut_peak_month"]),
-                                            rut_peak_day=int(region["rut_peak_day"]))
+                                            rut_peak_day=int(region["rut_peak_day"]), rut_impact=rut_impact)
         prev_rating["day"] = yesterday.isoformat()
         previous_day = prev_rating
 
