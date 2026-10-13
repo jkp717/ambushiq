@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import app.main  # noqa: F401  (registers every model so create_all sees all tables)
-from app.cameras import bucks
+from app.cameras import bucks, detection
 from app.cameras import router as cam_router
 from app.cameras.models import Camera, CameraSighting, DeerDetection
 from app.core.database import Base, engine
@@ -60,7 +60,7 @@ def env(monkeypatch, tmp_path):
             d = DeerDetection(sighting_id=sg.id, box_json=json.dumps([0.1, 0.1, 0.6, 0.9]), det_conf=0.9,
                               species="White-tailed Deer",
                               vec=bucks.encode_vec(buck_vec if buck_vec is not None else vec(False)),
-                              vec_source="dfne", label=label)
+                              vec_source=detection.FEATURE_SOURCE, label=label)
             s.add(d)
             s.commit()
             return sg.id, d.id
@@ -202,12 +202,14 @@ def test_unscanned_counts_photos_without_usable_deer(env):
     assert bucks.status(2)["unscanned"] == 0
 
 
-def test_find_deer_refreshes_old_vectors_from_saved_boxes_and_keeps_tags(env, monkeypatch):
+@pytest.mark.parametrize("old_source", ["convnext_tiny",   # from before DFNE features worked
+                                        "dfne"])           # DFNE on the tight box, before 3.39's padded crop
+def test_find_deer_refreshes_old_vectors_from_saved_boxes_and_keeps_tags(env, monkeypatch, old_source):
     import asyncio
-    from app.cameras import detection, service
+    from app.cameras import service
     _s, d = env["add"](vec(True), label="buck")
     with Session(engine) as s:
-        s.get(DeerDetection, d).vec_source = "convnext_tiny"          # from before DFNE features worked
+        s.get(DeerDetection, d).vec_source = old_source
         s.commit()
     assert bucks.status(1)["unscanned"] == 1
     calls = []

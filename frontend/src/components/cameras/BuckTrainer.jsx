@@ -173,9 +173,12 @@ function BuckTrainer({ onClose, onStatus }) {
         <div className="buck-preview" onClick={() => setPreview(null)}>
           <div className="buck-preview-photo" onClick={(e) => e.stopPropagation()}>
             <img src={withToken(preview.image_url)} alt="full photo" draggable={false} />
-            <span className="deer-outline on" style={{
-              left: `${preview.box[0] * 100}%`, top: `${preview.box[1] * 100}%`,
-              width: `${(preview.box[2] - preview.box[0]) * 100}%`, height: `${(preview.box[3] - preview.box[1]) * 100}%` }} />
+            {(() => {
+              const b = preview.outline ?? preview.box;   // the roomier outline (space for antlers)
+              return <span className="deer-outline on" style={{
+                left: `${b[0] * 100}%`, top: `${b[1] * 100}%`,
+                width: `${(b[2] - b[0]) * 100}%`, height: `${(b[3] - b[1]) * 100}%` }} />;
+            })()}
           </div>
           <div className="buck-trainer-sub" style={{ color: "#fff" }}>
             {preview.camera_name} · {formatDateTime(preview.timestamp)} — tap anywhere to go back

@@ -157,7 +157,19 @@ def _classify(classifier, crop) -> tuple[str | None, float | None]:
     return str(res), None
 
 
-FEATURE_SOURCE = "dfne"   # the network deer vectors should come from; others get recomputed
+FEATURE_SOURCE = "dfne_pad"   # network + crop deer vectors should come from (DFNE on pad_box); others get recomputed
+
+# MegaDetector boxes hug the body and often clip antler tips. Deer are outlined, shown and fed to the buck
+# model with this much room around the box (fractions of the box size), most of it on top for the rack.
+PAD_SIDES, PAD_TOP, PAD_BOTTOM = 0.10, 0.20, 0.08
+
+
+def pad_box(box: list[float]) -> list[float]:
+    """A detector box [x1, y1, x2, y2] (fractions of the image) grown by the PAD_* margins, kept inside the photo."""
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+    return [round(max(0.0, x1 - bw * PAD_SIDES), 4), round(max(0.0, y1 - bh * PAD_TOP), 4),
+            round(min(1.0, x2 + bw * PAD_SIDES), 4), round(min(1.0, y2 + bh * PAD_BOTTOM), 4)]
 
 
 def _dfne_parts(classifier):
@@ -171,17 +183,32 @@ def _dfne_parts(classifier):
     return net, tf, names
 
 
-def _dfne_pass(parts, crop) -> tuple[str, float, list[float]]:
-    """One DFNE forward pass on a crop: species, its confidence, and the pre-classification features —
-    the same species single_image_classification gives, without running the network twice."""
-    import torch  # type: ignore
+def _dfne_pre(parts, crop):
+    """DFNE's pre-classification features for a crop (one forward pass)."""
     from PIL import Image  # type: ignore
-    net, tf, names = parts
+    net, tf, _names = parts
     x = tf(Image.fromarray(crop)).unsqueeze(0).to(next(net.parameters()).device)
-    pre = net.forward_head(net.forward_features(x), pre_logits=True)
-    probs = torch.softmax(net.get_classifier()(pre), dim=1)[0]
+    return net.forward_head(net.forward_features(x), pre_logits=True)
+
+
+def _dfne_species(parts, crop) -> tuple[str, float]:
+    """DFNE's species and its confidence for a crop — what single_image_classification gives."""
+    import torch  # type: ignore
+    net, _tf, names = parts
+    probs = torch.softmax(net.get_classifier()(_dfne_pre(parts, crop)), dim=1)[0]
     i = int(probs.argmax())
-    return names[i], round(float(probs[i]), 3), [float(v) for v in pre.flatten().cpu().numpy()]
+    return names[i], round(float(probs[i]), 3)
+
+
+def _dfne_features(parts, crop) -> list[float]:
+    """A deer's feature vector for the buck model: DFNE's features for its padded crop."""
+    return [float(v) for v in _dfne_pre(parts, crop).flatten().cpu().numpy()]
+
+
+def _crop_frac(img, box):
+    """The part of an image array inside a box given as fractions of the image."""
+    h, w = img.shape[:2]
+    return _crop(img, (box[0] * w, box[1] * h, box[2] * w, box[3] * h))
 
 
 def _crop(img, box_px):
@@ -191,24 +218,23 @@ def _crop(img, box_px):
 
 def deer_vectors(image_path: str, boxes: list[list[float]]) -> list[tuple[list[float] | None, str | None]]:
     """Feature vectors for deer already outlined in a photo (boxes as fractions), without re-running
-    the detector — used to bring older vectors up to FEATURE_SOURCE. Never raises."""
+    the detector — used to bring older vectors up to FEATURE_SOURCE. Each is cut from pad_box(box). Never raises."""
     try:
         import numpy as np          # type: ignore
         import torch                # type: ignore
         from PIL import Image       # type: ignore
         img = np.array(Image.open(image_path).convert("RGB"))
-        h, w = img.shape[:2]
         device = "cuda" if torch.cuda.is_available() else "cpu"
         classifier = _load_classifier(device=device)
         parts = _dfne_parts(classifier)
         out = []
         with torch.inference_mode():
             for b in boxes:
-                crop = _crop(img, (b[0] * w, b[1] * h, b[2] * w, b[3] * h))
+                crop = _crop_frac(img, pad_box(b))
                 if crop.size == 0:
                     out.append((None, None))
                 elif parts:
-                    out.append((_dfne_pass(parts, crop)[2], FEATURE_SOURCE))
+                    out.append((_dfne_features(parts, crop), FEATURE_SOURCE))
                 else:
                     out.append(deer_features(classifier, crop, device))
         return out
@@ -309,8 +335,8 @@ def _detect(image_path: str) -> dict:
         "detections": [],
     }
 
-    # 2. Classify each animal crop; deer also get a feature vector for the buck model. With DFNE, one
-    #    forward pass gives both the species and the features.
+    # 2. Classify each animal on its tight box (what DFNE was trained on). Deer also get a feature vector for
+    #    the buck model, from a second pass on the padded box so the whole rack is in it.
     if is_animal:
         # Determine the device MegaDetector is currently utilizing
         device = "cuda" if "cuda" in str(getattr(model, "device", "cpu")) else "cpu"
@@ -325,14 +351,15 @@ def _detect(image_path: str) -> dict:
             crop = img[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
-            if parts:
-                species, species_conf, vec = _dfne_pass(parts, crop)
-                features, source = (vec, FEATURE_SOURCE) if is_deer(species) else (None, None)
-            else:
-                species, species_conf = _classify(classifier, crop)
-                features, source = deer_features(classifier, crop, device) if is_deer(species) else (None, None)
+            frac = [round(x1 / w, 4), round(y1 / h, 4), round(min(x2, w) / w, 4), round(min(y2, h) / h, 4)]
+            species, species_conf = _dfne_species(parts, crop) if parts else _classify(classifier, crop)
+            features, source = None, None
+            if is_deer(species):
+                padded = _crop_frac(img, pad_box(frac))
+                features, source = ((_dfne_features(parts, padded), FEATURE_SOURCE) if parts
+                                    else deer_features(classifier, padded, device))
             response["detections"].append({
-                "box": [round(x1 / w, 4), round(y1 / h, 4), round(min(x2, w) / w, 4), round(min(y2, h) / h, 4)],
+                "box": frac,
                 "det_conf": round(conf, 3), "species": species, "species_confidence": species_conf,
                 "features": features, "feature_source": source,
             })

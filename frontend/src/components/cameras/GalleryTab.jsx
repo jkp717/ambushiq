@@ -309,14 +309,17 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
                 {j >= 0 && <img src={items[j].image_url} alt={j === viewIdx ? "full-size sighting" : ""}
                   ref={j === viewIdx ? curImg : undefined} onLoad={j === viewIdx ? measurePhoto : undefined}
                   className="lightbox-img" draggable={false} onClick={(e) => e.stopPropagation()} />}
-                {j === viewIdx && showOutlines && photoRect && deer.map((d, n) => (
+                {j === viewIdx && showOutlines && photoRect && deer.map((d, n) => {
+                  const b = d.outline ?? d.box;   // the roomier outline (space for antlers), else the detector's box
+                  return (
                   <span key={d.id} className={"deer-outline" + (d.is_buck ? " on" : "") + (activeDeer === d.id ? " active" : "")}
-                    style={{ left: photoRect.left + d.box[0] * photoRect.width, top: photoRect.top + d.box[1] * photoRect.height,
-                             width: (d.box[2] - d.box[0]) * photoRect.width, height: (d.box[3] - d.box[1]) * photoRect.height }}
+                    style={{ left: photoRect.left + b[0] * photoRect.width, top: photoRect.top + b[1] * photoRect.height,
+                             width: (b[2] - b[0]) * photoRect.width, height: (b[3] - b[1]) * photoRect.height }}
                     onClick={(e) => { e.stopPropagation(); setActiveDeer(d.id); }}>
                     {deer.length > 1 && <span className="deer-num">{circled(n)}</span>}
                   </span>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>

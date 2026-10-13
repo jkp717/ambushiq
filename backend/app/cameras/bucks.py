@@ -281,7 +281,10 @@ def buck_sighting_ids():
 
 
 def _det_dict(d: DeerDetection) -> dict:
-    return {"id": d.id, "box": json.loads(d.box_json), "species": d.species, "is_deer": d.vec is not None,
+    """`box` is the detector's own box; `outline` is the roomier one drawn around the deer (detection.pad_box)."""
+    from app.cameras.detection import pad_box
+    box = json.loads(d.box_json)
+    return {"id": d.id, "box": box, "outline": pad_box(box), "species": d.species, "is_deer": d.vec is not None,
             "label": d.label, "buck_score": d.buck_score, "is_buck": is_buck(d.label, d.buck_score)}
 
 
@@ -438,19 +441,19 @@ _CROP_CACHE_MAX = 256
 
 
 def crop_jpeg(image_path: str, box: list[float], max_side: int = 320) -> bytes:
-    """The deer's box with 15% padding, scaled to at most `max_side`, as JPEG bytes (cached)."""
+    """The deer's padded box (detection.pad_box: room for the rack), scaled to at most `max_side`, as JPEG
+    bytes (cached)."""
     key = (image_path, tuple(box), max_side)
     if key in _crop_cache:
         _crop_cache.move_to_end(key)
         return _crop_cache[key]
     from PIL import Image
+    from app.cameras.detection import pad_box
     with Image.open(image_path) as im:
         im = im.convert("RGB")
         w, h = im.size
-        x1, y1, x2, y2 = box
-        pw, ph = (x2 - x1) * 0.15, (y2 - y1) * 0.15
-        rect = (max(0, int((x1 - pw) * w)), max(0, int((y1 - ph) * h)),
-                min(w, int((x2 + pw) * w)), min(h, int((y2 + ph) * h)))
+        x1, y1, x2, y2 = pad_box(box)
+        rect = (int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h))
         c = im.crop(rect)
         c.thumbnail((max_side, max_side))
         buf = io.BytesIO()
