@@ -36,7 +36,8 @@ DEFAULT_EDDY_PARAMS = {
 }
 
 _MASK_CHUNK = 4096             # grid cells per batch when building the map-layer mask
-_MASK_CACHE_SIZE = 64
+_MASK_CACHE_SIZE = 80          # holds a whole forecast's set of directions (at most 72 bins)
+LEE_BIN_DEG = 5                # the map layer rounds wind direction to this, so a forecast needs at most 72 masks
 
 _COMPASS8 = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
@@ -208,7 +209,7 @@ _mask_cache: OrderedDict = OrderedDict()
 
 def _mask(grid: Grid, wind_from_deg: int, p: dict) -> np.ndarray:
     """0 = no eddy, 1 = lee eddy zone, 2 = separating crest, for every grid cell. Wind-speed
-    independent, so cached per (grid fetch, whole-degree wind direction)."""
+    independent, so cached per (grid fetch, wind direction bin)."""
     ck = (grid.key, wind_from_deg, tuple(sorted(p.items())))
     if grid.key and ck in _mask_cache:
         _mask_cache.move_to_end(ck)
@@ -252,7 +253,39 @@ def lee_zone_mask(grid: Grid | None, wind_from_deg: float, wind_mph: float, gust
     p = {**DEFAULT_EDDY_PARAMS, **(params or {})}
     if grid is None or _wind_level(wind_mph, gust_mph, p) is None:
         return None
-    mask = _mask(grid, round(wind_from_deg) % 360, p)
+    mask = _mask(grid, lee_bin(wind_from_deg), p)
     if not mask.any():
         return None
     return {"rows": ["".join(map(str, row)) for row in mask.tolist()], "bounds": grid.bounds()}
+
+
+def lee_bin(wind_from_deg: float) -> int:
+    """The map layer's wind direction: rounded to LEE_BIN_DEG, well inside a forecast's own direction
+    error. The live layer and the phone's saved copy both use it, so their shading always matches."""
+    return int(round(wind_from_deg / LEE_BIN_DEG) * LEE_BIN_DEG) % 360
+
+
+def lee_zone_key(wind_from_deg: float, wind_mph: float, gust_mph: float, params: dict | None = None) -> int | None:
+    """Which direction's lee-zone mask a time slot shows, or None when the wind is too light for eddies.
+    Lets the saved forecast carry one mask per direction instead of one per 15-minute slot."""
+    p = {**DEFAULT_EDDY_PARAMS, **(params or {})}
+    return None if _wind_level(wind_mph, gust_mph, p) is None else lee_bin(wind_from_deg)
+
+
+_RLE_CHARS = "abc"   # cell value 0 / 1 / 2
+
+
+def rle_rows(rows: list[str]) -> list[str]:
+    """Run-length encode lee-zone rows for the saved forecast: "0001100" -> "a3b2a2" (letter = value,
+    then how many). Rows are mostly 0, so a mask shrinks from ~40 KB to a few KB."""
+    out = []
+    for row in rows:
+        parts, i = [], 0
+        while i < len(row):
+            j = i
+            while j < len(row) and row[j] == row[i]:
+                j += 1
+            parts.append(f"{_RLE_CHARS[int(row[i])]}{j - i}")
+            i = j
+        out.append("".join(parts))
+    return out

@@ -132,16 +132,23 @@ const POINT_ADDS = ["stand", "food", "bedding", "scrape", "rub"];
 const slotKey = (iso, minute = 0) => `${iso}|${minute}`;
 const hourIso = (day, hour) => `${day.day}T${String(hour.hour).padStart(2, "0")}:00`;
 
+// A saved lee-zone row, run-length encoded by the server: "a3b2a2" -> "0001100" (a/b/c = 0/1/2, then a count).
+const RLE_VALUE = { a: "0", b: "1", c: "2" };
+const unrle = (row) => row.replace(/([abc])(\d+)/g, (_m, ch, n) => RLE_VALUE[ch].repeat(+n));
+
 // /map/conditions/all sends each stand once and refers to it by id in every hour; rebuild each hour and
 // each of its :15/:30/:45 quarters in the shape /map/conditions returns, keyed by slotKey. Stands missing
-// from the list are skipped.
+// from the list are skipped. Lee-eddy zones come once per wind direction (`lee_zones`); each slot names its
+// direction in `lee`, so slots with the same wind share one decoded zone.
 function conditionsByHour(all) {
   const byId = new Map((all.stands || []).map((s) => [s.id, s]));
+  const zones = Object.fromEntries(Object.entries(all.lee_zones || {})
+    .map(([k, z]) => [k, { rows: z.rows.map(unrle), bounds: z.bounds }]));
   const build = (h) => ({
     time: h.time,
     stands: h.items.filter((it) => byId.has(it.stand_id)).map((it) => ({ stand: byId.get(it.stand_id), vectors: it.vectors })),
     ranked: h.ranked.filter((r) => byId.has(r.stand_id)).map((r) => ({ stand: byId.get(r.stand_id), avg: r.avg, sample: r.sample })),
-    lee_zone: null,
+    lee_zone: h.lee != null ? zones[String(h.lee)] ?? null : null,
   });
   const out = new Map();
   for (const h of all.hours || []) {
@@ -170,7 +177,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: false, drainage: false });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: true, drainage: false });
   const [layersOpen, setLayersOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites } -> bool, default collapsed
   const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
@@ -400,12 +407,11 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     return () => clearInterval(id);
   }, [playing, curDay]);
 
-  // One 15-minute slot's conditions, live from the server (the only source of the lee-eddy zone). The copy
-  // of that slot saved on the phone is shown first whenever there is one (unless the lee-eddy layer is on,
-  // which only the live answer has), so arrows appear at once on open and Play/scrubbing stay smooth; the
-  // live answer replaces it. With a saved slot already on screen a slow network is given up on after 4 s.
-  // Once a request has failed the saved copy is flagged as such ("no connection" banner) and a live answer
-  // still replaces it if signal comes back.
+  // One 15-minute slot's conditions, live from the server. The copy of that slot saved on the phone (lee-eddy
+  // zone included) is shown first whenever there is one, so arrows appear at once on open and Play/scrubbing
+  // stay smooth; the live answer replaces it. With a saved slot already on screen a slow network is given up
+  // on after 4 s. Once a request has failed the saved copy is flagged as such ("no connection" banner) and a
+  // live answer still replaces it if signal comes back.
   const curIso = curDay && curHour ? hourIso(curDay, curHour) : null;
   useEffect(() => {
     if (!curIso) return undefined;
@@ -425,7 +431,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     };
     let headStart = false;
     if (offlineRef.current) headStart = showSaved();
-    else if (!layers.leeEddies) {
+    else {
       const hit = savedSlot();
       if (hit) { setConditions(hit); headStart = true; }
     }
@@ -464,7 +470,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     if (offlineRef.current) {
       setConditions(hit);
       setDeviceAt(savedHoursRef.current.savedAt || Date.now());
-    } else if (!liveShownRef.current && !layers.leeEddies) {
+    } else if (!liveShownRef.current) {
       setConditions(hit);
     }
   }, [savedHours]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -695,7 +701,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   return (
     <div className="map-page">
       {err && <div style={{ padding: "6px 12px" }}><Banner>{err}</Banner></div>}
-      {deviceAt && <div style={{ padding: "6px 12px" }}><Banner>No connection — showing the forecast saved on this phone at {savedAtLabel(deviceAt)}.{layers.leeEddies ? " Lee eddies need a connection." : ""}</Banner></div>}
+      {deviceAt && <div style={{ padding: "6px 12px" }}><Banner>No connection — showing the forecast saved on this phone at {savedAtLabel(deviceAt)}.</Banner></div>}
       {staleAt && <div style={{ padding: "6px 12px" }}><Banner>Showing the cached forecast from {new Date(staleAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} while the weather service catches up. Reload in a minute for the latest.</Banner></div>}
 
       {/* ── Time controls: bottom sheet. Only the centered tab (date + time + grip) shows until it is

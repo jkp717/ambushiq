@@ -20,9 +20,9 @@ import SettingsPage from "./pages/Settings.jsx";
 const NAV = [
   { key: "today",   label: "Outlook",  icon: Sun },
   { key: "map",     label: "Map",      icon: MapIcon },
+  { key: "cameras", label: "Cameras",  icon: Camera },
   { key: "stands",  label: "Stands",   icon: MapPin },
   { key: "zones",   label: "Zones",    icon: Wheat },
-  { key: "cameras", label: "Cameras",  icon: Camera },
   { key: "settings",label: "Settings", icon: SettingsIcon },
 ];
 

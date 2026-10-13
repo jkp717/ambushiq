@@ -12,6 +12,7 @@ from app.deer_ratings import router as deer_router
 from app.forecast import router as fc_router
 from app.forecast import eddy as eddy_mod, scoring
 from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
+from app.regions import terrain as region_terrain
 from app.regions.models import Region
 from app.stands import terrain as terrain_mod
 from app.stands.models import Stand
@@ -259,3 +260,28 @@ def test_lee_eddy_wind_threshold_is_crossed_mid_hour():
 
     assert level(15) == "possible"   # 9 mph
     assert level(30) == "likely"     # 10 mph
+
+
+def test_saved_forecast_carries_lee_zones_per_wind_direction(seeded, monkeypatch):
+    """Each saved slot names its wind direction's lee zone; decoded, it is exactly what the live map shows."""
+    from test_lee_eddy import _grid, unrle
+
+    def windy_nw():
+        fc = _forecast()
+        fc["hourly"]["wind_direction_10m"] = [316.0] * len(fc["hourly"]["time"])   # bins to 315
+        return fc
+
+    async def fake_forecast(*a, **k):
+        return windy_nw()
+
+    monkeypatch.setattr(fc_router, "get_forecast", fake_forecast)
+    monkeypatch.setattr(region_terrain, "load_grid", lambda region_id: _grid())   # the property grid
+    allc = run(fc_router.map_conditions_all(region_id=1, _=None))
+    assert set(allc["lee_zones"]) == {"315"}
+    slots = [q for h in allc["hours"] for q in (h, *h["quarters"])]
+    assert {q["lee"] for q in slots} == {315, None}
+    calm, windy = allc["hours"][0], allc["hours"][11]                 # 3 mph / gust 6 vs 11.8 mph / gust 17
+    assert calm["lee"] is None and windy["lee"] == 315
+    live = run(fc_router.map_conditions(HourRankIn(time_index=11, lee_zone=True), region_id=1, _=None))
+    saved = allc["lee_zones"]["315"]
+    assert [unrle(r) for r in saved["rows"]] == live["lee_zone"]["rows"] and saved["bounds"] == live["lee_zone"]["bounds"]

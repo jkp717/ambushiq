@@ -169,3 +169,25 @@ def test_lee_zone_mask_is_cached_per_grid_and_direction():
 def test_vectors_carry_the_eddy():
     v = scoring.stand_hour_vectors({"terrain": None}, _hour(), eddy_site=_site())
     assert v["lee_eddy"]["level"] == "likely" and "lee_zone" not in v
+
+
+def test_map_layer_rounds_wind_direction_to_5_degree_bins():
+    assert [eddy.lee_bin(d) for d in (272, 273, 358, 2.4, 0)] == [270, 275, 0, 0, 0]
+    assert eddy.lee_zone_key(272, 14, 22) == 270
+    assert eddy.lee_zone_key(272, 3, 4) is None                     # too calm for any eddy
+    grid = _grid()
+    assert eddy.lee_zone_mask(grid, 316.4, 14, 22) == eddy.lee_zone_mask(grid, 315, 14, 22)
+
+
+def unrle(row):
+    """Mirror of the map page's decoder."""
+    import re
+    return "".join(str("abc".index(ch)) * int(n) for ch, n in re.findall(r"([abc])(\d+)", row))
+
+
+def test_rle_rows_round_trip_and_shrink():
+    rows = eddy.lee_zone_mask(_grid(), 315, 14, 22)["rows"]
+    enc = eddy.rle_rows(rows)
+    assert [unrle(r) for r in enc] == rows
+    assert sum(map(len, enc)) < sum(map(len, rows)) / 3
+    assert eddy.rle_rows(["0001100", "2"]) == ["a3b2a2", "c1"]

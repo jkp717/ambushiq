@@ -307,8 +307,9 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
 async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     """/api/map/conditions for every forecast hour in one response, so the phone can keep the whole forecast
     and still show wind/thermal arrows with no signal. Each stand is sent once in `stands`; hours refer to
-    stands by id. Each hour also carries `quarters`: the same for :15, :30 and :45 past it. No lee-eddy zone
-    (a large grid per slot) - that stays online-only."""
+    stands by id. Each hour also carries `quarters`: the same for :15, :30 and :45 past it. Lee-eddy zones
+    depend only on the terrain and the wind direction, so instead of a large grid per slot each slot names its
+    direction (`lee`, None when too calm) and `lee_zones` holds one run-length encoded mask per direction."""
     region = get_region_dict(region_id)
     stands = _active_stands(region_id)
     fc, ctx = await _map_context(region_id, region)
@@ -316,24 +317,41 @@ async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=D
 
     def slot(temp_swing: list, i: int, minute: int) -> dict:
         one = _hour_conditions(ctx, fc, temp_swing, stands, i, minute)
+        hour = one["hour"]
         return {
             "time": one["time"],
+            "lee": eddy_mod.lee_zone_key(hour["wind_dir"], hour["wind_speed"], hour["gust"]),
             "items": [{"stand_id": it["stand"]["id"], "vectors": it["vectors"]} for it in one["stands"]],
             "ranked": [{"stand_id": r["stand"]["id"], "avg": r["avg"], "sample": r["sample"]}
                        for r in one["ranked"]],
         }
 
-    def build() -> list[dict]:
+    def build() -> tuple[list[dict], dict]:
         temp_swing = _temp_swing_rolling(h)
         hours = []
         for i in range(len(h["time"])):
             hour = slot(temp_swing, i, 0)
             hour["quarters"] = [slot(temp_swing, i, m) for m in QUARTER_MINUTES]
             hours.append(hour)
-        return hours
+        return hours, lee_zones(hours)
 
-    hours = await asyncio.to_thread(build)   # a thousand-plus slots x every stand: keep it off the event loop
-    return {"stands": stands, "hours": hours, "utc_offset_seconds": int(fc.get("utc_offset_seconds", 0)),
+    def lee_zones(hours: list[dict]) -> dict:
+        """One mask per wind direction the forecast uses (at most 72); a direction with no eddy anywhere
+        on the property gets none, and the slots naming it are cleared."""
+        slots = [q for hour in hours for q in (hour, *hour["quarters"])]
+        zones = {}
+        for key in sorted({q["lee"] for q in slots if q["lee"] is not None}):
+            z = eddy_mod.lee_zone_mask(ctx.eddy_grid, key, 99.0, 99.0)   # the slot already passed the wind check
+            if z:
+                zones[str(key)] = {"rows": eddy_mod.rle_rows(z["rows"]), "bounds": z["bounds"]}
+        for q in slots:
+            if q["lee"] is not None and str(q["lee"]) not in zones:
+                q["lee"] = None
+        return zones
+
+    hours, zones = await asyncio.to_thread(build)   # a thousand-plus slots x every stand: keep it off the event loop
+    return {"stands": stands, "hours": hours, "lee_zones": zones,
+            "utc_offset_seconds": int(fc.get("utc_offset_seconds", 0)),
             "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}
 
 
