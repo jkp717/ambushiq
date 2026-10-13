@@ -346,7 +346,7 @@ function SettingsPage({ reloadStands }) {
           display={`${Math.round(s.camera_health_max_age_hours ?? 48)}h`}
           onChange={(v) => setS({ ...s, camera_health_max_age_hours: v })}
           info="If a camera hasn't checked in (or has hit its photo quota) within this window, the penalty is skipped for that stand instead of assuming it saw no deer — the camera may simply be dead or offline. The boost is never affected by this." />
-        <SliderRow label="Image retention" min={7} max={365} step={7}
+        <SliderRow label="Image retention" min={7} max={365} step={1}
           value={s.image_retention_days ?? 60}
           display={`${Math.round(s.image_retention_days ?? 60)} days`}
           onChange={(v) => setS({ ...s, image_retention_days: v })} />

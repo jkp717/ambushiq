@@ -16,7 +16,7 @@ function InfoTip({ text }) {
           shorter height keeps it from reaching into the tightly stacked deer-rating rows */}
       <button type="button" className="icon-btn" title="What does this do?" aria-label="What does this do?" aria-expanded={open}
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ width: 32, height: 28, margin: "-6px -8px", padding: 0, minHeight: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+        style={{ width: 32, height: 28, margin: "-6px -2px", padding: 0, minHeight: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
                  position: "relative", zIndex: 1, touchAction: "manipulation" }}>
         <Info size={14} color="var(--sub)" />
       </button>
