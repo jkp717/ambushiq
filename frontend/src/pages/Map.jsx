@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, SkipBack, SkipForward, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -775,7 +775,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                 <button className="icon-btn map-nav-btn map-step-btn map-scrub-back"
                   onClick={() => { setPlaying(false); setHourPos((p) => Math.max(0, p - 1)); }}
                   disabled={hourPos <= 0} title="Back 15 minutes">
-                  <SkipBack size={16} />
+                  <ChevronLeft size={18} />
                 </button>
                 <div className="map-scrub-track">
                   <div style={{ position: "relative" }}>
@@ -835,7 +835,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                 <button className="icon-btn map-nav-btn map-step-btn map-scrub-fwd"
                   onClick={() => { setPlaying(false); setHourPos((p) => Math.min(maxSlot, p + 1)); }}
                   disabled={hourPos >= maxSlot} title="Forward 15 minutes">
-                  <SkipForward size={16} />
+                  <ChevronRight size={18} />
                 </button>
                 <button className="icon-btn map-nav-btn map-step-btn map-scrub-play" onClick={() => setPlaying((p) => !p)}
                   disabled={!curDay} title={playing ? "Pause" : "Play"}>
