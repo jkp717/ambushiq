@@ -788,7 +788,36 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 }
 .settings-section-title {
   font-size: 14px; font-weight: 600;
-  margin: 0 0 6px; padding-bottom: 0;
+  margin: 20px 0 6px; padding: 20px 0 0; border-top: 1px solid var(--bord);
+  /* a jump from the nav lands the header below the sticky top bar, tab bar and (on phones) the chip row */
+  scroll-margin-top: calc(var(--top-bar-h) + var(--tab-bar-h) + 60px);
+}
+.settings-body > .settings-section-title:first-of-type { margin-top: 0; }
+
+/* Settings → section nav. Phones: a sticky row of chips under the tab bar. */
+.settings-nav {
+  position: sticky; top: calc(var(--top-bar-h) + var(--tab-bar-h)); z-index: 998;
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: -16px -16px 12px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--bord);
+}
+.settings-nav::-webkit-scrollbar { display: none; }
+.settings-nav button {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; min-height: 32px;
+  padding: 5px 11px; border: 1px solid var(--bord2); border-radius: 16px;
+  background: var(--bg); color: var(--txt); font-size: 12.5px; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+.settings-nav button.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+/* Wide screens: a sticky menu down the left side, beside the settings column. */
+@media (min-width: 900px) {
+  .settings-page { display: grid; grid-template-columns: 190px minmax(0, 580px); gap: 28px; max-width: 830px; }
+  .settings-nav {
+    top: calc(var(--top-bar-h) + var(--tab-bar-h) + 16px); align-self: start;
+    flex-direction: column; gap: 2px; overflow: visible; margin: 0; padding: 0; background: none; border: none;
+  }
+  .settings-nav button { border: none; border-radius: 8px; padding: 7px 10px; font-size: 13px; color: var(--sub); }
+  .settings-nav button:hover { background: var(--surf); color: var(--txt); }
+  .settings-nav button.on { background: var(--surf); color: var(--navy); font-weight: 600; }
+  .settings-section-title { scroll-margin-top: calc(var(--top-bar-h) + var(--tab-bar-h) + 16px); }
 }
 .settings-desc {
   font-size: 13px; color: var(--sub);

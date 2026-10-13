@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch, Gauge } from "lucide-react";
 import { api } from "../services/api.js";
 import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -10,6 +10,52 @@ import InfoTip from "../components/ui/InfoTip.jsx";
 import JobsPanel from "../components/JobsPanel.jsx";
 import BuckModelSection from "../components/cameras/BuckModelSection.jsx";
 import { mToYd, ydToM, fmtYd, fmtDist } from "../utils/units.js";
+
+// The page's sections, in order — the nav menu lists these and each header carries the matching id.
+const SECTIONS = [
+  { id: "weather", label: "Weather source", icon: CloudSun },
+  { id: "map-layers", label: "Map layers", icon: MapIcon },
+  { id: "proximity", label: "Proximity weights", icon: Target },
+  { id: "daily-rating", label: "Daily rating", icon: Gauge },
+  { id: "thermal", label: "Thermal model", icon: Thermometer },
+  { id: "cameras", label: "Trail cameras", icon: Camera },
+  { id: "model", label: "Model training", icon: ScanSearch },
+  { id: "scouting", label: "Scouting suggestions", icon: Binoculars },
+  { id: "jobs", label: "Jobs", icon: ListChecks },
+  { id: "install", label: "Install app", icon: Download },
+];
+const sectionEl = (id) => document.getElementById(`settings-${id}`);
+
+function SectionTitle({ id, icon: Icon, children }) {
+  return (
+    <div className="settings-section-title" id={`settings-${id}`}>
+      <Icon size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> {children}
+    </div>
+  );
+}
+
+/* Jump-to menu: a sticky list on the left on wide screens, a sticky row of chips under the tab bar on phones.
+   The section on screen is highlighted; on phones its chip is kept in view in the row. */
+function SettingsNav({ sections, active, onPick }) {
+  const navRef = useRef(null);
+  useEffect(() => {
+    const nav = navRef.current;
+    const btn = nav?.querySelector(`[data-id="${active}"]`);
+    if (!btn || nav.scrollWidth <= nav.clientWidth) return;     // only the phone row scrolls sideways
+    const left = btn.offsetLeft - (nav.clientWidth - btn.offsetWidth) / 2;
+    nav.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+  }, [active]);
+  return (
+    <nav className="settings-nav" ref={navRef} aria-label="Settings sections">
+      {sections.map(({ id, label, icon: Icon }) => (
+        <button key={id} type="button" data-id={id} className={active === id ? "on" : undefined}
+          aria-current={active === id ? "true" : undefined} onClick={() => onPick(id)}>
+          <Icon size={14} /> <span>{label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 function SettingsPage({ reloadStands }) {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
@@ -49,6 +95,45 @@ function SettingsPage({ reloadStands }) {
     });
   }
 
+  const showInstall = !installed && (canInstall || isIOS);
+  const sections = SECTIONS.filter((x) => x.id !== "install" || showInstall);
+  const [active, setActive] = useState(SECTIONS[0].id);
+  const bodyRef = useRef(null);
+  const loaded = !!s;
+  // Scroll-spy: the active section is the last one whose header has passed a third of the way down the
+  // screen, or the last section once the page is scrolled to its end. Capture-phase listening catches the
+  // scroll whichever element does it (the document today).
+  useEffect(() => {
+    if (!loaded) return undefined;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const line = window.innerHeight / 3;
+      let cur = sections[0].id;
+      for (const { id } of sections) {
+        const el = sectionEl(id);
+        if (el && el.getBoundingClientRect().top <= line) cur = id;
+      }
+      const body = bodyRef.current;
+      if (body && body.getBoundingClientRect().bottom <= window.innerHeight + 4) cur = sections[sections.length - 1].id;
+      setActive(cur);
+    };
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(update); };
+    update();
+    document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("scroll", onScroll, { capture: true });
+      window.removeEventListener("resize", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, [loaded, showInstall]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function jumpTo(id) {
+    setActive(id);
+    sectionEl(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   if (!s) return <div style={{ padding: 16 }}>{err ? <Banner>{err}</Banner> : <Empty>Loading…</Empty>}</div>;
 
   const PROX_TYPES = [
@@ -79,11 +164,11 @@ function SettingsPage({ reloadStands }) {
 
   return (
     <div className="settings-page">
+      <SettingsNav sections={sections} active={active} onPick={jumpTo} />
+      <div className="settings-body" ref={bodyRef}>
       {err && <Banner>{err}</Banner>}
 
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20 }}>
-        <CloudSun size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Weather source
-      </div>
+      <SectionTitle id="weather" icon={CloudSun}>Weather source</SectionTitle>
       <p className="settings-desc">Which weather service supplies the hourly forecast that drives wind, thermal, and rating scoring.</p>
       <div className="settings-section">
         <Field label="Weather provider">
@@ -135,9 +220,7 @@ function SettingsPage({ reloadStands }) {
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
       </div>
 
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20 }}>
-        <MapIcon size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Map layers
-      </div>
+      <SectionTitle id="map-layers" icon={MapIcon}>Map layers</SectionTitle>
       <p className="settings-desc">
         USGS and Esri base maps need no setup. A free <a href="https://cloud.maptiler.com/account/keys/" target="_blank" rel="noreferrer">MapTiler key</a> adds
         MapTiler Outdoor and Satellite to the map's layer picker. Restrict the key to this site's address in the MapTiler dashboard.
@@ -153,7 +236,7 @@ function SettingsPage({ reloadStands }) {
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
       </div>
 
-      <div className="settings-section-title">Proximity weights</div>
+      <SectionTitle id="proximity" icon={Target}>Proximity weights</SectionTitle>
       <p className="settings-desc">Stands near these features get a ranking boost. <b>Weight</b> = max bonus; <b>falloff</b> = yards beyond which a feature stops helping.</p>
       {PROX_TYPES.map(({ key, label, icon: Icon, color }) => (
         <div key={key} className="settings-section">
@@ -180,7 +263,7 @@ function SettingsPage({ reloadStands }) {
         <button className="btn" onClick={reset}>Reset defaults</button>
       </div>
 
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20 }}>Daily rating — weather weights</div>
+      <SectionTitle id="daily-rating" icon={Gauge}>Daily rating — weather weights</SectionTitle>
       <p className="settings-desc">Tunes the 1–5 daily movement rating. Values are relative — they balance against each other automatically.</p>
       <div className="settings-section">
         {RW.map((r) => (
@@ -195,9 +278,7 @@ function SettingsPage({ reloadStands }) {
       </div>
 
       {/* ── Thermal model ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 24 }}>
-        <Thermometer size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Thermal model
-      </div>
+      <SectionTitle id="thermal" icon={Thermometer}>Thermal model</SectionTitle>
       <p className="settings-desc">
         Controls how much a stand's thermal drainage/updraft actually drives the
         blended scent direction, versus wind taking over. Thermals are strongest and
@@ -229,9 +310,7 @@ function SettingsPage({ reloadStands }) {
       </div>
 
       {/* ── Trail cameras ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 24 }}>
-        <Camera size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Trail cameras
-      </div>
+      <SectionTitle id="cameras" icon={Camera}>Trail cameras</SectionTitle>
       <p className="settings-desc">Control how frequently cameras sync and how much recent sightings can boost stand rankings.</p>
       <div className="settings-section">
         <SliderRow label="Sync interval" min={5} max={120} step={5}
@@ -288,9 +367,7 @@ function SettingsPage({ reloadStands }) {
       </div>
 
       {/* ── Model training (buck model) ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
-        <ScanSearch size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Model training
-      </div>
+      <SectionTitle id="model" icon={ScanSearch}>Model training</SectionTitle>
       <div className="settings-section">
         <SliderRow label="Minimum accuracy" min={50} max={99} step={1}
           value={s.buck_min_accuracy_pct ?? 85}
@@ -304,9 +381,7 @@ function SettingsPage({ reloadStands }) {
       <BuckModelSection refreshKey={buckRefresh} />
 
       {/* ── Scouting suggestions ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
-        <Binoculars size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Scouting suggestions
-      </div>
+      <SectionTitle id="scouting" icon={Binoculars}>Scouting suggestions</SectionTitle>
       <p className="settings-desc">
         Controls how the "Suggestions" map tool analyzes a drawn area for
         candidate hunting locations — terrain funnels, habitat edges, and how much
@@ -373,9 +448,7 @@ function SettingsPage({ reloadStands }) {
       </div>
 
       {/* ── Jobs ── */}
-      <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
-        <ListChecks size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Jobs
-      </div>
+      <SectionTitle id="jobs" icon={ListChecks}>Jobs</SectionTitle>
       <p className="settings-desc">
         Background tasks — run any of them now, and see whether the last run worked. Terrain
         re-analysis covers the stands in the current region.
@@ -383,11 +456,9 @@ function SettingsPage({ reloadStands }) {
       <JobsPanel onTerrainDone={reloadStands} />
 
       {/* ── Install app ── */}
-      {!installed && (canInstall || isIOS) && (
+      {showInstall && (
         <>
-          <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
-            <Download size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Install app
-          </div>
+          <SectionTitle id="install" icon={Download}>Install app</SectionTitle>
           <p className="settings-desc">
             Add AmbushIQ to your home screen for quicker, full-screen access — it opens like a
             regular app, without the browser's address bar.
@@ -411,6 +482,7 @@ function SettingsPage({ reloadStands }) {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }
