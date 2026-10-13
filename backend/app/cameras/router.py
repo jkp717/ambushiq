@@ -25,6 +25,7 @@ from app.core.config import CAMERA_BRANDS, CAMERA_IMAGE_DIR
 from app.core.database import engine
 from app.core.security import decrypt_credentials, encrypt_credentials, safe_join
 from app.dependencies import get_active_region_id, require_token, require_token_or_query
+from app.forecast import history
 from app.forecast.service import _camera_health
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
@@ -382,11 +383,13 @@ def camera_activity(
     date_to: Optional[date] = None,
     bucks: bool = False,
     by: Literal["hour", "date"] = "hour",
+    weather: Optional[Literal["temp", "pressure", "wind", "rain"]] = None,
     region_id: int = Depends(get_active_region_id),
     _=Depends(require_token),
 ):
     """Average sightings per day for each hour of the (property-local) day, over the filtered date range —
-    or, with by=date, the sightings on each date in the range.
+    or, with by=date, the sightings on each date in the range. `weather` adds that measure over the same range,
+    shaped to the same bars (see forecast.history.weather_series), for the chart's second axis.
     Empty brand / camera_id / species lists mean "all"; species may include "__none__" for unclassified.
     `bucks` counts only photos with a buck in them."""
     tz = activity.region_tz(get_region_dict(region_id)["property_timezone"])
@@ -400,8 +403,13 @@ def camera_activity(
     recorded_since = min((t.astimezone(tz).date() for _c, _s, t in parsed), default=None)
     matching = [r for r in parsed if activity.species_matches(r[1], species)]
     summarize = activity.daily_activity if by == "date" else activity.hourly_activity
-    return summarize(matching, tz=tz, today=datetime.now(tz).date(), date_from=date_from,
-                     date_to=date_to, recorded_since=recorded_since)
+    out = summarize(matching, tz=tz, today=datetime.now(tz).date(), date_from=date_from,
+                    date_to=date_to, recorded_since=recorded_since)
+    if weather and out["date_from"]:
+        start, end = date.fromisoformat(out["date_from"]), date.fromisoformat(out["date_to"])
+        history.ensure_hours(region_id, start, end)      # fetches only what isn't stored yet
+        out["weather"] = history.weather_series(region_id, tz, by, weather, start, end)
+    return out
 
 
 @router.get("/api/cameras/gallery")

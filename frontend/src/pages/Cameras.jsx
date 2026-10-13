@@ -22,6 +22,7 @@ function CamerasPage({ stands }) {
   const [activityFilters, setActivityFilters] = useState(EMPTY_FILTERS);
   const [galleryFilters, setGalleryFilters] = useState(EMPTY_FILTERS);
   const [activityGraph, setActivityGraph] = useState("hour");   // Daily Activity chart: by hour or by date
+  const [activityWeather, setActivityWeather] = useState("");   // its second axis: "" (off), temp, pressure, wind, rain
   const [err, setErr] = useState(null);
 
   const load = useCallback(async () => {
@@ -74,6 +75,7 @@ function CamerasPage({ stands }) {
       {tab === "activity" && (
         <DailyActivityTab cameras={cameras} speciesOptions={speciesOptions} onViewPhotos={viewHourPhotos}
           onViewDatePhotos={viewDatePhotos} graph={activityGraph} setGraph={setActivityGraph}
+          weather={activityWeather} setWeather={setActivityWeather}
           filters={activityFilters} setFilters={setActivityFilters} onGoSetup={() => setTab("setup")} />
       )}
       {tab === "gallery" && (

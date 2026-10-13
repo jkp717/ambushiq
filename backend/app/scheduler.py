@@ -183,6 +183,8 @@ def start_scheduler():
                   replace_existing=True, max_instances=1)
     sched.add_job(run_tracked, CronTrigger(hour=4, minute=30), args=["prune_tiles"], id="prune_tiles",
                   replace_existing=True, max_instances=1)
+    sched.add_job(run_tracked, CronTrigger(hour=9, minute=0), args=["weather_history"], id="weather_history",
+                  replace_existing=True, max_instances=1)
     # Keep the weather cache warm: first run shortly after boot (so a restart never leaves the
     # first user waiting on the provider), then every 30 minutes.
     sched.add_job(run_tracked, IntervalTrigger(minutes=30), args=["warm_forecast"], id="warm_forecast",

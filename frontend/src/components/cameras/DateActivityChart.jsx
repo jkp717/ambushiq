@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Images, X } from "lucide-react";
 import { niceMax, fmt } from "./ActivityChart.jsx";
+import { AXIS_W, weatherLabel, weatherScale, weatherTip, WeatherOverlay, WeatherAxis } from "./WeatherOverlay.jsx";
 
 const W = 600, H = 260;
 const PAD = { l: 38, r: 8, t: 12, b: 28 };
@@ -15,8 +16,9 @@ const longDay = (d) => d.toLocaleDateString("en-US", { weekday: "short", month: 
 /* One bar per date (property-local): `dates` is [{date: "YYYY-MM-DD", total}], quiet days included.
    Same look and interaction as ActivityChart: hover or tap a bar for its numbers and a button that opens the
    Gallery on that day's photos (`onViewPhotos(date)`). A long range keeps every bar tappable by making the
-   plot wider than the screen and scrolling it sideways, starting at the newest dates; the y-axis stays put. */
-function DateActivityChart({ dates, onViewPhotos }) {
+   plot wider than the screen and scrolling it sideways, starting at the newest dates; the y-axes stay put.
+   `weather` (optional) adds a second axis on the right: that measure per day, with low–high whiskers. */
+function DateActivityChart({ dates, weather, onViewPhotos }) {
   const [hover, setHover] = useState(null);
   const [pinned, setPinned] = useState(null);
   const [boxW, setBoxW] = useState(W);          // rendered width of the plot, in CSS px
@@ -25,18 +27,24 @@ function DateActivityChart({ dates, onViewPhotos }) {
   const plotRef = useRef(null);
   const scrollRef = useRef(null);
   const sel = pinned ?? hover;
+  const wscale = weatherScale(weather);
+  const P = wscale ? { ...PAD, r: AXIS_W } : PAD;
 
   const n = dates.length;
   const s = boxW / W;                                            // CSS px per chart unit
-  const vw = Math.max(W, PAD.l + PAD.r + n * (MIN_SLOT_PX / s)); // chart width in units: wider than W = scrolls
+  const vw = Math.max(W, P.l + P.r + n * (MIN_SLOT_PX / s)); // chart width in units: wider than W = scrolls
   const scrolls = vw > W;
-  const plotW = vw - PAD.l - PAD.r, plotH = H - PAD.t - PAD.b;
+  const plotW = vw - P.l - P.r, plotH = H - P.t - P.b;
   const slot = plotW / n, barW = slot * (slot * s > 4 ? 0.7 : 0.85);
   const max = niceMax(Math.max(0, ...dates.map((d) => d.total)));
-  const y = (v) => PAD.t + plotH * (1 - v / max);
+  const y = (v) => P.t + plotH * (1 - v / max);
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
   const peak = dates.reduce((best, d) => (d.total > best.total ? d : best), dates[0]);
   const step = Math.max(1, Math.ceil(LABEL_GAP_PX / (slot * s)));
+  const wy = wscale ? (v) => P.t + plotH * (1 - (v - wscale.lo) / (wscale.hi - wscale.lo)) : null;
+  const centers = dates.map((_d, i) => P.l + i * slot + slot / 2);
+  const wByDate = new Map((weather?.points || []).map((p) => [p.key, p]));
+  const wPoints = wscale ? { ...weather, points: dates.map((d) => wByDate.get(d.date) || { key: d.date, avg: null }) } : null;
   const manyYears = n > 0 && dates[0].date.slice(0, 4) !== dates[n - 1].date.slice(0, 4);
 
   useLayoutEffect(() => {
@@ -73,7 +81,7 @@ function DateActivityChart({ dates, onViewPhotos }) {
   const shown = sel != null ? dates[sel] : null;
   let tip = null;
   if (shown) {
-    const centerPx = (PAD.l + sel * slot + slot / 2) * s - scrollX;
+    const centerPx = (P.l + sel * slot + slot / 2) * s - scrollX;
     tip = {
       left: Math.min(boxW - TIP_HALF_PX, Math.max(TIP_HALF_PX, centerPx)),
       top: y(shown.total) * s,
@@ -91,7 +99,7 @@ function DateActivityChart({ dates, onViewPhotos }) {
   };
 
   const yAxis = ticks.map((t) => (
-    <text key={t} x={PAD.l - 6} y={y(t) + 4} textAnchor="end" className="act-axis">{fmt(t)}</text>
+    <text key={t} x={P.l - 6} y={y(t) + 4} textAnchor="end" className="act-axis">{fmt(t)}</text>
   ));
 
   return (
@@ -106,14 +114,14 @@ function DateActivityChart({ dates, onViewPhotos }) {
           onScroll={(e) => setScrollX(e.currentTarget.scrollLeft)}>
           <svg viewBox={`0 0 ${vw} ${H}`} style={scrolls ? { width: `${vw * s}px` } : undefined}
             role="img" aria-label="Animal sightings per day" onMouseLeave={leave} onClick={() => setPinned(null)}>
-            {ticks.map((t) => <line key={t} x1={PAD.l} x2={vw - PAD.r} y1={y(t)} y2={y(t)} className="act-grid" />)}
+            {ticks.map((t) => <line key={t} x1={P.l} x2={vw - P.r} y1={y(t)} y2={y(t)} className="act-grid" />)}
             {!scrolls && yAxis}
             {dates.map((d, i) => {
-              const x = PAD.l + i * slot + (slot - barW) / 2;
+              const x = P.l + i * slot + (slot - barW) / 2;
               const top = y(d.total);
               return (
                 <g key={d.date}>
-                  <rect x={x} y={top} width={barW} height={Math.max(0, PAD.t + plotH - top)} rx={Math.min(2, barW / 3)}
+                  <rect x={x} y={top} width={barW} height={Math.max(0, P.t + plotH - top)} rx={Math.min(2, barW / 3)}
                     className={"act-bar" + (sel === i ? " sel" : d === peak && d.total > 0 ? " peak" : "")} />
                   {(n - 1 - i) % step === 0 && (
                     // the newest label lines up with its bar's right edge so it isn't cut off
@@ -121,19 +129,27 @@ function DateActivityChart({ dates, onViewPhotos }) {
                       className="act-axis">{label(d.date)}</text>
                   )}
                   {/* full-height hit target so thin bars are easy to hit */}
-                  <rect x={PAD.l + i * slot} y={PAD.t} width={slot} height={plotH} fill="transparent" style={{ cursor: "pointer" }}
+                  <rect x={P.l + i * slot} y={P.t} width={slot} height={plotH} fill="transparent" style={{ cursor: "pointer" }}
                     onMouseEnter={() => enter(i)}
                     onClick={(e) => { e.stopPropagation(); setPinned(pinned === i ? null : i); }} />
                 </g>
               );
             })}
+            {wscale && <WeatherOverlay weather={wPoints} centers={centers} y={wy} dense={slot * s < 6} />}
+            {wscale && !scrolls && <WeatherAxis weather={weather} scale={wscale} x={vw - P.r + 6} y={wy} />}
           </svg>
         </div>
 
         {/* scrolling plot: the y-axis labels stay pinned at the left edge */}
         {scrolls && (
-          <svg className="act-yaxis" viewBox={`0 0 ${PAD.l} ${H}`} style={{ width: `${PAD.l * s}px` }} aria-hidden="true">
+          <svg className="act-yaxis" viewBox={`0 0 ${P.l} ${H}`} style={{ width: `${P.l * s}px` }} aria-hidden="true">
             {yAxis}
+          </svg>
+        )}
+
+        {scrolls && wscale && (
+          <svg className="act-yaxis act-yaxis-r" viewBox={`0 0 ${P.r} ${H}`} style={{ width: `${P.r * s}px` }} aria-hidden="true">
+            <WeatherAxis weather={weather} scale={wscale} x={6} y={wy} />
           </svg>
         )}
 
@@ -145,6 +161,7 @@ function DateActivityChart({ dates, onViewPhotos }) {
               {pinned != null && <button type="button" className="act-tip-x" onClick={() => setPinned(null)} aria-label="Close"><X size={14} /></button>}
             </div>
             <div className="act-tip-row"><span>Sightings</span><b>{shown.total}</b></div>
+            {wscale && <div className="act-tip-row"><span>{weatherLabel(weather)}</span><b>{weatherTip(weather, wPoints.points[sel])}</b></div>}
             {onViewPhotos && (
               <button type="button" className="act-tip-btn" disabled={shown.total === 0}
                 onClick={() => onViewPhotos(shown.date)}>

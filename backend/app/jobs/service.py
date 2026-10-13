@@ -41,6 +41,7 @@ def registry() -> dict[str, dict]:
     from app import scheduler as sch
     from app.cameras.bucks import train_job as train_bucks_job
     from app.cameras.service import find_deer_job
+    from app.forecast.history import weather_history_job
     from app.regions.terrain import fetch_property_terrain
     from app.stands.service import terrain_reanalyze_job
     return {
@@ -70,6 +71,11 @@ def registry() -> dict[str, dict]:
         "warm_forecast": {
             "label": "Refresh weather forecast", "icon": "weather", "fn": sch.warm_forecast_job,
             "description": "Re-fetches the forecast and historical baselines for every region.",
+        },
+        "weather_history": {
+            "label": "Keep weather history", "icon": "weather", "fn": weather_history_job,
+            "description": "Stores the past two weeks of observed weather at each property, for the "
+                           "Daily Activity chart's weather axis.",
         },
         "auto_cleanup": {
             "label": "Delete old camera photos", "icon": "cleanup", "fn": sch.auto_cleanup_job,

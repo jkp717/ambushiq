@@ -4,6 +4,7 @@ import { api } from "../../services/api.js";
 import Banner from "../ui/Banner.jsx";
 import ActivityChart from "./ActivityChart.jsx";
 import DateActivityChart from "./DateActivityChart.jsx";
+import { WEATHER_OPTIONS, WeatherLegend } from "./WeatherOverlay.jsx";
 import CameraFilterModal from "./CameraFilterModal.jsx";
 import { activeFilterCount, filterParams } from "./filters.js";
 
@@ -13,14 +14,17 @@ function fmtDay(iso) {
 
 const GRAPHS = [{ key: "hour", label: "By hour" }, { key: "date", label: "By date" }];
 
-/* `graph` picks the chart: "hour" (average per hour of the day, the default) or "date" (sightings on each date). */
-function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, graph, setGraph, onGoSetup, onViewPhotos, onViewDatePhotos }) {
+/* `graph` picks the chart: "hour" (average per hour of the day, the default) or "date" (sightings on each date).
+   `weather` ("" = off) adds a weather measure on a second axis: temp, pressure, wind or rain. */
+function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, graph, setGraph, weather, setWeather,
+                            onGoSetup, onViewPhotos, onViewDatePhotos }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [filtering, setFiltering] = useState(false);
   const params = filterParams(filters);
   if (graph === "date") params.set("by", "date");
+  if (weather) params.set("weather", weather);
   const query = params.toString();
   const count = activeFilterCount(filters);
 
@@ -57,6 +61,12 @@ function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, graph,
               onClick={() => setGraph(key)}>{label}</button>
           ))}
         </div>
+        <label className="act-weather">
+          <span>Secondary axis</span>
+          <select value={weather} onChange={(e) => setWeather(e.target.value)}>
+            {WEATHER_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+        </label>
         {loading && <RefreshCw size={14} className="spin" color="var(--sub)" />}
       </div>
 
@@ -71,8 +81,11 @@ function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, graph,
                 {" "}({data.days} day{data.days === 1 ? "" : "s"}) - {data.total} sighting{data.total === 1 ? "" : "s"}
               </div>
               {data.graph === "date"
-                ? <DateActivityChart dates={data.dates} onViewPhotos={onViewDatePhotos} />
-                : <ActivityChart hours={data.hours} onViewPhotos={onViewPhotos} />}
+                ? <DateActivityChart dates={data.dates} weather={data.weather} onViewPhotos={onViewDatePhotos} />
+                : <ActivityChart hours={data.hours} weather={data.weather} onViewPhotos={onViewPhotos} />}
+              {data.weather && (data.weather.points.some((p) => p.avg != null)
+                ? <WeatherLegend weather={data.weather} />
+                : <div className="act-legend">No weather history for these dates yet — try again in a minute.</div>)}
             </>
       )}
 
