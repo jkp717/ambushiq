@@ -10,8 +10,11 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
 
+from app.forecast.providers import _sun_times_utc
+
 UNCLASSIFIED = "__none__"          # query-string stand-in for "no species recorded"
 BURST_GAP = timedelta(minutes=5)   # photos of one species on one camera closer than this are one sighting
+SHOOTING_LIGHT = timedelta(minutes=30)   # "daylight" starts this long before sunrise and ends this long after sunset
 
 
 def region_tz(name: Optional[str]) -> tzinfo:
@@ -125,6 +128,27 @@ def in_hour_window(local_dt: datetime, hour_from: Optional[int], hour_to: Option
     if lo == hi:
         return True
     return lo <= minute < hi if lo < hi else (minute >= lo or minute < hi)
+
+
+class ShootingLight:
+    """Is a UTC time in legal shooting light: 30 min before sunrise to 30 min after sunset on its
+    property-local date? Sun times are cached per date, since a gallery page checks hundreds of photos.
+    A date with no sunrise or sunset (polar day/night) never hides anything."""
+
+    def __init__(self, lat: float, lon: float, tz_name: Optional[str]):
+        self.lat, self.lon = lat, lon
+        self.tz_name = tz_name or "America/Chicago"
+        self.tz = region_tz(tz_name)
+        self._days: dict[date, tuple[Optional[datetime], Optional[datetime]]] = {}
+
+    def __call__(self, t_utc: datetime) -> bool:
+        d = t_utc.astimezone(self.tz).date()
+        if d not in self._days:
+            self._days[d] = _sun_times_utc(self.lat, self.lon, d, self.tz_name)
+        sunrise, sunset = self._days[d]
+        if sunrise is None or sunset is None:
+            return True
+        return sunrise - SHOOTING_LIGHT <= t_utc <= sunset + SHOOTING_LIGHT
 
 
 def utc_date_bounds(date_from: Optional[date], date_to: Optional[date]) -> tuple[Optional[str], Optional[str]]:

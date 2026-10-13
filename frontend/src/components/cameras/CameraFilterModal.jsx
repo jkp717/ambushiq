@@ -115,6 +115,14 @@ function CameraFilterModal({ filters, cameras, speciesOptions, showTime, onApply
             <div className="filter-none">Bucks you've marked, plus ones the buck model finds once it's trained (Settings → Model training).</div>
           </section>
 
+          <section>
+            <label className="filter-check">
+              <input type="checkbox" checked={!!draft.daylightOnly} onChange={(e) => set({ daylightOnly: e.target.checked })} />
+              <span>Daylight only</span>
+            </label>
+            <div className="filter-none">From 30 minutes before sunrise to 30 minutes after sunset (legal shooting light), using your property's location.</div>
+          </section>
+
           {showTime && (
             <section>
               <label className="filter-check">

@@ -382,6 +382,7 @@ def camera_activity(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     bucks: bool = False,
+    daylight: bool = False,
     by: Literal["hour", "date"] = "hour",
     weather: Optional[Literal["temp", "pressure", "wind", "rain"]] = None,
     region_id: int = Depends(get_active_region_id),
@@ -391,8 +392,10 @@ def camera_activity(
     or, with by=date, the sightings on each date in the range. `weather` adds that measure over the same range,
     shaped to the same bars (see forecast.history.weather_series), for the chart's second axis.
     Empty brand / camera_id / species lists mean "all"; species may include "__none__" for unclassified.
-    `bucks` counts only photos with a buck in them."""
-    tz = activity.region_tz(get_region_dict(region_id)["property_timezone"])
+    `bucks` counts only photos with a buck in them; `daylight` only photos in legal shooting light
+    (30 min before sunrise to 30 min after sunset at the property)."""
+    region = get_region_dict(region_id)
+    tz = activity.region_tz(region["property_timezone"])
     with Session(engine) as s:
         q = _scoped(select(CameraSighting.camera_id, CameraSighting.species,
                            CameraSighting.timestamp), region_id, brand, camera_id).where(CameraSighting.is_animal == 1)
@@ -401,6 +404,9 @@ def camera_activity(
         rows = s.execute(q).all()
     parsed = [(cid, sp or None, t) for cid, sp, ts in rows if (t := activity.parse_utc(ts)) is not None]
     recorded_since = min((t.astimezone(tz).date() for _c, _s, t in parsed), default=None)
+    if daylight:      # after recorded_since, so the default date range doesn't move
+        light = activity.ShootingLight(region["lat"], region["lon"], region["property_timezone"])
+        parsed = [r for r in parsed if light(r[2])]
     matching = [r for r in parsed if activity.species_matches(r[1], species)]
     summarize = activity.daily_activity if by == "date" else activity.hourly_activity
     out = summarize(matching, tz=tz, today=datetime.now(tz).date(), date_from=date_from,
@@ -424,6 +430,7 @@ def camera_gallery(
     include_empty: bool = False,
     favorites: bool = False,
     bucks: bool = False,
+    daylight: bool = False,
     before_ts: Optional[str] = None,
     before_id: Optional[int] = None,
     limit: int = 48,
@@ -431,9 +438,12 @@ def camera_gallery(
     _=Depends(require_token),
 ):
     """Newest-first photo gallery across cameras. Dates and the time-of-day window are in property-local
-    time (a window like 20 -> 5 wraps midnight). Page with the returned `next` cursor."""
+    time (a window like 20 -> 5 wraps midnight). `daylight` keeps only photos in legal shooting light
+    (30 min before sunrise to 30 min after sunset at the property). Page with the returned `next` cursor."""
     limit = max(1, min(limit, 200))
-    tz = activity.region_tz(get_region_dict(region_id)["property_timezone"])
+    region = get_region_dict(region_id)
+    tz = activity.region_tz(region["property_timezone"])
+    light = activity.ShootingLight(region["lat"], region["lon"], region["property_timezone"]) if daylight else None
     lo, hi = activity.utc_date_bounds(date_from, date_to)
     chunk, items, exhausted = 200, [], False
     cursor = (before_ts, before_id) if before_ts and before_id is not None else None
@@ -477,6 +487,8 @@ def camera_gallery(
                 if date_to and local.date() > date_to:
                     continue
                 if not activity.in_hour_window(local, hour_from, hour_to):
+                    continue
+                if light and not light(t):
                     continue
                 items.append({**sg.to_dict(), "camera_name": cam.name, "camera_brand": cam.brand})
                 if len(items) > limit:
