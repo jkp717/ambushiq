@@ -31,7 +31,44 @@ def blend_scent_dir(wind_from, ww, thermal_to, tw) -> float:
     return (math.degrees(math.atan2(wx + tx, wy + ty)) + 360) % 360
 
 
-def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None) -> dict:
+SUN_SWITCH = 0.25        # share of 400 W/m² (~100 W/m²) of sun on the slope that turns thermals uphill
+DIFFUSE_SHARE = 0.3      # rough share of sunlight that is diffuse sky light, the same whatever way a slope faces
+
+
+def slope_sun_ratio(time_h: float, sr_h: float, ss_h: float, lat: float | None,
+                    slope_pct: float | None, aspect_deg: float | None) -> float:
+    """How much more (>1) or less (<1) direct sun a slope gets than flat ground at this time.
+
+    The sun's position comes from the day's own sunrise and sunset (solar noon halfway between,
+    declination from the day length at this latitude), so no timezone is needed and it agrees with
+    the forecast's sun times. A slope facing the low morning sun warms, and turns its thermals
+    uphill, well before flat ground; one facing away stays shaded and keeps draining.
+    1.0 (flat-ground behaviour) when the latitude or slope is unknown, the ground is flat, or the
+    sun is down."""
+    if lat is None or not slope_pct or aspect_deg is None or ss_h <= sr_h:
+        return 1.0
+    phi = math.radians(max(-89.0, min(89.0, float(lat))))
+    if abs(phi) < 1e-3:
+        dec = 0.0                                   # equator: day length says nothing about season
+    else:
+        h0 = math.radians((ss_h - sr_h) / 2 * 15)
+        dec = math.atan(-math.cos(h0) / math.tan(phi))
+    ha = math.radians((time_h - (sr_h + ss_h) / 2) * 15)
+    sin_el = math.sin(phi) * math.sin(dec) + math.cos(phi) * math.cos(dec) * math.cos(ha)
+    if sin_el <= 0:
+        return 1.0
+    cos_el = math.sqrt(max(0.0, 1 - sin_el ** 2))
+    # sun azimuth, clockwise from north: east of south before solar noon, west after
+    cos_az = (math.sin(dec) - sin_el * math.sin(phi)) / max(1e-9, cos_el * math.cos(phi))
+    az = math.degrees(math.acos(max(-1.0, min(1.0, cos_az))))
+    if ha > 0:
+        az = 360 - az
+    beta = math.atan(float(slope_pct) / 100)
+    cos_i = sin_el * math.cos(beta) + cos_el * math.sin(beta) * math.cos(math.radians(az - aspect_deg))
+    return max(0.0, min(3.0, cos_i / max(sin_el, 0.05)))
+
+
+def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None, slope_sun=1.0) -> dict:
     """Return the thermal phase and weight for one forecast hour.
 
     temp_swing: daily high − daily low in °C from the forecast.  When provided,
@@ -40,6 +77,11 @@ def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None) -> dict:
     Baseline (swing_factor = 1.0) is calibrated to a 12 °C / 22 °F swing —
     typical clear-sky fall conditions.  Without temp data the original weights
     are used unchanged (swing_factor = 1.0).
+
+    slope_sun: slope_sun_ratio() for the stand's slope (1.0 = flat ground). The phase switches on
+    the sun actually reaching the slope, not the clock: in the morning drainage turns uphill once
+    that sun passes SUN_SWITCH (a sun-facing slope well before flat ground, a cloudy morning keeps
+    draining for up to 3 h), and in the evening a slope turned away from the sun drains first.
     """
     # swing_factor: 0.5 (near-zero swing) → 1.0 (12 °C / 22 °F) → 1.4 (≥ 24 °C / 43 °F)
     if temp_swing is None:
@@ -51,23 +93,28 @@ def thermal_state(time_h, solar, sr_h, ss_h, temp_swing=None) -> dict:
     # keeps building through midday. Returned unconditionally so callers can feed
     # it into thermal_coherence() even for sinking/neutral hours.
     sf = min(1.0, max(0.0, solar / 400))
+    # the sun on this slope: diffuse sky light plus direct sun scaled by the slope's angle to it
+    eff = min(1.0, sf * (DIFFUSE_SHARE + (1 - DIFFUSE_SHARE) * max(0.0, slope_sun)))
 
+    def sinking(weight):
+        return {"phase": "sinking", "uphill": False, "weight": min(1.0, weight * swing_factor),
+                "swing_factor": swing_factor, "solar_frac": sf}
+
+    rising = {"phase": "rising", "uphill": True, "weight": 0.4 + 0.4 * sf, "swing_factor": swing_factor,
+              "solar_frac": sf}
     a, b = time_h - sr_h, ss_h - time_h
-    if -1 <= a <= 2:
-        return {"phase": "sinking", "uphill": False,
-                "weight": min(1.0, 0.85 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
+    if -1 <= a <= 3:
+        # dawn drainage holds until the sun on the slope is strong enough to turn it uphill
+        return rising if a >= 0 and eff > SUN_SWITCH else sinking(0.85)
     # Pre-sunset drainage only takes over once the sun has actually stopped heating the
-    # slope; on a bright late afternoon (sf > 0.25) upslope flow is still running, so
-    # fall through to the "rising" branch instead of reporting a 180°-wrong direction.
-    if -1 <= b <= 3 and sf <= 0.25:
-        return {"phase": "sinking", "uphill": False,
-                "weight": min(1.0, 0.90 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
+    # slope; on a bright late afternoon upslope flow is still running, so fall through to
+    # the "rising" branch instead of reporting a 180°-wrong direction.
+    if -1 <= b <= 3 and eff <= SUN_SWITCH:
+        return sinking(0.90)
     if time_h < sr_h - 1 or time_h > ss_h + 1:
-        return {"phase": "sinking", "uphill": False,
-                "weight": min(1.0, 0.70 * swing_factor), "swing_factor": swing_factor, "solar_frac": sf}
-    if sf > 0.25:
-        return {"phase": "rising", "uphill": True,
-                "weight": 0.4 + 0.4 * sf, "swing_factor": swing_factor, "solar_frac": sf}
+        return sinking(0.70)
+    if eff > SUN_SWITCH:
+        return rising
     return {"phase": "neutral", "uphill": False, "weight": 0.15, "swing_factor": swing_factor, "solar_frac": sf}
 
 
@@ -152,8 +199,12 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
     """`eddy_site` is where the stand reads lee-eddy terrain from (its point in the property
     grid); when omitted, the stand's own terrain-analysis grid is used."""
     downhill, drainage, channel, known = _terrain_vectors(stand)
+    slope_sun = 1.0
+    if known and stand.get("terrain"):
+        slope_sun = slope_sun_ratio(hour["time_h"], hour["sunrise_h"], hour["sunset_h"], stand.get("lat"),
+                                    stand["terrain"].get("slope_pct"), downhill)
     therm = thermal_state(hour["time_h"], hour["solar"], hour["sunrise_h"], hour["sunset_h"],
-                          hour.get("temp_swing"))
+                          hour.get("temp_swing"), slope_sun)
     thermal_to = (downhill + 180) % 360 if therm["uphill"] else drainage
 
     ww = max(0.2, min(1.0, hour["wind_speed"] / 12))

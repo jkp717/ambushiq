@@ -391,6 +391,30 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const curMinute  = (hourPos % 4) * 15;
   const curHour    = curDay?.hours[curHourIdx];
 
+  // Where the day's thermals actually switch, read from the model's own per-slot forecast (the copy
+  // saved on the phone, so it works offline too): ▲ at the first slot from an hour before sunrise where
+  // most stands with a thermal arrow are rising, ▽ at the first slot after that where most no longer are.
+  // `pos` is the slider slot. Either is null when it doesn't happen that day (e.g. overcast: no rising).
+  const thermalSwitch = useMemo(() => {
+    if (!curDay || !savedHours) return null;
+    const from = (curDay.sunrise_h ?? 6.5) - 1;
+    let rise = null, sink = null;
+    curDay.hours.forEach((hr, i) => {
+      [0, 15, 30, 45].forEach((m, q) => {
+        const t = hr.hour + m / 60;
+        const c = savedHours.get(slotKey(hourIso(curDay, hr), m)) || (m === 0 ? null : savedHours.get(slotKey(hourIso(curDay, hr))));
+        if (!c || t < from) return;
+        const arrows = c.stands.filter((s) => s.vectors?.thermal_to_deg != null);
+        const risingMost = arrows.length > 0
+          && arrows.filter((s) => s.vectors.thermal_phase === "rising").length * 2 > arrows.length;
+        const slot = { pos: i * 4 + q, t };
+        if (!rise && risingMost) rise = slot;
+        else if (rise && !sink && !risingMost) sink = slot;
+      });
+    });
+    return { rise, sink };
+  }, [curDay, savedHours]);
+
   // pause when day changes
   useEffect(() => { setPlaying(false); }, [dayIdx]);
 
@@ -752,6 +776,11 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             const numSlots = curDay.hours.length * 4;
             const hPct = (h) => `${Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100)).toFixed(1)}%`;
             const pctNum = (h) => Math.max(0, Math.min(100, (h * 4 / (numSlots - 1)) * 100));
+            const slotPct = (pos) => `${Math.max(0, Math.min(100, (pos / (numSlots - 1)) * 100)).toFixed(1)}%`;
+            const clock = (t) => {
+              const hh = Math.floor(t), mm = Math.round((t - hh) * 60);
+              return `${hh % 12 || 12}:${String(mm).padStart(2, "0")} ${hh >= 12 ? "PM" : "AM"}`;
+            };
             const mStart = Math.max(0, srH - 0.25), mEnd = srH + 3;
             const eStart = ssH - 3, eEnd = Math.min(maxHour, ssH + 0.25);
             const mStartP = pctNum(mStart), mEndP = pctNum(mEnd), eStartP = pctNum(eStart), eEndP = pctNum(eEnd);
@@ -822,10 +851,14 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                         positioned over this row so they don't disturb the
                         labels' own space-between layout. */}
                     <div className="map-slider-markers">
-                      <div className="map-thermal-marker" style={{ left: hPct(srH + 2), color: "#1E7FB0" }}
-                        title={`Thermals switch to rising (~${Math.round(srH + 2)}:00)`}>▲</div>
-                      <div className="map-thermal-marker" style={{ left: hPct(ssH - 3), color: "#7A3FA0" }}
-                        title={`Thermals switch to sinking (~${Math.round(ssH - 3)}:00)`}>▽</div>
+                      {thermalSwitch?.rise && (
+                        <div className="map-thermal-marker" style={{ left: slotPct(thermalSwitch.rise.pos), color: "#1E7FB0" }}
+                          title={`Most of your stands' thermals switch to rising (~${clock(thermalSwitch.rise.t)})`}>▲</div>
+                      )}
+                      {thermalSwitch?.sink && (
+                        <div className="map-thermal-marker" style={{ left: slotPct(thermalSwitch.sink.pos), color: "#7A3FA0" }}
+                          title={`Most of your stands' thermals switch to sinking (~${clock(thermalSwitch.sink.t)})`}>▽</div>
+                      )}
                     </div>
                     <span>{curDay.hours[0]?.label}</span>
                     <span>{curDay.hours[Math.floor(curDay.hours.length / 2)]?.label}</span>
