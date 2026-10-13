@@ -305,7 +305,9 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   padding: 8px 12px calc(6px + env(safe-area-inset-bottom, 0px));
   display: grid; align-items: start;
   column-gap: 6px; row-gap: 8px;
-  grid-template-columns: auto 1fr auto auto;
+  /* minmax(0, 1fr): the flexible column may shrink below its content, so nothing pushes the panel
+     past the screen edge on a narrow phone */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
     "top   top   top  top"
     "back  track fwd  play";
@@ -348,14 +350,15 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   grid-area: top;
   display: flex; align-items: center;
   gap: 8px; flex-wrap: nowrap;
+  min-width: 0;
 }
 
 /* Date nav */
 .map-day-nav-wrap {
-  position: relative; flex-shrink: 0;
+  position: relative; flex-shrink: 1; min-width: 0;
 }
 .map-day-nav {
-  display: flex; align-items: center; gap: 2px;
+  display: flex; align-items: center; gap: 2px; min-width: 0;
 }
 .map-nav-btn {
   color: var(--navy) !important;
@@ -365,7 +368,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 /* Date label — now a clickable button */
 .map-day-label-btn {
   font-size: 14px; font-weight: 700;
-  min-width: 110px; text-align: center; color: var(--txt);
+  flex: 0 1 110px; min-width: 0; text-align: center; color: var(--txt);   /* 110px, shrinking only on a narrow phone */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: none; border: none; cursor: pointer;
   padding: 4px 6px; border-radius: 6px;
   transition: background 0.12s;
@@ -405,7 +409,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .map-hour-slider { width: 100%; height: 8px; border-radius: 4px; touch-action: none; }  /* the drag stays the slider's */
 /* times keep one width while scrubbing (9:15 AM vs 12:45 PM), so the time bar doesn't grow and shrink */
 .map-time-fixed, .map-time-compact, .map-slider-tooltip { font-variant-numeric: tabular-nums; }
-.map-time-fixed, .map-time-compact { display: inline-block; min-width: 8ch; text-align: left; }
+.map-time-fixed { display: inline-block; min-width: 8ch; text-align: left; }
 /* time tooltip shown above the handle while hovering/dragging the slider */
 .map-slider-tooltip {
   position: absolute; top: -30px;
@@ -642,7 +646,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
    different areas — no markup duplication needed. */
 @media (max-width: 480px) and (orientation: portrait) {
   .map-ctrl-panel {
-    grid-template-columns: 1fr auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
     grid-template-areas:
       "top  back fwd  play"
       "track track track track";
