@@ -79,4 +79,10 @@ function ratingScore5(rating) {
   return rating.score_5 != null ? rating.score_5.toFixed(1) : rating.rating;
 }
 
-export { localDate, corridorLengthFt, formatRelTime, formatDateTime, dateGroupLabel, morningStartIdx, ratingScore5 };
+/* the color a deer rating reads in, from its whole-number rating (green 4-5, amber 3, red 1-2) */
+function ratingTone(rating) {
+  const r = rating.rating;
+  return r >= 4 ? "var(--green)" : r === 3 ? "var(--amber)" : "var(--red)";
+}
+
+export { localDate, corridorLengthFt, formatRelTime, formatDateTime, dateGroupLabel, morningStartIdx, ratingScore5, ratingTone };

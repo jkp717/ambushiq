@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, GripHorizontal, Navigation2 } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, GripHorizontal, Navigation2,
+         Sun, CloudSun, Cloud, CloudDrizzle, CloudRain, CloudSnow } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
 import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
-import { localDate, morningStartIdx } from "../utils/formatters.js";
+import { localDate, morningStartIdx, ratingScore5, ratingTone } from "../utils/formatters.js";
 import { fmtDist, fmtYd } from "../utils/units.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M, distanceM } from "../utils/geo.js";
@@ -20,64 +21,42 @@ import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompt
 import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 import SelectionBar from "../components/SelectionBar.jsx";
 
-function DatePickerPopup({ days, dayIdx, utcOffset, onSelect, onClose }) {
+const WX_ICONS = { sun: Sun, partly: CloudSun, cloud: Cloud, drizzle: CloudDrizzle, rain: CloudRain, snow: CloudSnow };
+
+/* The time panel's day picker: one chip per forecast day with its weekday, date, weather icon and deer
+   movement score (colored like the Outlook). The bottom-sheet tab is the one place the chosen date and
+   time are spelled out; this strip is just for moving between days. Swipes sideways; the chosen day is
+   kept centred in view. */
+function DayStrip({ days, dayIdx, ratings, utcOffset, onPick }) {
+  const stripRef = useRef(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    const chip = strip?.children[dayIdx];
+    if (!chip || strip.scrollWidth <= strip.clientWidth) return;
+    // scrolls the strip only (scrollIntoView could also move the page or the sheet)
+    strip.scrollTo({ left: Math.max(0, chip.offsetLeft - (strip.clientWidth - chip.offsetWidth) / 2), behavior: "smooth" });
+  }, [dayIdx, days.length]);
   const today = localDate(utcOffset);
-  if (!days.length) return null;
-
-  const availSet = new Set(days.map(d => d.day));
-
-  // Calendar month is anchored to the first forecast day
-  const refDate = new Date(days[0].day + "T12:00:00Z");
-  const year  = refDate.getUTCFullYear();
-  const month = refDate.getUTCMonth(); // 0-based
-
-  const firstOfMonth = new Date(Date.UTC(year, month, 1));
-  const startDow     = firstOfMonth.getUTCDay();          // 0=Sun
-  const daysInMonth  = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-  const monthLabel   = firstOfMonth.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
-
-  // Build cell array: leading nulls + date strings for the month
-  const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) {
-    cells.push(`${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
-  }
-
-  // If any forecast day spills into next month, append those cells too
-  const lastDay   = days[days.length - 1];
-  const lastDate  = new Date(lastDay.day + "T12:00:00Z");
-  if (lastDate.getUTCMonth() !== month || lastDate.getUTCFullYear() !== year) {
-    const nm  = month + 1, ny = nm > 11 ? year + 1 : year, nm2 = nm > 11 ? 0 : nm;
-    const dnm = new Date(Date.UTC(ny, nm2 + 1, 0)).getUTCDate();
-    for (let d = 1; d <= dnm; d++) {
-      const ds = `${ny}-${String(nm2 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      if (availSet.has(ds)) cells.push(ds);
-    }
-  }
-
-  const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
   return (
-    <div className="map-date-picker">
-      <div className="map-dp-hd">{monthLabel}</div>
-      <div className="map-dp-dow">{DOW.map((d, i) => <span key={i}>{d}</span>)}</div>
-      <div className="map-dp-grid">
-        {cells.map((ds, i) => {
-          if (!ds) return <span key={i} className="map-dp-empty" />;
-          const avail = availSet.has(ds);
-          const idx   = days.findIndex(d => d.day === ds);
-          const sel   = idx === dayIdx;
-          const isToday = ds === today;
-          return (
-            <button key={i}
-              className={"map-dp-day" + (sel ? " sel" : "") + (isToday ? " today" : "") + (!avail ? " unavail" : "")}
-              disabled={!avail}
-              onClick={() => { onSelect(idx); onClose(); }}>
-              {parseInt(ds.slice(-2), 10)}
-            </button>
-          );
-        })}
-      </div>
+    <div className="map-day-strip" role="tablist" aria-label="Forecast day" ref={stripRef}>
+      {days.map((d, i) => {
+        const date = new Date(d.day + "T12:00:00");
+        const rating = ratings?.get(d.day);
+        const Icon = WX_ICONS[d.wx?.icon];
+        const score = rating ? ratingScore5(rating) : null;
+        return (
+          <button key={d.day} type="button" role="tab" aria-selected={i === dayIdx}
+            className={"map-day-chip" + (i === dayIdx ? " on" : "")} onClick={() => onPick(i)}
+            title={[d.label, d.wx?.text, score && `${score}/5 movement`].filter(Boolean).join(" · ")}>
+            <span className="map-day-chip-dow">{d.day === today ? "Today" : date.toLocaleDateString("en-US", { weekday: "short" })}</span>
+            <span className="map-day-chip-date">{date.getDate()}</span>
+            <span className="map-day-chip-wx" role="img" aria-label={d.wx?.text || "No weather summary"}>
+              {Icon && <Icon size={18} />}
+            </span>
+            <span className="map-day-chip-score" style={rating ? { "--tone": ratingTone(rating) } : undefined}>{score ?? "–"}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -221,9 +200,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [hoursSettled, setHoursSettled] = useState(false);
   const [firstSlotDone, setFirstSlotDone] = useState(false);
   const foregroundTick = useForegroundRefresh();
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
-  const datePickerRef = useRef(null);
+  const [ratings, setRatings] = useState(null);      // day -> deer movement rating, for the day strip
   const huntMapRef = useRef(null);
   const [showOfflinePanel, setShowOfflinePanel] = useState(false);
 
@@ -274,12 +252,6 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     });
   }, []);
 
-  useEffect(() => {
-    if (!showDatePicker) return;
-    function h(e) { if (datePickerRef.current && !datePickerRef.current.contains(e.target)) setShowDatePicker(false); }
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [showDatePicker]);
 
   useEffect(() => {
     if (!sliderDragging) return;
@@ -342,6 +314,17 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       }
       if (!cancel) setHoursSettled(true);
     })();
+    return () => { cancel = true; };
+  }, [standsReady, hasStands, activeRegion?.id, foregroundTick]);
+
+  // Each day's movement rating for the day strip: the same saved copy the Outlook keeps, so it shows offline.
+  useEffect(() => {
+    setRatings(null);
+    if (!standsReady || !hasStands) return undefined;
+    let cancel = false;
+    apiSaved("/deer-ratings")
+      .then((j) => { if (!cancel) setRatings(new Map((j.ratings || []).map((r) => [r.day, r]))); })
+      .catch(() => {});
     return () => { cancel = true; };
   }, [standsReady, hasStands, activeRegion?.id, foregroundTick]);
 
@@ -746,33 +729,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               {time && <span className="map-time-fixed">{time}</span>}</>;
           })()}>
         <div className="map-ctrl-panel">
-          {/* Single compact row: date nav + time (weather moved to a floating card on the map) */}
-          <div className="map-ctrl-top">
-            {/* Date nav with calendar picker popup */}
-            <div className="map-day-nav-wrap" ref={datePickerRef}>
-              <div className="map-day-nav">
-                <button className="icon-btn map-nav-btn"
-                  onClick={() => { const ni = Math.max(0, dayIdx - 1); setDayIdx(ni); setHourPos(morningStartIdx(days[ni])); }}
-                  disabled={dayIdx === 0}><ChevronLeft size={18} /></button>
-                <button className="map-day-label-btn" onClick={() => setShowDatePicker(s => !s)}>
-                  {curDay?.label ?? "—"}
-                </button>
-                <button className="icon-btn map-nav-btn"
-                  onClick={() => { const ni = Math.min(days.length - 1, dayIdx + 1); setDayIdx(ni); setHourPos(morningStartIdx(days[ni])); }}
-                  disabled={dayIdx >= days.length - 1}><ChevronRight size={18} /></button>
-              </div>
-              {showDatePicker && (
-                <DatePickerPopup days={days} dayIdx={dayIdx} utcOffset={utcOffset}
-                  onSelect={(i) => { setDayIdx(i); setHourPos(morningStartIdx(days[i])); }}
-                  onClose={() => setShowDatePicker(false)} />
-              )}
-            </div>
-            {/* Current time */}
-            {curHour && (() => {
-              const h = curHour.hour, ampm = h >= 12 ? "PM" : "AM";
-              return <span className="map-time-compact">{`${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}`}</span>;
-            })()}
-          </div>
+          {/* Day strip: moving between days (the tab above spells out the chosen date and time) */}
+          <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
+            onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
 
           {/* Media-control row: back/forward step buttons + play/pause flank the
               slider (15-min steps, period colours painted on the track) + hour/15-min

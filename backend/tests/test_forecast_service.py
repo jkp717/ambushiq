@@ -211,3 +211,41 @@ def test_nws_interval_precip_is_split_across_hours():
     assert sum(v for v in per_hour if v is not None) == 6.0
     repeated = providers._nws_expand_series(raw, hours)
     assert repeated[:6] == [6.0] * 6
+
+
+
+# ---------- day_weather: the map day strip's icon ----------
+
+def _wx_day(cloud=None, precip=None, temp=None):
+    times = [f"2026-10-14T{h:02d}:00" for h in range(24)]
+    hourly = {"time": times}
+    for name, v in (("cloud_cover", cloud), ("precipitation", precip), ("temperature_2m", temp)):
+        if v is not None:
+            hourly[name] = v if isinstance(v, list) else [v] * 24
+    return service.day_weather(hourly, list(range(24)), 7.0, 18.5)
+
+
+def test_day_weather_icons_by_sky_and_rain():
+    assert _wx_day(cloud=10, precip=0.0, temp=15)["icon"] == "sun"
+    assert _wx_day(cloud=40, precip=0.0, temp=15)["icon"] == "partly"
+    assert _wx_day(cloud=90, precip=0.0, temp=15)["icon"] == "cloud"
+    assert _wx_day(cloud=90, precip=0.05, temp=15)["icon"] == "drizzle"     # 1.2 mm ≈ 0.05 in over the day
+    assert _wx_day(cloud=90, precip=0.2, temp=15)["icon"] == "rain"         # 4.8 mm ≈ 0.19 in
+    assert _wx_day(cloud=90, precip=0.2, temp=-2)["icon"] == "snow"
+
+
+def test_day_weather_clouds_count_daylight_only():
+    night_overcast = [100 if h < 7 or h > 18 else 5 for h in range(24)]
+    assert _wx_day(cloud=night_overcast, precip=0.0)["icon"] == "sun"
+
+
+def test_day_weather_text_is_imperial():
+    wx = _wx_day(cloud=40, precip=0.05, temp=[10 + h / 2 for h in range(24)])
+    assert wx["high_f"] == round(21.5 * 9 / 5 + 32) and wx["low_f"] == 50
+    assert wx["text"] == f"Drizzle · high {wx['high_f']}°F · 0.05 in rain"
+    assert _wx_day(cloud=40, temp=15)["text"] == "Partly cloudy · high 59°F"
+
+
+def test_day_weather_without_data_has_no_icon():
+    wx = _wx_day()
+    assert wx["icon"] is None and wx["text"] == "" and wx["rain_in"] is None

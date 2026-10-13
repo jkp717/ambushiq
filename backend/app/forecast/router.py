@@ -21,6 +21,7 @@ from app.forecast.providers import weather_provider_meta
 from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
 from app.forecast.service import (
     _temp_swing_rolling,
+    day_weather,
     build_scoring_context,
     build_sits,
     format_day_label,
@@ -269,6 +270,8 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
         dt = datetime.fromisoformat(tstr)
         days[day]["hours"].append({"index": idx, "hour": dt.hour,
                                    "label": format_hour_label(dt)})
+    for dd in days.values():   # the day strip's weather icon
+        dd["wx"] = day_weather(fc["hourly"], [hr["index"] for hr in dd["hours"]], dd["sunrise_h"], dd["sunset_h"])
     # Derive the property's local "today" from the forecast's UTC offset so that
     # confidence flags stay correct during the UTC-to-local-midnight gap (up to 8h
     # wide for US timezones) when the server's UTC clock is already "tomorrow".

@@ -277,6 +277,53 @@ def _temp_swing_rolling(hourly: dict, half_window: int = 12, min_points: int = 1
     return out
 
 
+_WX_TEXT = {"sun": "Sunny", "partly": "Partly cloudy", "cloud": "Cloudy",
+            "drizzle": "Drizzle", "rain": "Rain", "snow": "Snow"}
+
+
+def day_weather(hourly: dict, idxs: list[int], sr_h: float, ss_h: float) -> dict:
+    """One forecast day summed up for its weather icon on the map's day strip:
+    {"icon": sun|partly|cloud|drizzle|rain|snow or None, "text", "high_f", "low_f", "rain_in"}.
+
+    Rain and temperature count every hour of the day; cloud cover only the daylight hours, since
+    that is what the sky looks like to a hunter. Precipitation falling at or below freezing is snow.
+    A series a provider doesn't send is skipped; with nothing usable the icon is None."""
+    def series(name):
+        vals = hourly.get(name) or []
+        return [(i, vals[i]) for i in idxs if i < len(vals) and vals[i] is not None]
+
+    temps = series("temperature_2m")
+    precip = series("precipitation")
+    clouds = [v for i, v in series("cloud_cover")
+              if sr_h <= datetime.fromisoformat(hourly["time"][i]).hour <= ss_h]
+    temp_at = dict(temps)
+    rain_mm = sum(v for _, v in precip)
+    snow_mm = sum(v for i, v in precip if temp_at.get(i) is not None and temp_at[i] <= 0)
+    rain_in = rain_mm / 25.4
+    cloud = sum(clouds) / len(clouds) if clouds else None
+
+    if precip and snow_mm / 25.4 >= 0.01:
+        icon = "snow"
+    elif precip and rain_in >= 0.10:
+        icon = "rain"
+    elif precip and rain_in >= 0.01:
+        icon = "drizzle"
+    elif cloud is not None:
+        icon = "sun" if cloud < 25 else "partly" if cloud < 60 else "cloud"
+    else:
+        icon = None
+
+    high_f = round(max(v for _, v in temps) * 9 / 5 + 32) if temps else None
+    low_f = round(min(v for _, v in temps) * 9 / 5 + 32) if temps else None
+    parts = [_WX_TEXT[icon]] if icon else []
+    if high_f is not None:
+        parts.append(f"high {high_f}°F")
+    if precip and rain_in >= 0.01:
+        parts.append(f"{rain_in:.2f} in {'snow' if icon == 'snow' else 'rain'}")
+    return {"icon": icon, "text": " · ".join(parts), "high_f": high_f, "low_f": low_f,
+            "rain_in": round(rain_in, 2) if precip else None}
+
+
 def format_day_label(dt: datetime) -> str:
     """'Sat Nov 8' — avoids strftime's '%-d', which raises ValueError on Windows."""
     return f"{dt.strftime('%a %b')} {dt.day}"

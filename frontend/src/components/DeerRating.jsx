@@ -1,13 +1,13 @@
 import { useState } from "react";
 import InfoTip from "./ui/InfoTip.jsx";
-import { ratingScore5 } from "../utils/formatters.js";
+import { ratingScore5, ratingTone } from "../utils/formatters.js";
 import { fmtRain } from "../utils/units.js";
 
 function DeerRating({ rating, prevRating }) {
   const [open, setOpen] = useState(false);
   const r = rating.rating;
   const deer = "🦌".repeat(r) + "·".repeat(5 - r);
-  const tone = r >= 4 ? "var(--green)" : r === 3 ? "var(--amber)" : "var(--red)";
+  const tone = ratingTone(rating);
   const fac = rating.factors;
   const prevFac = prevRating?.factors;
   const f = (v) => Math.round(v * 100);

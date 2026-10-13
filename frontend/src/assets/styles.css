@@ -295,10 +295,9 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   overflow: hidden;
 }
 
-/* controls panel — a grid so the transport buttons (back/fwd/play) can be
-   reassigned from "flanking the slider" (default) to "beside the date/time,
-   far right" on narrow phone-portrait screens, without duplicating markup.
-   See the phone-portrait override below for the alternate layout. */
+/* controls panel — a grid: the day strip on top, then the slider. The transport buttons (back/fwd/play)
+   flank the slider by default and move to a centred row under it on narrow phone-portrait screens
+   (see the override below), without duplicating markup. */
 .map-ctrl-panel {
   flex-shrink: 0;
   background: var(--bg); border-top: 1px solid var(--bord);
@@ -309,8 +308,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
      past the screen edge on a narrow phone */
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "top   top   top  top"
-    "back  track fwd  play";
+    "strip strip strip strip"
+    "back  track fwd   play";
 }
 
 /* ── bottom time sheet: a tab that is always visible at the bottom-center plus a panel that
@@ -345,41 +344,39 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .bottom-sheet.is-closed .bottom-sheet-panel { visibility: hidden; transition: visibility 0s linear .22s; }
 .bottom-sheet.is-closed.dragging .bottom-sheet-panel { visibility: visible; transition: none; }
 
-/* Single compact row: date nav + time + weather + play */
-.map-ctrl-top {
-  grid-area: top;
-  display: flex; align-items: center;
-  gap: 8px; flex-wrap: nowrap;
-  min-width: 0;
-}
-
-/* Date nav */
-.map-day-nav-wrap {
-  position: relative; flex-shrink: 1; min-width: 0;
-}
-.map-day-nav {
-  display: flex; align-items: center; gap: 2px; min-width: 0;
-}
 .map-nav-btn {
   color: var(--navy) !important;
 }
 .map-nav-btn:disabled { color: var(--bord2) !important; }
 
-/* Date label — now a clickable button */
-.map-day-label-btn {
-  font-size: 14px; font-weight: 700;
-  flex: 0 1 110px; min-width: 0; text-align: center; color: var(--txt);   /* 110px, shrinking only on a narrow phone */
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  background: none; border: none; cursor: pointer;
-  padding: 4px 6px; border-radius: 6px;
-  transition: background 0.12s;
+/* ── day strip: one chip per forecast day (weekday, date, weather icon, movement score) ── */
+.map-day-strip {
+  grid-area: strip; min-width: 0;
+  display: flex; gap: 6px; overflow-x: auto; padding: 2px 1px 4px;
+  scroll-snap-type: x proximity; touch-action: pan-x; scrollbar-width: none;
 }
-.map-day-label-btn:hover { background: var(--surf); }
-
-/* Compact time display */
-.map-time-compact {
-  font-size: 17px; font-weight: 800; color: var(--txt);
-  letter-spacing: -0.5px; white-space: nowrap; flex-shrink: 0;
+.map-day-strip::-webkit-scrollbar { display: none; }
+.map-day-chip {
+  flex: 0 0 auto; min-width: 52px; scroll-snap-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 5px 6px 6px; border: 1px solid var(--bord); border-radius: 10px;
+  background: var(--bg); color: var(--txt); cursor: pointer; font: inherit;
+}
+.map-day-chip:hover { background: var(--surf); }
+.map-day-chip-dow { font-size: 11px; color: var(--sub); }
+.map-day-chip-date { font-size: 15px; font-weight: 700; line-height: 1.2; }
+.map-day-chip-wx { height: 20px; display: flex; align-items: center; color: var(--sub); }
+.map-day-chip-score {
+  font-size: 12px; font-weight: 700; color: var(--tone, var(--sub));
+  padding: 0 5px; border-radius: 6px; font-variant-numeric: tabular-nums;
+}
+.map-day-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.map-day-chip.on .map-day-chip-dow,
+.map-day-chip.on .map-day-chip-wx { color: rgba(255, 255, 255, .85); }
+/* on the navy chip the score is white on a pill tinted with its rating color */
+.map-day-chip.on .map-day-chip-score {
+  color: #fff;
+  background: color-mix(in srgb, var(--tone, transparent) 70%, transparent);
 }
 
 .map-wpill {
@@ -408,7 +405,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 /* slider */
 .map-hour-slider { width: 100%; height: 8px; border-radius: 4px; touch-action: none; }  /* the drag stays the slider's */
 /* times keep one width while scrubbing (9:15 AM vs 12:45 PM), so the time bar doesn't grow and shrink */
-.map-time-fixed, .map-time-compact, .map-slider-tooltip { font-variant-numeric: tabular-nums; }
+.map-time-fixed, .map-slider-tooltip { font-variant-numeric: tabular-nums; }
 .map-time-fixed { display: inline-block; min-width: 8ch; text-align: left; }
 /* time tooltip shown above the handle while hovering/dragging the slider */
 .map-slider-tooltip {
@@ -454,37 +451,6 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
   pointer-events: none;
 }
-
-/* ── date picker popup ── */
-.map-date-picker {
-  position: absolute; bottom: calc(100% + 4px); left: 0;   /* opens upward: the controls now sit at the bottom */
-  background: var(--bg); border: 1px solid var(--bord);
-  border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
-  padding: 10px; z-index: 700; min-width: 212px;
-}
-.map-dp-hd {
-  font-size: 12px; font-weight: 700; color: var(--txt);
-  text-align: center; margin-bottom: 6px;
-}
-.map-dp-dow {
-  display: grid; grid-template-columns: repeat(7, 1fr);
-  text-align: center; font-size: 9.5px; color: var(--sub); margin-bottom: 3px;
-}
-.map-dp-grid {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px;
-}
-.map-dp-empty { /* spacer cell */ }
-.map-dp-day {
-  aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 500; border-radius: 50%;
-  background: none; border: none; cursor: pointer; color: var(--txt);
-  transition: background 0.1s;
-}
-.map-dp-day:hover:not(:disabled) { background: var(--surf); }
-.map-dp-day.sel   { background: var(--navy); color: #fff; font-weight: 700; }
-.map-dp-day.today:not(.sel) { font-weight: 800; color: var(--navy); }
-.map-dp-day.unavail { color: var(--bord2); }
-.map-dp-day:disabled { cursor: default; }
 
 /* draw banner */
 .map-draw-bar {
@@ -645,12 +611,15 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
    to its own full-width row underneath. Same grid items, just reassigned to
    different areas — no markup duplication needed. */
 @media (max-width: 480px) and (orientation: portrait) {
+  /* the slider gets the full width; the transport buttons sit centred under it, media-player style */
   .map-ctrl-panel {
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-columns: 1fr auto auto auto 1fr;
     grid-template-areas:
-      "top  back fwd  play"
-      "track track track track";
+      "strip strip strip strip strip"
+      "track track track track track"
+      ".     back  play  fwd   .";
     align-items: center;
+    row-gap: 4px;
   }
   .map-step-btn { margin-top: 0; }
 }
