@@ -794,7 +794,10 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 }
 .settings-body > .settings-section-title:first-of-type { margin-top: 0; }
 
-/* Settings → section nav. Phones: a sticky row of chips under the tab bar. */
+/* Settings → section nav. Phones: a sticky row of chips under the tab bar. The page's <main> is a scroll
+   box (overflow-y: auto) that never actually scrolls — the document does — which would stop the nav from
+   sticking, so on this page it's left as a plain box, like the top bars' own container. */
+.main-content:has(.settings-page) { overflow: visible; }
 .settings-nav {
   position: sticky; top: calc(var(--top-bar-h) + var(--tab-bar-h)); z-index: 998;
   display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
@@ -808,11 +811,16 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 }
 .settings-nav button.on { background: var(--navy); border-color: var(--navy); color: #fff; }
 /* Wide screens: a sticky menu down the left side, beside the settings column. */
+/* Wide screens: a menu frozen to the left edge of the screen, under the top bars; the settings column is
+   centered in the space beside it. */
 @media (min-width: 900px) {
-  .settings-page { display: grid; grid-template-columns: 190px minmax(0, 580px); gap: 28px; max-width: 830px; }
+  .settings-page { display: grid; grid-template-columns: 210px minmax(0, 1fr); max-width: none; padding: 0; }
+  .settings-body { width: 100%; max-width: 580px; margin: 0 auto; padding: 16px 16px 40px; box-sizing: border-box; }
   .settings-nav {
-    top: calc(var(--top-bar-h) + var(--tab-bar-h) + 16px); align-self: start;
-    flex-direction: column; gap: 2px; overflow: visible; margin: 0; padding: 0; background: none; border: none;
+    top: calc(var(--top-bar-h) + var(--tab-bar-h)); align-self: start;
+    height: calc(100dvh - var(--top-bar-h) - var(--tab-bar-h)); box-sizing: border-box;
+    flex-direction: column; gap: 2px; overflow-x: hidden; overflow-y: auto; margin: 0; padding: 16px 10px;
+    border-bottom: none; border-right: 1px solid var(--bord);
   }
   .settings-nav button { border: none; border-radius: 8px; padding: 7px 10px; font-size: 13px; color: var(--sub); }
   .settings-nav button:hover { background: var(--surf); color: var(--txt); }
