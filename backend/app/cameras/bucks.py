@@ -9,8 +9,8 @@ buck. It is trained only on what the user tells it:
   * the photo viewer's Buck toggle tags a missed buck, or switches off a wrong one.
 
 Deer the model scored but nobody looked at never train it, so it can't reinforce its own mistakes.
-The model only turns on once it has MIN_EACH examples of each kind and passes MIN_CV_ACCURACY in
-cross-validation; until then nothing is marked except what the user tagged. What it really sees is
+The model only turns on once it has MIN_EACH examples of each kind and reaches the user's minimum accuracy
+(setting buck_min_accuracy_pct) in cross-validation; until then nothing is marked except what the user tagged. What it really sees is
 antlers, so shed bucks and button bucks stay unmarked (never called does).
 """
 from __future__ import annotations
@@ -36,7 +36,8 @@ from app.settings.service import get_settings
 log = logging.getLogger(__name__)
 
 MIN_EACH = 40              # bucks and not-a-buck examples needed before the model can turn on
-MIN_CV_ACCURACY = 0.85     # cross-validated (balanced) accuracy it must reach to turn on
+MIN_CV_ACCURACY = 0.85     # default cross-validated (balanced) accuracy it must reach to turn on
+ACCURACY_RANGE = (0.5, 0.99)   # what the buck_min_accuracy_pct setting may be (0.5 = a coin flip)
 SHOW_SCORE = 0.7           # a model score at or above this marks a deer as a buck
 VIEWER_RETRAIN_EVERY = 10  # viewer corrections that trigger a retrain
 CV_FOLDS = 5
@@ -73,6 +74,15 @@ def record_detections(s: Session, sighting_id: int, detections: list[dict]) -> N
 
 
 # ── the model ───────────────────────────────────────────────────────────────────
+
+def min_accuracy() -> float:
+    """The cross-validated accuracy the model must reach to turn on — the user's setting, as a fraction."""
+    try:
+        pct = float(get_settings().get("buck_min_accuracy_pct", MIN_CV_ACCURACY * 100))
+    except (TypeError, ValueError):
+        pct = MIN_CV_ACCURACY * 100
+    return min(ACCURACY_RANGE[1], max(ACCURACY_RANGE[0], pct / 100))
+
 
 def _model_path() -> str:
     base = str(get_settings().get("camera_image_dir") or CAMERA_IMAGE_DIR)
@@ -196,7 +206,7 @@ def train(progress=None) -> dict:
             X = np.stack([decode_vec(v) for v, _l in rows])
             acc = _cv_accuracy(X, y)
             w, b, mean, std = _fit(X, y)
-            model.update(cv_accuracy=round(acc, 3), enabled=acc >= MIN_CV_ACCURACY,
+            model.update(cv_accuracy=round(acc, 3), enabled=round(acc, 3) >= min_accuracy(),
                          w=[float(v) for v in w], b=float(b), mean=[float(v) for v in mean],
                          std=[float(v) for v in std])
         _save_model(model)
@@ -205,6 +215,23 @@ def train(progress=None) -> dict:
     log.info("bucks: trained — bucks=%d not_buck=%d cv=%s enabled=%s",
              n_buck, n_not, model["cv_accuracy"], model["enabled"])
     return model
+
+
+def apply_min_accuracy() -> Optional[dict]:
+    """The minimum-accuracy setting changed: turn the trained model on or off against it — no retraining,
+    its measured accuracy doesn't change — and re-score the deer if that flipped it."""
+    with _train_lock:
+        model = load_model()
+        if not model or model.get("cv_accuracy") is None or "w" not in model:
+            return model
+        enabled = model["cv_accuracy"] >= min_accuracy()
+        if enabled != bool(model.get("enabled")):
+            model = {**model, "enabled": enabled}
+            _save_model(model)
+            _model_cache["mtime"] = None
+            _rescore(load_model())
+            log.info("bucks: minimum accuracy now %.2f — model %s", min_accuracy(), "on" if enabled else "off")
+        return model
 
 
 def _rescore(model: Optional[dict]) -> None:
@@ -230,7 +257,7 @@ def _summary(m: dict) -> str:
     if m["enabled"]:
         return f"on · {round(m['cv_accuracy'] * 100)}% accurate · {m['n_buck']} bucks / {m['n_not_buck']} other deer"
     if m["cv_accuracy"] is not None:
-        return f"off · {round(m['cv_accuracy'] * 100)}% accurate (needs {round(MIN_CV_ACCURACY * 100)}%)"
+        return f"off · {round(m['cv_accuracy'] * 100)}% accurate (needs {round(min_accuracy() * 100)}%)"
     return f"off · {m['n_buck']} bucks / {m['n_not_buck']} other deer (needs {MIN_EACH} of each)"
 
 
@@ -354,7 +381,7 @@ def status(region_id: int) -> dict:
         "trained_at": model.get("trained_at"),
         "n_buck": counts.get("buck", 0), "n_not_buck": counts.get("not_buck", 0),
         "waiting": waiting or 0, "unscanned": unscanned or 0,
-        "min_each": MIN_EACH, "min_accuracy": MIN_CV_ACCURACY,
+        "min_each": MIN_EACH, "min_accuracy": min_accuracy(),
     }
 
 

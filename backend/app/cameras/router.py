@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -381,10 +381,12 @@ def camera_activity(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     bucks: bool = False,
+    by: Literal["hour", "date"] = "hour",
     region_id: int = Depends(get_active_region_id),
     _=Depends(require_token),
 ):
-    """Average sightings per day for each hour of the (property-local) day, over the filtered date range.
+    """Average sightings per day for each hour of the (property-local) day, over the filtered date range —
+    or, with by=date, the sightings on each date in the range.
     Empty brand / camera_id / species lists mean "all"; species may include "__none__" for unclassified.
     `bucks` counts only photos with a buck in them."""
     tz = activity.region_tz(get_region_dict(region_id)["property_timezone"])
@@ -397,8 +399,9 @@ def camera_activity(
     parsed = [(cid, sp or None, t) for cid, sp, ts in rows if (t := activity.parse_utc(ts)) is not None]
     recorded_since = min((t.astimezone(tz).date() for _c, _s, t in parsed), default=None)
     matching = [r for r in parsed if activity.species_matches(r[1], species)]
-    return activity.hourly_activity(matching, tz=tz, today=datetime.now(tz).date(), date_from=date_from,
-                                    date_to=date_to, recorded_since=recorded_since)
+    summarize = activity.daily_activity if by == "date" else activity.hourly_activity
+    return summarize(matching, tz=tz, today=datetime.now(tz).date(), date_from=date_from,
+                     date_to=date_to, recorded_since=recorded_since)
 
 
 @router.get("/api/cameras/gallery")

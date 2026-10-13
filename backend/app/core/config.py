@@ -61,6 +61,8 @@ DEFAULT_SETTINGS = {
     "camera_lookback_hours": 72.0,
     "camera_health_max_age_hours": 48.0,
     "camera_image_dir": CAMERA_IMAGE_DIR,
+    # buck model: the cross-validated accuracy (%) it must reach before it marks bucks on its own
+    "buck_min_accuracy_pct": 85,
     # weather source: primary provider (+ its API key, if it needs one) and an
     # optional secondary provider used only to backfill fields the primary
     # doesn't report (most commonly solar radiation, for the thermal model)

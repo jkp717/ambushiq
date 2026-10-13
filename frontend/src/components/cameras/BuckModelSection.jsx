@@ -2,15 +2,16 @@ import { useState, useEffect } from "react";
 import { api } from "../../services/api.js";
 import BuckTrainer from "./BuckTrainer.jsx";
 
-/* Settings → Model Training: how far along the buck model is, and the way into the trainer. */
-function BuckModelSection() {
+/* Settings → Model Training: how far along the buck model is, and the way into the trainer.
+   `refreshKey` changes after Settings are saved, since a new minimum accuracy can turn the model on or off. */
+function BuckModelSection({ refreshKey = 0 }) {
   const [st, setSt] = useState(null);
   const [training, setTraining] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
   const refresh = () => api("/bucks/model").then((r) => { setSt(r); setErr(null); }).catch(() => setErr("Couldn't load the buck model status."));
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [refreshKey]);
 
   async function retrain() {
     setBusy(true);

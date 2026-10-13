@@ -119,4 +119,5 @@ function ActivityChart({ hours, onViewPhotos }) {
   );
 }
 
+export { niceMax, fmt };
 export default ActivityChart;

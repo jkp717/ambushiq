@@ -1,9 +1,12 @@
 """Route handlers for /api/settings."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.cameras import bucks as bucks_mod
 from app.core.database import engine
 from app.core.security import decrypt_settings_key, encrypt_settings_key
 from app.dependencies import require_token
@@ -13,6 +16,7 @@ from app.settings.schemas import SettingsIn
 from app.settings.service import get_settings
 
 router = APIRouter(tags=["settings"])
+log = logging.getLogger(__name__)
 
 # Weather-provider API keys are stored encrypted (like camera credentials),
 # one row per provider — key name "weather_api_key__<provider_id>" — so
@@ -98,4 +102,10 @@ def write_settings(body: SettingsIn, _=Depends(require_token)):
     # Live-reschedule the sync job when its interval changes — no restart required.
     if body.camera_sync_interval_minutes is not None:
         _reschedule_sync(int(body.camera_sync_interval_minutes) or 30)
+    # A new minimum accuracy turns the buck model on or off right away, without waiting for a retrain.
+    if body.buck_min_accuracy_pct is not None:
+        try:
+            bucks_mod.apply_min_accuracy()
+        except Exception:
+            log.exception("settings: couldn't apply the buck model's minimum accuracy")
     return result

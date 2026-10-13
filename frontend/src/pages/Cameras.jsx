@@ -21,6 +21,7 @@ function CamerasPage({ stands }) {
   // Each data tab keeps its own filters, held here so they survive switching tabs.
   const [activityFilters, setActivityFilters] = useState(EMPTY_FILTERS);
   const [galleryFilters, setGalleryFilters] = useState(EMPTY_FILTERS);
+  const [activityGraph, setActivityGraph] = useState("hour");   // Daily Activity chart: by hour or by date
   const [err, setErr] = useState(null);
 
   const load = useCallback(async () => {
@@ -48,6 +49,12 @@ function CamerasPage({ stands }) {
     setTab("gallery");
   }
 
+  // From a by-date bar: the Gallery with the same filters, on just that day (any time of day).
+  function viewDatePhotos(date) {
+    setGalleryFilters({ ...activityFilters, dateFrom: date, dateTo: date, hourFrom: null, hourTo: null, includeEmpty: false });
+    setTab("gallery");
+  }
+
   function viewPhotos(cam) {
     setGalleryFilters({ ...EMPTY_FILTERS, cameraIds: [cam.id] });
     setTab("gallery");
@@ -66,6 +73,7 @@ function CamerasPage({ stands }) {
 
       {tab === "activity" && (
         <DailyActivityTab cameras={cameras} speciesOptions={speciesOptions} onViewPhotos={viewHourPhotos}
+          onViewDatePhotos={viewDatePhotos} graph={activityGraph} setGraph={setActivityGraph}
           filters={activityFilters} setFilters={setActivityFilters} onGoSetup={() => setTab("setup")} />
       )}
       {tab === "gallery" && (

@@ -145,6 +145,25 @@ def test_activity_counts_visits_and_ignores_other_regions_and_deleted_cameras(ca
     assert out["hours"][6]["total"] == 2 and out["hours"][21]["total"] == 1 and out["hours"][17]["total"] == 1
 
 
+def test_activity_by_date_lists_each_local_day(cams):
+    out = act(by="date")
+    assert out["dates"] == [{"date": "2025-11-08", "total": 2},      # deer visit + 9 pm unclassified (Nov 9 UTC)
+                            {"date": "2025-11-09", "total": 2},      # coyote + reveal deer
+                            {"date": "2025-11-10", "total": 0}]      # quiet day still listed
+    assert out["total"] == 4 and out["days"] == 3
+
+
+def test_daily_activity_collapses_bursts_and_clamps_the_range():
+    t = utc(2025, 11, 9, 12, 0)
+    data = rows(t, t + timedelta(minutes=2), utc(2025, 11, 10, 4, 30))      # one visit; 10:30 pm Nov 9 local
+    out = activity.daily_activity(data, tz=CHI, today=date(2025, 11, 10), date_from=date(2025, 10, 1),
+                                  date_to=date(2026, 1, 1), recorded_since=date(2025, 11, 9))
+    assert out["dates"] == [{"date": "2025-11-09", "total": 2}, {"date": "2025-11-10", "total": 0}]
+    empty = activity.daily_activity([], tz=CHI, today=date(2025, 11, 10), date_from=None, date_to=None,
+                                    recorded_since=None)
+    assert empty["dates"] == [] and empty["days"] == 0
+
+
 def test_activity_brand_and_camera_filters(cams):
     assert act(brand=["reveal"])["total"] == 1
     assert act(camera_id=[cams["a"]])["total"] == 3

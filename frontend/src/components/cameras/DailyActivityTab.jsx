@@ -3,6 +3,7 @@ import { SlidersHorizontal, RefreshCw, Camera } from "lucide-react";
 import { api } from "../../services/api.js";
 import Banner from "../ui/Banner.jsx";
 import ActivityChart from "./ActivityChart.jsx";
+import DateActivityChart from "./DateActivityChart.jsx";
 import CameraFilterModal from "./CameraFilterModal.jsx";
 import { activeFilterCount, filterParams } from "./filters.js";
 
@@ -10,19 +11,25 @@ function fmtDay(iso) {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, onViewPhotos }) {
+const GRAPHS = [{ key: "hour", label: "By hour" }, { key: "date", label: "By date" }];
+
+/* `graph` picks the chart: "hour" (average per hour of the day, the default) or "date" (sightings on each date). */
+function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, graph, setGraph, onGoSetup, onViewPhotos, onViewDatePhotos }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [filtering, setFiltering] = useState(false);
-  const query = filterParams(filters).toString();
+  const params = filterParams(filters);
+  if (graph === "date") params.set("by", "date");
+  const query = params.toString();
   const count = activeFilterCount(filters);
 
   useEffect(() => {
     let cancel = false;
     setLoading(true);
+    const shape = graph;     // tag the data with its graph, so a chart never gets the other graph's data mid-switch
     api(`/cameras/activity?${query}`)
-      .then((j) => { if (!cancel) { setData(j); setErr(null); } })
+      .then((j) => { if (!cancel) { setData({ ...j, graph: shape }); setErr(null); } })
       .catch(() => { if (!cancel) setErr("Couldn't load activity."); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
@@ -44,6 +51,12 @@ function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, onGoSe
         <button className={"filter-btn" + (count ? " on" : "")} onClick={() => setFiltering(true)} title="Filters">
           <SlidersHorizontal size={16} /> Filters{count > 0 && <span className="filter-badge">{count}</span>}
         </button>
+        <div className="act-mode" role="group" aria-label="Graph">
+          {GRAPHS.map(({ key, label }) => (
+            <button key={key} type="button" className={graph === key ? "on" : undefined} aria-pressed={graph === key}
+              onClick={() => setGraph(key)}>{label}</button>
+          ))}
+        </div>
         {loading && <RefreshCw size={14} className="spin" color="var(--sub)" />}
       </div>
 
@@ -57,7 +70,9 @@ function DailyActivityTab({ cameras, speciesOptions, filters, setFilters, onGoSe
                 {data.date_from === data.date_to ? fmtDay(data.date_from) : `${fmtDay(data.date_from)} - ${fmtDay(data.date_to)}`}
                 {" "}({data.days} day{data.days === 1 ? "" : "s"}) - {data.total} sighting{data.total === 1 ? "" : "s"}
               </div>
-              <ActivityChart hours={data.hours} onViewPhotos={onViewPhotos} />
+              {data.graph === "date"
+                ? <DateActivityChart dates={data.dates} onViewPhotos={onViewDatePhotos} />
+                : <ActivityChart hours={data.hours} onViewPhotos={onViewPhotos} />}
             </>
       )}
 

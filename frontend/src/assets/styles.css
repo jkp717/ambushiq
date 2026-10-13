@@ -1044,6 +1044,19 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
 .act-chart { border: 1px solid var(--bord); border-radius: var(--radius); background: var(--bg); padding: 12px 12px 8px; }
 .act-chart svg { width: 100%; height: auto; display: block; }
 .act-plot { position: relative; }
+/* a long by-date range: the plot scrolls sideways inside the chart, with the y-axis labels pinned over it */
+.act-scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.act-chart .act-scroll svg { max-width: none; }
+.act-chart svg.act-yaxis { position: absolute; left: 0; top: 0; background: var(--bg); pointer-events: none; }
+/* By hour | By date graph selector */
+.act-mode { display: inline-flex; border: 1px solid var(--bord2); border-radius: 8px; overflow: hidden; }
+.act-mode button {
+  padding: 7px 11px; border: none; background: var(--bg); color: var(--txt);
+  font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.act-mode button + button { border-left: 1px solid var(--bord2); }
+.act-mode button:hover:not(.on) { background: var(--surf); }
+.act-mode button.on { background: var(--navy); color: #fff; }
 /* bar tooltip: sits above the bar, centered on it (left/top are set inline as percentages of the plot) */
 .act-tip {
   position: absolute; z-index: 5; transform: translate(-50%, calc(-100% - 6px));

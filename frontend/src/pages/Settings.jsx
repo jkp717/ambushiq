@@ -14,6 +14,7 @@ import { mToYd, ydToM, fmtYd, fmtDist } from "../utils/units.js";
 function SettingsPage({ reloadStands }) {
   const [s, setS] = useState(null); const [saved, setSaved] = useState(false); const [err, setErr] = useState(null);
   const [weatherProviders, setWeatherProviders] = useState([]);
+  const [buckRefresh, setBuckRefresh] = useState(0);
   const [weatherKeyInputs, setWeatherKeyInputs] = useState({}); // { [providerId]: typedKey }
   const { canInstall, promptInstall, installed, isIOS } = useInstallPrompt();
   const [showIOSHelp, setShowIOSHelp] = useState(false);
@@ -27,6 +28,7 @@ function SettingsPage({ reloadStands }) {
       if (Object.keys(keys).length) body.weather_provider_api_keys = keys;
       const r = await api("/settings", { method: "PUT", body: JSON.stringify(body) });
       setS(r); setWeatherKeyInputs({});
+      setBuckRefresh((n) => n + 1);   // the minimum accuracy may have turned the buck model on or off
       setSaved(true); setTimeout(() => setSaved(false), 1800);
     } catch { setErr("Couldn't save settings."); }
   }
@@ -289,7 +291,17 @@ function SettingsPage({ reloadStands }) {
       <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>
         <ScanSearch size={15} color="var(--navy)" style={{ verticalAlign: "text-bottom" }} /> Model training
       </div>
-      <BuckModelSection />
+      <div className="settings-section">
+        <SliderRow label="Minimum accuracy" min={50} max={99} step={1}
+          value={s.buck_min_accuracy_pct ?? 85}
+          display={`${Math.round(s.buck_min_accuracy_pct ?? 85)}%`}
+          onChange={(v) => setS({ ...s, buck_min_accuracy_pct: v })}
+          info="How accurate the buck model must test before it marks bucks in your photos on its own. It's tested on the deer you've already reviewed. Lower turns it on sooner but it will mark more does as bucks and miss more bucks; higher waits until you've reviewed more deer. 50% is no better than a coin flip. Takes effect when you save — no retraining needed." />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+      </div>
+      <BuckModelSection refreshKey={buckRefresh} />
 
       {/* ── Scouting suggestions ── */}
       <div className="settings-section-title" style={{ borderTop: "1px solid var(--bord)", paddingTop: 20, marginTop: 4 }}>

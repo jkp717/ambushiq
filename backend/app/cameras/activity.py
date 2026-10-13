@@ -89,6 +89,32 @@ def hourly_activity(rows: list[tuple[int, Optional[str], datetime]], *, tz: tzin
             "days": days, "total": sum(counts), "date_from": start.isoformat(), "date_to": end.isoformat()}
 
 
+def daily_activity(rows: list[tuple[int, Optional[str], datetime]], *, tz: tzinfo, today: date,
+                   date_from: Optional[date], date_to: Optional[date],
+                   recorded_since: Optional[date]) -> dict:
+    """Sightings on each local calendar date — the season-long companion to hourly_activity.
+
+    Same range clamping (to `recorded_since` and today) and the same burst collapsing. Every date in
+    the range is listed, quiet days as 0, so the result is a true timeline."""
+    empty = {"dates": [], "days": 0, "total": 0, "date_from": None, "date_to": None}
+    if recorded_since is None:
+        return empty
+    start = max(date_from, recorded_since) if date_from else recorded_since
+    end = min(date_to, today) if date_to else today
+    if end < start:
+        return empty
+    days = (end - start).days + 1
+
+    local = [(cam, sp, t.astimezone(tz)) for cam, sp, t in rows]
+    in_range = [(cam, sp, lt) for cam, sp, lt in local if start <= lt.date() <= end]
+    counts: dict[date, int] = defaultdict(int)
+    for _cam, _sp, lt in collapse_bursts(in_range):
+        counts[lt.date()] += 1
+    dates = [{"date": (d := start + timedelta(days=i)).isoformat(), "total": counts[d]} for i in range(days)]
+    return {"dates": dates, "days": days, "total": sum(counts.values()),
+            "date_from": start.isoformat(), "date_to": end.isoformat()}
+
+
 def in_hour_window(local_dt: datetime, hour_from: Optional[int], hour_to: Optional[int]) -> bool:
     """Is a local time inside [hour_from, hour_to)? A window that ends before it starts wraps
     midnight (20 -> 5 is 8 pm to 5 am). hour_to may be 24 (end of day); either end None = no limit."""

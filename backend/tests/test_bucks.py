@@ -116,6 +116,26 @@ def test_a_model_that_fails_the_accuracy_check_stays_off(env):
         assert all(v is None for v in s.scalars(select(DeerDetection.buck_score)).all())
 
 
+def test_the_minimum_accuracy_is_a_user_setting_applied_without_retraining(env, monkeypatch):
+    settings = {"buck_min_accuracy_pct": 85}
+    monkeypatch.setattr(bucks, "get_settings", lambda: dict(settings, camera_image_dir=""))
+    labeled_set(env, 50, 60)
+    _s, buck = env["add"](vec(True))
+    m = bucks.train()
+    assert m["enabled"] is True and bucks.status(1)["min_accuracy"] == 0.85
+
+    settings["buck_min_accuracy_pct"] = 99.9                     # out of range: clamped to 99%
+    assert bucks.min_accuracy() == 0.99
+    bucks._save_model({**m, "cv_accuracy": 0.9})                  # a model measured at 90%
+    bucks._model_cache["mtime"] = None
+    settings["buck_min_accuracy_pct"] = 95                        # stricter than the model: it turns off
+    assert bucks.apply_min_accuracy()["enabled"] is False and det(buck).buck_score is None
+    assert "needs 95%" in bucks._summary(bucks.load_model())
+    settings["buck_min_accuracy_pct"] = 90                        # met exactly: back on, deer re-scored
+    assert bucks.apply_min_accuracy()["enabled"] is True and det(buck).buck_score >= bucks.SHOW_SCORE
+    assert "needs" not in bucks._summary(bucks.load_model())
+
+
 def test_trainer_batch_tapped_are_bucks_the_rest_are_not(env):
     a, b, c = (env["add"]()[1] for _ in range(3))
     bucks.label_batch(1, shown=[a, b, c], bucks=[a])

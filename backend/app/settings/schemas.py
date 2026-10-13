@@ -30,6 +30,7 @@ class SettingsIn(BaseModel):
     image_retention_days: float | None = None
     camera_backfill_days: float | None = None
     camera_image_dir: str | None = None
+    buck_min_accuracy_pct: float | None = Field(default=None, ge=50, le=99)   # buck model turns on at this accuracy
     thermal_wind_half_scale: float | None = None
     thermal_wind_exponent: float | None = None
     thermal_midday_discount: float | None = None
