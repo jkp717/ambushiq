@@ -46,10 +46,10 @@ const TILE_SOURCES = [
     url: "https://api.maptiler.com/maps/hybrid/256/{z}/{x}/{y}.jpg?key={key}" },
   { id: "contours", label: "Contour lines (10 ft)", nativeMaxZoom: 18, minZoom: 13, attribution: USGS_3DEP_ATTR,
     overlayOnly: true, toggle: true, loadingLabel: "contour lines", url: "/api/tiles/contours/{z}/{x}/{y}.png" },
-  { id: "hillshade", label: "Hillshade", nativeMaxZoom: 18, attribution: USGS_3DEP_ATTR,
+  { id: "hillshade", label: "Hillshade", nativeMaxZoom: 18, minZoom: 8, attribution: USGS_3DEP_ATTR,
     overlayOnly: true, toggle: { blend: "multiply", opacity: 0.55 }, loadingLabel: "hillshade",
     url: "/api/tiles/hillshade/{z}/{x}/{y}.png" },
-  { id: "landcover", label: "Woods & water", nativeMaxZoom: 15, attribution: "USGS/MRLC NLCD",
+  { id: "landcover", label: "Woods & water", nativeMaxZoom: 15, minZoom: 8, attribution: "USGS/MRLC NLCD",
     overlayOnly: true, loadingLabel: "woods & water", url: "/api/tiles/landcover/{z}/{x}/{y}.png" },
 ];
 

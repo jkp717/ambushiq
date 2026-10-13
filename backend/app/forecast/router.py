@@ -300,6 +300,7 @@ async def map_conditions(body: HourRankIn, region_id: int = Depends(get_active_r
     hour = out.pop("hour")
     out["lee_zone"] = (eddy_mod.lee_zone_mask(ctx.eddy_grid, hour["wind_dir"], hour["wind_speed"], hour["gust"])
                        if body.lee_zone else None)
+    eddy_mod.precompute_masks(ctx.eddy_grid)   # every direction, in the background, ready for the phone's saved copy
     return out
 
 
@@ -336,14 +337,19 @@ async def map_conditions_all(region_id: int = Depends(get_active_region_id), _=D
         return hours, lee_zones(hours)
 
     def lee_zones(hours: list[dict]) -> dict:
-        """One mask per wind direction the forecast uses (at most 72); a direction with no eddy anywhere
-        on the property gets none, and the slots naming it are cleared."""
+        """One mask per wind direction the forecast uses (at most 72), from the masks already built: the rest
+        are queued for the background worker and show up in the next save. A direction with no eddy anywhere
+        on the property (or not built yet) gets none, and the slots naming it are cleared."""
         slots = [q for hour in hours for q in (hour, *hour["quarters"])]
-        zones = {}
-        for key in sorted({q["lee"] for q in slots if q["lee"] is not None}):
-            z = eddy_mod.lee_zone_mask(ctx.eddy_grid, key, 99.0, 99.0)   # the slot already passed the wind check
-            if z:
+        zones, missing = {}, []
+        for key in sorted({q["lee"] for q in slots if q["lee"] is not None}) if ctx.eddy_grid else ():
+            ready, z = eddy_mod.cached_zone(ctx.eddy_grid, key)
+            if not ready:
+                missing.append(key)
+            elif z:
                 zones[str(key)] = {"rows": eddy_mod.rle_rows(z["rows"]), "bounds": z["bounds"]}
+        if missing:
+            eddy_mod.precompute_masks(ctx.eddy_grid, missing)
         for q in slots:
             if q["lee"] is not None and str(q["lee"]) not in zones:
                 q["lee"] = None

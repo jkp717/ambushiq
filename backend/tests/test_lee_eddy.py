@@ -191,3 +191,25 @@ def test_rle_rows_round_trip_and_shrink():
     assert [unrle(r) for r in enc] == rows
     assert sum(map(len, enc)) < sum(map(len, rows)) / 3
     assert eddy.rle_rows(["0001100", "2"]) == ["a3b2a2", "c1"]
+
+
+def test_stand_eddy_walks_its_terrain_once_per_direction(monkeypatch):
+    calls = []
+    real = eddy._lee_geometry
+    monkeypatch.setattr(eddy, "_lee_geometry", lambda *a: calls.append(1) or real(*a))
+    site = _site()
+    first = eddy.detect_lee_eddy(site, 315, 14, 22)
+    assert eddy.detect_lee_eddy(site, 315.3, 20, 30)["crest_height_m"] == first["crest_height_m"]
+    assert len(calls) == 1                                    # same site, same whole-degree direction
+    eddy.detect_lee_eddy(site, 300, 14, 22)
+    assert len(calls) == 2
+
+
+def test_background_masks_match_the_live_layer():
+    eddy._mask_cache.clear()
+    grid = _grid(key=("bg", 1))
+    assert eddy.cached_zone(grid, 315) == (False, None)       # nothing built yet, and nothing computed here
+    eddy.precompute_masks(grid, [315, 135]).result()
+    assert eddy.precompute_masks(grid, [315, 135]) is None    # already built: nothing to queue
+    ready, z = eddy.cached_zone(grid, 315)
+    assert ready and z == eddy.lee_zone_mask(grid, 315, 14, 22)

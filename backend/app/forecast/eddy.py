@@ -20,7 +20,10 @@ layer), so the two can never disagree.
 from __future__ import annotations
 
 import math
+import threading
+import weakref
 from collections import OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -36,7 +39,7 @@ DEFAULT_EDDY_PARAMS = {
 }
 
 _MASK_CHUNK = 4096             # grid cells per batch when building the map-layer mask
-_MASK_CACHE_SIZE = 80          # holds a whole forecast's set of directions (at most 72 bins)
+_MASK_CACHE_SIZE = 400         # ~40 KB each: every direction bin (72) for several regions' grids
 LEE_BIN_DEG = 5                # the map layer rounds wind direction to this, so a forecast needs at most 72 masks
 
 _COMPASS8 = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
@@ -150,6 +153,22 @@ def _wind_level(wind_mph: float, gust_mph: float, p: dict) -> str | None:
     return None
 
 
+# Terrain walk results per site and whole-degree wind direction. A site is one stand's point (reused for every
+# forecast slot by ScoringContext), so the saved forecast's ~1,300 slots walk each stand's terrain once per
+# direction instead of once per slot. Keyed weakly so a site's entries go when the site does.
+_site_geometry_cache = weakref.WeakKeyDictionary()
+
+
+def _site_geometry(site: EddySite, wind_from_deg: float, max_walk_m: float) -> tuple[float, float, float]:
+    deg = round(wind_from_deg) % 360
+    per_site = _site_geometry_cache.setdefault(site, {})
+    key = (deg, max_walk_m)
+    if key not in per_site:
+        per_site[key] = tuple(float(a[0]) for a in _lee_geometry(
+            site.dem, site.cell_m, np.array([float(site.row)]), np.array([float(site.col)]), deg, max_walk_m))
+    return per_site[key]
+
+
 def detect_lee_eddy(site: EddySite | None, wind_from_deg: float, wind_mph: float, gust_mph: float,
                     params: dict | None = None) -> dict | None:
     """Lee-eddy prediction at a site, or None."""
@@ -157,8 +176,7 @@ def detect_lee_eddy(site: EddySite | None, wind_from_deg: float, wind_mph: float
     level = _wind_level(wind_mph, gust_mph, p)
     if level is None or site is None:
         return None   # wind checked first: most hours are too calm and skip the terrain walk entirely
-    h, d, gr = (float(a[0]) for a in _lee_geometry(site.dem, site.cell_m, np.array([float(site.row)]),
-                                                   np.array([float(site.col)]), wind_from_deg, p["max_walk_m"]))
+    h, d, gr = _site_geometry(site, wind_from_deg, p["max_walk_m"])
     if math.isnan(h) or not bool(_in_lee(h, d, gr, p)):
         return None
 
@@ -205,15 +223,27 @@ def explain(e: dict) -> tuple[str, str]:
 
 
 _mask_cache: OrderedDict = OrderedDict()
+_mask_lock = threading.Lock()      # the cache is shared by request threads and the background mask worker
+
+
+def _mask_key(grid: Grid, wind_from_deg: int, p: dict) -> tuple:
+    return (grid.key, wind_from_deg, tuple(sorted(p.items())))
+
+
+def _cached(ck: tuple) -> np.ndarray | None:
+    with _mask_lock:
+        mask = _mask_cache.get(ck)
+        if mask is not None:
+            _mask_cache.move_to_end(ck)
+        return mask
 
 
 def _mask(grid: Grid, wind_from_deg: int, p: dict) -> np.ndarray:
     """0 = no eddy, 1 = lee eddy zone, 2 = separating crest, for every grid cell. Wind-speed
     independent, so cached per (grid fetch, wind direction bin)."""
-    ck = (grid.key, wind_from_deg, tuple(sorted(p.items())))
-    if grid.key and ck in _mask_cache:
-        _mask_cache.move_to_end(ck)
-        return _mask_cache[ck]
+    ck = _mask_key(grid, wind_from_deg, p)
+    if grid.key and (hit := _cached(ck)) is not None:
+        return hit
 
     dem, cell_m = grid.dem, grid.cell_m
     n_r, n_c = dem.shape
@@ -239,10 +269,17 @@ def _mask(grid: Grid, wind_from_deg: int, p: dict) -> np.ndarray:
     mask = np.where(crest, 2, np.where(lee, 1, 0)).astype(np.int8)
 
     if grid.key:
-        _mask_cache[ck] = mask
-        while len(_mask_cache) > _MASK_CACHE_SIZE:
-            _mask_cache.popitem(last=False)
+        with _mask_lock:
+            _mask_cache[ck] = mask
+            while len(_mask_cache) > _MASK_CACHE_SIZE:
+                _mask_cache.popitem(last=False)
     return mask
+
+
+def _payload(grid: Grid, mask: np.ndarray) -> dict | None:
+    if not mask.any():
+        return None
+    return {"rows": ["".join(map(str, row)) for row in mask.tolist()], "bounds": grid.bounds()}
 
 
 def lee_zone_mask(grid: Grid | None, wind_from_deg: float, wind_mph: float, gust_mph: float,
@@ -253,10 +290,50 @@ def lee_zone_mask(grid: Grid | None, wind_from_deg: float, wind_mph: float, gust
     p = {**DEFAULT_EDDY_PARAMS, **(params or {})}
     if grid is None or _wind_level(wind_mph, gust_mph, p) is None:
         return None
-    mask = _mask(grid, lee_bin(wind_from_deg), p)
-    if not mask.any():
+    return _payload(grid, _mask(grid, lee_bin(wind_from_deg), p))
+
+
+# ── building every direction's mask off the request path ──
+# A full set (72 bins) takes ~30 s on a 200×200 grid, far too long to do inside the request that saves the
+# forecast to the phone. One background worker builds whatever is missing; requests only read the cache.
+ALL_BINS = tuple(range(0, 360, 5))
+_mask_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lee-masks")
+_queued: set = set()
+_queued_lock = threading.Lock()
+
+
+def cached_zone(grid: Grid, bin_deg: int, params: dict | None = None) -> tuple[bool, dict | None]:
+    """(ready, payload) for one direction bin, without computing it: ready is False until the background
+    worker has built it. A grid with no cache key (tests) is computed on the spot."""
+    p = {**DEFAULT_EDDY_PARAMS, **(params or {})}
+    if not grid.key:
+        return True, _payload(grid, _mask(grid, bin_deg, p))
+    mask = _cached(_mask_key(grid, bin_deg, p))
+    return (False, None) if mask is None else (True, _payload(grid, mask))
+
+
+def precompute_masks(grid: Grid | None, bins=ALL_BINS, params: dict | None = None) -> Future | None:
+    """Queue the background build of any of `bins` not cached or already queued for this grid. Cheap to
+    call often. Returns the queued job (None when there was nothing to do)."""
+    if grid is None or not grid.key:
         return None
-    return {"rows": ["".join(map(str, row)) for row in mask.tolist()], "bounds": grid.bounds()}
+    p = {**DEFAULT_EDDY_PARAMS, **(params or {})}
+    with _queued_lock:
+        todo = [b for b in bins
+                if (grid.key, b) not in _queued and _cached(_mask_key(grid, b, p)) is None]
+        _queued.update((grid.key, b) for b in todo)
+    if not todo:
+        return None
+
+    def build():
+        for b in todo:
+            try:
+                _mask(grid, b, p)
+            finally:
+                with _queued_lock:
+                    _queued.discard((grid.key, b))
+
+    return _mask_worker.submit(build)
 
 
 def lee_bin(wind_from_deg: float) -> int:

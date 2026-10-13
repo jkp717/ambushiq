@@ -274,8 +274,16 @@ def test_saved_forecast_carries_lee_zones_per_wind_direction(seeded, monkeypatch
     async def fake_forecast(*a, **k):
         return windy_nw()
 
+    grid = _grid(key=("smoke", 1))                                    # a cacheable property grid
     monkeypatch.setattr(fc_router, "get_forecast", fake_forecast)
-    monkeypatch.setattr(region_terrain, "load_grid", lambda region_id: _grid())   # the property grid
+    monkeypatch.setattr(region_terrain, "load_grid", lambda region_id: grid)
+    eddy_mod._mask_cache.clear()
+
+    # Masks are never built inside the save: the first one has none yet and queues them for the worker...
+    first = run(fc_router.map_conditions_all(region_id=1, _=None))
+    assert first["lee_zones"] == {} and all(h["lee"] is None for h in first["hours"])
+    eddy_mod._mask_worker.submit(lambda: None).result()               # one worker: this waits for the build
+    # ...and the next save carries them
     allc = run(fc_router.map_conditions_all(region_id=1, _=None))
     assert set(allc["lee_zones"]) == {"315"}
     slots = [q for h in allc["hours"] for q in (h, *h["quarters"])]
