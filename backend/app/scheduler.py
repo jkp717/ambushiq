@@ -4,6 +4,7 @@ Every job is scheduled through app.jobs.service.run_tracked, which records each 
 Settings → Jobs; job functions take that run's JobProgress as their first argument."""
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
 import os
@@ -49,9 +50,12 @@ async def sync_cameras_job(progress):
 
 
 async def warm_forecast_job(progress):
-    """Scheduler job: refresh the cached forecast + historical baselines for every region."""
+    """Scheduler job: refresh the cached forecast + historical baselines for every region, then re-check
+    the alerts so dismissals of alerts that have since cleared are dropped (see alerts.service)."""
+    from app.alerts.service import refresh_dismissals
     from app.forecast.service import warm_forecasts
     await warm_forecasts()
+    await asyncio.to_thread(refresh_dismissals)
 
 
 def prune_public_lands_job(progress):
@@ -136,6 +140,7 @@ def auto_cleanup_job(progress):
 
 
 _scheduler = None
+_started_at = None   # when the scheduler started (UTC); the "job didn't run" alert measures from here
 
 
 def _reschedule_sync(interval_minutes: int) -> None:
@@ -156,7 +161,7 @@ def _reschedule_sync(interval_minutes: int) -> None:
 def start_scheduler():
     """Start APScheduler with the sync + cleanup jobs. Lazy import so app boots even
     if apscheduler isn't installed (jobs simply won't run)."""
-    global _scheduler
+    global _scheduler, _started_at
     if _scheduler is not None:
         return
     try:
@@ -164,6 +169,7 @@ def start_scheduler():
         from apscheduler.triggers.interval import IntervalTrigger
         from apscheduler.triggers.cron import CronTrigger
     except Exception:
+        log.exception("scheduler: APScheduler isn't available; background jobs won't run")
         return
     from app.jobs.service import run_tracked
     settings = get_settings()
@@ -192,3 +198,4 @@ def start_scheduler():
                   next_run_time=datetime.now(timezone.utc) + _dt.timedelta(seconds=5))
     sched.start()
     _scheduler = sched
+    _started_at = datetime.now(timezone.utc)

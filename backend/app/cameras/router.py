@@ -19,6 +19,7 @@ from app.cameras.schemas import BuckBatchIn, BuckIn, CameraDiscoverIn, CameraIn,
 from app.cameras.service import (
     _backfill_species_task,
     _sync_one_camera_task,
+    apply_camera_status,
     get_camera_dir,
 )
 from app.core.config import CAMERA_BRANDS, CAMERA_IMAGE_DIR
@@ -161,9 +162,7 @@ async def discover_cameras(body: CameraDiscoverIn, region_id: int = Depends(get_
                 existing.is_deleted = 0
                 existing.name = name
                 existing.credentials_json = creds_enc
-                existing.last_seen_at = sp.get("last_seen_at")
-                existing.photo_count = sp.get("photo_count")
-                existing.photo_limit = sp.get("photo_limit")
+                apply_camera_status(existing, sp)
                 s.commit(); s.refresh(existing)
                 restored.append(existing.to_dict())
             elif status == "existing":
@@ -173,9 +172,7 @@ async def discover_cameras(body: CameraDiscoverIn, region_id: int = Depends(get_
                 if changed:
                     existing.name = name
                     existing.credentials_json = creds_enc
-                existing.last_seen_at = sp.get("last_seen_at")
-                existing.photo_count = sp.get("photo_count")
-                existing.photo_limit = sp.get("photo_limit")
+                apply_camera_status(existing, sp)
                 s.commit()
                 s.refresh(existing)
                 updated.append(existing.to_dict())
@@ -186,9 +183,8 @@ async def discover_cameras(body: CameraDiscoverIn, region_id: int = Depends(get_
                     name=name, brand=body.brand, provider_ref=ref,
                     credentials_json=creds_enc, region_id=region_id,
                     stand_id=None, is_active=1, is_deleted=0, created_at=now,
-                    last_seen_at=sp.get("last_seen_at"),
-                    photo_count=sp.get("photo_count"), photo_limit=sp.get("photo_limit"),
                 )
+                apply_camera_status(cam, sp)
                 s.add(cam)
                 s.commit()
                 s.refresh(cam)

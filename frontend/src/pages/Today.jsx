@@ -11,6 +11,7 @@ import PeriodKey from "../components/ui/PeriodKey.jsx";
 import ProxToggle from "../components/ui/ProxToggle.jsx";
 import DeerRating from "../components/DeerRating.jsx";
 import DayRankCard from "../components/DayRankCard.jsx";
+import { HuntIcons, HuntConditions } from "../components/HuntFlags.jsx";
 
 // Where a day's ranking is kept on the phone: one copy per day and proximity-toggle combination.
 const dayKey = (day, p) => `/day/ranked/${day}/${+p.corridor}${+p.food}${+p.bedding}`;
@@ -160,7 +161,7 @@ function TodayPage({ stands, standsReady = true, onGoDraw, standNav, scoreReques
       {deerRatings && (
         <section>
           <div className="section-label">14-Day Outlook</div>
-          <OutlookStrip ratings={deerRatings} selectedDay={selectedDay}
+          <OutlookStrip ratings={deerRatings} selectedDay={selectedDay} days={days}
             loadableDays={loadableDays} onPick={(d) => { setHighlightStand(null); setSelectedDay(d); }} utcOffset={utcOffset} />
         </section>
       )}
@@ -212,7 +213,9 @@ function WeatherPill({ icon, label }) {
 }
 
 /* ── 14-day horizontal strip ── */
-function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 0 }) {
+function OutlookStrip({ ratings, selectedDay, days, loadableDays, onPick, utcOffset = 0 }) {
+  // each day's hunt conditions (swirling winds, rain, high wind), for the icons under the score
+  const huntByDay = Object.fromEntries((days || []).map((d) => [d.day, d.hunt]));
   const today = localDate(utcOffset);
   const scrollRef = useRef(null);
   const drag = useRef({ active: false, startX: 0, scrollLeft: 0, moved: false });
@@ -255,6 +258,7 @@ function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 
                 ))}
               </div>
               <div className="od-score" style={{ color: tone }}>{ratingScore5(r)}/5</div>
+              <HuntIcons hunt={huntByDay[r.day]} />
               {r.confidence === "low" && <div className="od-est">est.</div>}
             </button>
           );
@@ -284,6 +288,8 @@ function DayDetailPanel({ rating, prevRating, day, dayRanked, useProx, setUsePro
       )}
 
       <DeerRating rating={rating} prevRating={prevRating} />
+
+      <HuntConditions hunt={day.hunt} />
 
       {dayRanked && dayRanked.ranked.length > 0 && (
         <div className="best-stands">

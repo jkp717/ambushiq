@@ -1,6 +1,7 @@
 """DB engine setup and session creation."""
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 
@@ -9,11 +10,24 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import DB_URL
 
+log = logging.getLogger(__name__)
+
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 
 class Base(DeclarativeBase):
     pass
+
+
+def _migration_failed(conn) -> None:
+    """A schema-upgrade step failed: say so (it used to be swallowed silently, leaving a missing column to
+    surface later as an unrelated error) and roll back, since on Postgres a failed statement also aborts
+    the rest of the transaction."""
+    log.warning("database upgrade step failed; the app may be missing a column", exc_info=True)
+    try:
+        conn.rollback()
+    except Exception:
+        pass
 
 
 def init_db(retries: int = 30):
@@ -26,20 +40,20 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE settings ALTER COLUMN value TYPE TEXT;"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.16: per-corridor usage rating and falloff distance
                 try:
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS usage INTEGER NOT NULL DEFAULT 5"))
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS falloff_m FLOAT"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.16.1: food zone quality rating
                 try:
                     conn.execute(text("ALTER TABLE zones ADD COLUMN IF NOT EXISTS quality INTEGER"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.16.3: per-stand / per-zone / per-corridor active flag
                 try:
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
@@ -47,28 +61,28 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.17.26: provider_ref + is_deleted on cameras
                 try:
                     conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS provider_ref VARCHAR(64)"))
                     conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS is_deleted INTEGER NOT NULL DEFAULT 0"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.20: corridor width + stand visibility for buffered edge-distance scoring
                 try:
                     conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS width_m FLOAT"))
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS visibility_m FLOAT"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v3.31: stand type + pin color (display only)
                 try:
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS stand_type VARCHAR(16) NOT NULL DEFAULT 'tree'"))
                     conn.execute(text("ALTER TABLE stands ADD COLUMN IF NOT EXISTS color VARCHAR(16)"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.21: species classification on camera sightings, so the camera
                 # boost can be limited to actual deer instead of any animal
                 try:
@@ -76,7 +90,7 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS species_confidence FLOAT"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v2.23: camera health (last check-in + photo quota), refreshed on
                 # sync — lets the camera penalty skip stands whose camera can't
                 # currently capture/transmit anything, instead of assuming "no deer"
@@ -86,7 +100,7 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS photo_limit INTEGER"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v3.11: photo identity + "no animal detected" photos are kept, and a per-camera sync cursor
                 try:
                     conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS provider_photo_id VARCHAR(400)"))
@@ -94,26 +108,37 @@ def init_db(retries: int = 30):
                     conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS sync_cursor_at VARCHAR(32)"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v3.20: scouting spot color + notes
                 try:
                     conn.execute(text("ALTER TABLE scouting_suggestions ADD COLUMN IF NOT EXISTS color VARCHAR(16)"))
                     conn.execute(text("ALTER TABLE scouting_suggestions ADD COLUMN IF NOT EXISTS comments_json TEXT NOT NULL DEFAULT '[]'"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v3.33: favorited camera photos are never auto-deleted
                 try:
                     conn.execute(text("ALTER TABLE camera_sightings ADD COLUMN IF NOT EXISTS is_favorite INTEGER NOT NULL DEFAULT 0"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
                 # v3.37.2: SpyPoint capture times were stored as UTC but are local — re-check each camera once
                 try:
                     conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS times_rechecked INTEGER NOT NULL DEFAULT 0"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
+                # v3.49: camera status (battery / signal / SD card / temperature / model) for alerts
+                try:
+                    for col, typ in (("battery_pct", "INTEGER"), ("battery_level", "VARCHAR(16)"),
+                                     ("power_type", "VARCHAR(16)"), ("signal_pct", "INTEGER"),
+                                     ("signal_bars", "INTEGER"), ("low_signal", "INTEGER"),
+                                     ("sd_used_mb", "INTEGER"), ("sd_size_mb", "INTEGER"),
+                                     ("temperature_f", "FLOAT"), ("model", "VARCHAR(64)")):
+                        conn.execute(text(f"ALTER TABLE cameras ADD COLUMN IF NOT EXISTS {col} {typ}"))
+                    conn.commit()
+                except Exception:
+                    _migration_failed(conn)
                 # deer_sign table
                 try:
                     conn.execute(text("""
@@ -129,7 +154,7 @@ def init_db(retries: int = 30):
                     """))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
 
                 # v3.0: multi-region support
                 region_count = conn.execute(text("SELECT COUNT(*) FROM regions")).scalar()
@@ -198,7 +223,7 @@ def init_db(retries: int = 30):
                                        "('home_lat','home_lon','rut_peak_month','rut_peak_day','property_timezone')"))
                     conn.commit()
                 except Exception:
-                    pass
+                    _migration_failed(conn)
             return
         except Exception as e:
             if attempt == retries - 1:

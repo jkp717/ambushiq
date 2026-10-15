@@ -284,3 +284,12 @@ def test_saved_forecast_carries_lee_zones_per_wind_direction(seeded, monkeypatch
     live = run(fc_router.map_conditions(HourRankIn(time_index=11, lee_zone=True), region_id=1, _=None))
     saved = allc["lee_zones"]["315"]
     assert [unrle(r) for r in saved["rows"]] == live["lee_zone"]["rows"] and saved["bounds"] == live["lee_zone"]["bounds"]
+
+
+def test_hours_carry_hunt_conditions_and_day_ranking_carries_eddies(seeded):
+    hours = run(fc_router.list_hours(region_id=1, _=None))
+    assert hours["days"] and all(isinstance(d.get("hunt"), dict) for d in hours["days"])
+    assert all(set(d["hunt"]) <= {"morning", "evening"} for d in hours["days"])
+    day = run(fc_router.day_ranked(DayRankIn(day=DAYS[0]), region_id=1, _=None))
+    periods = [p for row in day["ranked"] for p in row["periods"].values() if p]
+    assert periods and all("lee_eddy" in p for p in periods)

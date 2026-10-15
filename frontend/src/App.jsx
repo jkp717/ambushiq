@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Lock, Menu, Sun, Map as MapIcon, MapPin, Wheat, Camera, Settings as SettingsIcon, RefreshCw,
-  MapPinned, ChevronDown, Plus, Pencil, Star, Trash2 } from "lucide-react";
+  MapPinned, ChevronDown, Plus, Pencil, Star, Trash2, Bell } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import { useAuth } from "./hooks/useAuth.js";
-import { api, regionStore, apiSaved } from "./services/api.js";
+import { api, regionStore, apiSaved, fromDevice } from "./services/api.js";
+import useForegroundRefresh from "./hooks/useForegroundRefresh.js";
+import AlertsPanel from "./components/AlertsPanel.jsx";
 import { pruneSavedAreasForRegion } from "./utils/offlineTiles.js";
 import Centered from "./components/ui/Centered.jsx";
 import Modal from "./components/ui/Modal.jsx";
@@ -76,7 +78,43 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const loadSign      = useCallback(async () => { try { setSign(await apiSaved("/sign")); } catch {} }, []);
   const loadSuggestions = useCallback(async () => { try { setSuggestions(await apiSaved("/scouting")); } catch {} }, []);
   const loadCameras   = useCallback(async () => { try { setCameras(await apiSaved("/cameras")); } catch {} }, []);
-  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions(), loadCameras()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions, loadCameras]);
+  // Alerts bell: camera and system problems (backend app.alerts), kept in the Shell so the badge is current
+  // on every page and the popup opens instantly. `alertsSavedAt`: set while showing the on-phone copy.
+  const [alerts, setAlerts] = useState([]);
+  const [alertsSavedAt, setAlertsSavedAt] = useState(null);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const alertsRef = useRef(null);
+  const loadAlerts = useCallback(async () => {
+    setAlertsLoading(true);
+    try {
+      const j = await apiSaved("/alerts");
+      setAlerts(j.alerts || []);
+      setAlertsSavedAt(fromDevice(j));
+    } catch {} finally { setAlertsLoading(false); }
+  }, []);
+  const dismissAlert = useCallback(async (key) => {
+    setAlerts((list) => list.filter((a) => a.key !== key));   // shown at once; reloaded if it doesn't stick
+    try { await api("/alerts/dismiss", { method: "POST", body: JSON.stringify({ key }) }); }
+    catch { loadAlerts(); }
+  }, [loadAlerts]);
+  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions(), loadCameras(), loadAlerts()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions, loadCameras, loadAlerts]);
+  // refresh the alerts when the app comes back to the foreground, and every 10 minutes while it's open
+  const foregroundTick = useForegroundRefresh();
+  useEffect(() => { if (foregroundTick) loadAlerts(); }, [foregroundTick, loadAlerts]);
+  useEffect(() => {
+    const t = setInterval(loadAlerts, 10 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [loadAlerts]);
+  useEffect(() => {
+    if (!alertsOpen) return undefined;
+    loadAlerts();
+    const outside = (e) => { if (alertsRef.current && !alertsRef.current.contains(e.target)) setAlertsOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") setAlertsOpen(false); };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", outside); document.removeEventListener("keydown", esc); };
+  }, [alertsOpen, loadAlerts]);
 
   // Features stay connected: wherever a stand shows up, one click goes to it on the map, to its daily
   // score in the Outlook, or to its camera photos (components/StandLinks.jsx renders the buttons).
@@ -97,7 +135,22 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
       if (!cameraIds?.length) return;
       setPhotosRequest({ cameraIds }); setView("cameras");
     },
+    toCameraPhotos: (cameraIds) => { setPhotosRequest({ cameraIds }); setView("cameras"); },
+    toView: (v) => setView(v),
   }), [stands, camerasByStand]);
+  // the same links from inside the alerts popup also close it
+  const alertNav = useMemo(() => {
+    const close = (fn) => (...args) => { setAlertsOpen(false); fn(...args); };
+    return { ...standNav, toMap: close(standNav.toMap), toScore: close(standNav.toScore), toPhotos: close(standNav.toPhotos),
+             toCameraPhotos: close(standNav.toCameraPhotos), toView: close(standNav.toView) };
+  }, [standNav]);
+  const counted = alerts.filter((a) => !a.quiet);
+  const badgeTone = counted.some((a) => a.severity === "critical") ? "critical"
+    : counted.some((a) => a.severity === "warning") ? "warning" : "info";
+  const nCritical = counted.filter((a) => a.severity === "critical").length;
+  const bellLabel = counted.length
+    ? `Alerts: ${counted.length}${nCritical ? ` (${nCritical} critical)` : ""}`
+    : alerts.length ? "Alerts: nothing urgent" : "Alerts: all clear";
 
   const toggleActiveStand = useCallback(async (stand) => {
     try {
@@ -115,7 +168,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   // since regionStore.set() already changed what header future api() calls carry.
   // The previous region's features are cleared first so they can't be drawn (or framed) under the new one.
   useEffect(() => {
-    setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]); setCameras([]);
+    setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]); setCameras([]); setAlerts([]);
     setFocusRequest(null); setScoreRequest(null); setPhotosRequest(null);
     setStandsReady(false);
     loadAll();
@@ -237,6 +290,22 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
                 <Trash2 size={15} /><span>Delete region</span>
               </button>
             </div>
+          )}
+        </div>
+
+        {/* alerts bell, on every page: the badge counts what needs attention (quiet alerts only show a dot) */}
+        <div className="top-bar-alerts" ref={alertsRef}>
+          <button className="top-bar-nav-trigger top-bar-bell" onClick={() => setAlertsOpen((o) => !o)}
+            title={bellLabel} aria-label={bellLabel} aria-expanded={alertsOpen}>
+            <Bell size={18} />
+            {counted.length > 0 && (
+              <span className={`bell-badge ${badgeTone}`}>{counted.length > 9 ? "9+" : counted.length}</span>
+            )}
+            {!counted.length && alerts.length > 0 && <span className="bell-dot" />}
+          </button>
+          {alertsOpen && (
+            <AlertsPanel alerts={alerts} savedAt={alertsSavedAt} loading={alertsLoading} onRefresh={loadAlerts}
+              onDismiss={dismissAlert} onClose={() => setAlertsOpen(false)} nav={alertNav} />
           )}
         </div>
 

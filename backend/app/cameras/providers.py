@@ -47,6 +47,94 @@ class NotImplementedProvider(CameraError):
     """Raised by stub providers that aren't wired to real endpoints yet."""
 
 
+# ---------- camera status (battery / signal / SD card / temperature / model) ----------
+# Every brand returns the same keys from fetch_cameras(); None wherever a value isn't reported. All of it is
+# best-effort: an odd or missing field must never fail a sync.
+STATUS_KEYS = ("battery_pct", "battery_level", "power_type", "signal_pct", "signal_bars", "low_signal",
+               "sd_used_mb", "sd_size_mb", "temperature_f", "model")
+
+
+def _num(v) -> Optional[float]:
+    try:
+        return None if v is None or isinstance(v, bool) else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int(v) -> Optional[int]:
+    n = _num(v)
+    return None if n is None else int(round(n))
+
+
+def _temp_f(value, unit) -> Optional[float]:
+    t = _num(value)
+    if t is None:
+        return None
+    return round(t * 9 / 5 + 32, 1) if str(unit or "F").upper().startswith("C") else round(t, 1)
+
+
+def spypoint_status(status: dict) -> dict:
+    """SpyPoint camera `status` block -> STATUS_KEYS. Shape confirmed against real FLEX cameras:
+    powerSources [{type, percentage, level}] with activePowerSource indexing the one in use (a solar
+    camera runs on its internal battery, index 1); batteries [tray1, ?, internal] with 0 = absent;
+    signal.processed {percentage, bar, lowSignal}; memory {used, size} in MB; temperature {unit, value}."""
+    out = dict.fromkeys(STATUS_KEYS)
+    try:
+        status = status if isinstance(status, dict) else {}
+        sources = status.get("powerSources") if isinstance(status.get("powerSources"), list) else []
+        active = _int(status.get("activePowerSource"))
+        src = sources[active] if active is not None and 0 <= active < len(sources) else (sources[0] if sources else None)
+        if isinstance(src, dict):
+            out["battery_pct"] = _int(src.get("percentage"))
+            out["battery_level"] = (str(src["level"]).lower() if src.get("level") else None)
+            out["power_type"] = (str(src["type"]).upper() if src.get("type") else None)
+        if out["battery_pct"] is None and isinstance(status.get("batteries"), list):
+            vals = [v for v in (_int(b) for b in status["batteries"]) if v]
+            out["battery_pct"] = min(vals) if vals else None
+        if out["power_type"] is None and status.get("batteryType"):
+            out["power_type"] = str(status["batteryType"]).upper()
+        proc = ((status.get("signal") or {}).get("processed") or {}) if isinstance(status.get("signal"), dict) else {}
+        out["signal_pct"] = _int(proc.get("percentage"))
+        out["signal_bars"] = _int(proc.get("bar"))
+        if isinstance(proc.get("lowSignal"), bool):
+            out["low_signal"] = int(proc["lowSignal"])
+        mem = status.get("memory") if isinstance(status.get("memory"), dict) else {}
+        out["sd_used_mb"] = _int(mem.get("used"))
+        out["sd_size_mb"] = _int(mem.get("size")) or None
+        temp = status.get("temperature") if isinstance(status.get("temperature"), dict) else {}
+        out["temperature_f"] = _temp_f(temp.get("value"), temp.get("unit"))
+        out["model"] = str(status["model"])[:64] if status.get("model") else None
+    except Exception as exc:   # never let a status quirk break the camera list
+        log.warning("SpyPoint: couldn't read camera status: %s: %s", type(exc).__name__, exc)
+    return out
+
+
+_reveal_keys_logged = False
+
+
+def reveal_status(cam: dict) -> dict:
+    """Tactacam Reveal camera -> STATUS_KEYS, from the obvious field names only (not yet confirmed against
+    a real account). The camera's raw keys are logged once at INFO so the real names can be checked."""
+    global _reveal_keys_logged
+    out = dict.fromkeys(STATUS_KEYS)
+    try:
+        cam = cam if isinstance(cam, dict) else {}
+        if not _reveal_keys_logged:
+            _reveal_keys_logged = True
+            log.info("Reveal: camera fields %s; status fields %s", sorted(cam.keys()),
+                     sorted((cam.get("status") or {}).keys()) if isinstance(cam.get("status"), dict) else None)
+        st = cam.get("status") if isinstance(cam.get("status"), dict) else {}
+        pick = lambda *names: next((src[n] for src in (cam, st) for n in names if src.get(n) is not None), None)
+        out["battery_pct"] = _int(pick("batteryLevel", "battery", "batteryPercentage"))
+        out["signal_pct"] = _int(pick("signalStrength", "signalPercentage"))
+        out["signal_bars"] = _int(pick("signalBars", "bars"))
+        out["temperature_f"] = _temp_f(pick("temperature"), pick("temperatureUnit") or "F")             if not isinstance(pick("temperature"), dict) else None
+        out["model"] = str(pick("model", "cameraModel"))[:64] if pick("model", "cameraModel") else None
+    except Exception as exc:
+        log.warning("Reveal: couldn't read camera status: %s: %s", type(exc).__name__, exc)
+    return out
+
+
 class CameraProvider:
     brand: str = "base"
     # human-facing: what the setup wizard should collect for this brand
@@ -134,6 +222,7 @@ class SpyPointProvider(CameraProvider):
                     "last_seen_at": status.get("lastUpdate"),
                     "photo_count": sub.get("photoCount"),
                     "photo_limit": sub.get("photoLimit"),
+                    **spypoint_status(status),
                 })
             return out
 
@@ -308,6 +397,7 @@ class RevealProvider(CameraProvider):
                     "last_seen_at": c.get("lastReportDate") or c.get("lastSeenAt"),
                     "photo_count": c.get("photoCount"),
                     "photo_limit": c.get("photoLimit"),
+                    **reveal_status(c),
                 })
             return out
 

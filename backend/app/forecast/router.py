@@ -5,6 +5,7 @@ the same stand at the same hour gets the same score on the map and in the day vi
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 
@@ -29,12 +30,15 @@ from app.forecast.service import (
 from app.forecast import eddy as eddy_mod
 from app.regions import drainage as drainage_mod
 from app.regions.models import Region
+from app.regions import terrain as region_terrain
 from app.regions.terrain import ensure_property_terrain
+from app.forecast import hunt as hunt_mod
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
 from app.stands.models import Stand
 
 router = APIRouter(tags=["forecast"])
+log = logging.getLogger(__name__)
 
 
 def _sun_hours(fc: dict, day: str) -> tuple[float, float]:
@@ -220,6 +224,18 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
         days_out = (_date(y, m, dnum) - local_today).days
         dd["confidence"] = "high" if days_out <= 7 else "low"
         dd["days_out"] = days_out
+    # each sit's hunt conditions (swirling winds, rain, high wind) for the day chips and the selected day;
+    # best-effort, so a problem here never costs the day picker
+    try:
+        stands = _active_stands(region_id)
+        sites = hunt_mod.eddy_sites(region_terrain.load_grid(region_id), stands,
+                                    region_terrain.MARGIN_M * region_terrain.COVER_TOLERANCE)
+        settings = get_settings()
+        for dd in day_list:
+            dd["hunt"] = hunt_mod.day_conditions(fc["hourly"], dd["day"], dd["sunrise_h"], dd["sunset_h"],
+                                                 stands, sites, settings)
+    except Exception:
+        log.warning("hunt conditions failed for region %s", region_id, exc_info=True)
     return {"days": day_list, "utc_offset_seconds": utc_offset,
             "stale": bool(fc.get("stale")), "fetched_at": fc.get("fetched_at")}
 
@@ -343,15 +359,22 @@ async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region
         toggles={"corridor": body.use_corridor, "food": body.use_food, "bedding": body.use_bedding})
 
     def score_period(stand, lo, hi, period_name):
-        best = None
+        best, eddy = None, None
         for i in day_idxs:
             hh = datetime.fromisoformat(h["time"][i]).hour
             if hh < lo or hh > hi:
                 continue
             hour = _hour_at(h, i, sr_h, ss_h, temp_swing)
-            sc = _score_view(ctx.score(stand, hour, period_name, periods))
+            det = ctx.score(stand, hour, period_name, periods)
+            sc = _score_view(det)
             if best is None or sc["total"] > best["score"]["total"]:
                 best = {"hour": hour, "score": sc}
+            # the strongest likely lee eddy in the period, for the stand card's "eddy" tag
+            e = det.get("lee_eddy")
+            if e and e["level"] == "likely" and (eddy is None or e["strength"] > eddy["strength"]):
+                eddy = {"text": e["text"], "why": e["why"], "strength": e["strength"]}
+        if best:
+            best["lee_eddy"] = eddy
         return best
 
     rows = []

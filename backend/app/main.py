@@ -15,6 +15,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+from app.alerts.router import router as alerts_router
 from app.bulk.router import router as bulk_router
 from app.cameras.router import router as cameras_router
 from app.core.config import APP_TOKEN, APP_VERSION
@@ -75,7 +76,9 @@ def _startup():
     try:
         start_scheduler()
     except Exception:
-        pass  # scheduler is best-effort; app must boot regardless
+        # best-effort: the app must boot regardless, but say why no background job will run
+        # (the alerts bell also shows "Background jobs aren't running")
+        log.exception("scheduler failed to start; camera sync, forecast refresh and cleanup won't run")
 
 
 @app.get("/api/health")
@@ -105,6 +108,7 @@ app.include_router(regions_router)
 app.include_router(roads_router)
 app.include_router(jobs_router)
 app.include_router(tiles_router)
+app.include_router(alerts_router)
 
 
 # ---------- static frontend ----------

@@ -34,6 +34,9 @@ function DayRankCard({ row, day, standNav, highlight = false }) {
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: PERIOD_COLORS[p], display: "inline-block" }} />
                 {PERIOD_LABEL[p]}{score != null && <span style={{ color: "var(--sub)", fontWeight: 400 }}> · {score}</span>}
                 {sc?.camera && (sc.camera.boost_pct !== 0 || sc.camera.status === "unhealthy") && <CameraIndicator camera={sc.camera} />}
+                {periods[p]?.lee_eddy && (
+                  <span className="eddy-tag" title={`${periods[p].lee_eddy.text} ${periods[p].lee_eddy.why}`}>⟲ eddy</span>
+                )}
               </div>
               {sc && (
                 <div style={{ marginTop: 2, lineHeight: 1.45 }}>

@@ -96,4 +96,12 @@ DEFAULT_SETTINGS = {
     "scout_weight_proximity": 0.20,
     "scout_weight_camera": 0.15,
     "scout_weight_unexplored": 0.10,
+    # v3.49: alerts (top-bar bell, app.alerts) — when a camera reading counts as a problem
+    "alert_battery_pct": 20,               # battery at or below this % (or the camera's own "low" level)
+    "alert_signal_pct": 25,                # signal at or below this % (or the camera's own low-signal flag)
+    "alert_sd_pct": 90,                    # SD card at least this % full
+    # hunt conditions shown in the day views (forecast.hunt): any sit hour past these flags the sit
+    "hunt_rain_mm": 2.5,                   # 0.1 in per hour
+    "hunt_wind_mph": 18.0,
+    "hunt_gust_mph": 30.0,
 }

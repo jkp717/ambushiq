@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Plus, RefreshCw, Camera, AlertTriangle, CheckCircle2, ImageIcon, Edit3, Trash2, MapPin, History } from "lucide-react";
+import { Plus, RefreshCw, Camera, AlertTriangle, CheckCircle2, ImageIcon, Edit3, Trash2, MapPin, History,
+  Battery, Signal, HardDrive, Thermometer } from "lucide-react";
 import { api } from "../../services/api.js";
 import { formatRelTime } from "../../utils/formatters.js";
 import { BRAND_LABELS, BRAND_COLORS } from "../../utils/cameraBrands.js";
@@ -7,6 +8,26 @@ import Modal from "../ui/Modal.jsx";
 import CameraDiscoverWizard from "../CameraDiscoverWizard.jsx";
 import CameraEditor from "../CameraEditor.jsx";
 import StandLinks from "../StandLinks.jsx";
+
+/* The camera's own report from its last sync: battery (and AA / solar), signal, SD card, temperature, model.
+   Whatever the brand doesn't report is left out; a camera that reports nothing shows no line. */
+function CameraStatusLine({ status: s }) {
+  if (!s) return null;
+  const parts = [];
+  if (s.battery_pct != null) {
+    parts.push(<span key="bat" className={s.battery_level === "low" ? "low" : undefined}>
+      <Battery size={12} /> {s.battery_pct}%{s.power_type ? ` ${s.power_type}` : ""}</span>);
+  }
+  if (s.signal_pct != null) {
+    parts.push(<span key="sig" className={s.low_signal ? "low" : undefined}><Signal size={12} /> {s.signal_pct}%</span>);
+  }
+  if (s.sd_size_mb && s.sd_used_mb != null) {
+    parts.push(<span key="sd"><HardDrive size={12} /> SD {Math.round((100 * s.sd_used_mb) / s.sd_size_mb)}%</span>);
+  }
+  if (s.temperature_f != null) parts.push(<span key="tmp"><Thermometer size={12} /> {Math.round(s.temperature_f)}°F</span>);
+  if (s.model) parts.push(<span key="model">{s.model}</span>);
+  return parts.length ? <div className="cam-status">{parts}</div> : null;
+}
 
 /* Camera management: connect accounts, sync, verify, edit, delete. The image icon opens the Gallery tab
    filtered to that camera (onViewPhotos). */
@@ -116,6 +137,7 @@ function CameraSetupTab({ cameras, providers, stands, reload, onViewPhotos, stan
                   {stand ? <><MapPin size={11} style={{ verticalAlign: "text-bottom" }} /> {stand.name}</> : <span style={{ color: "var(--bord2)" }}>Unassigned</span>}
                   {cam.last_sync_at && <> · synced {formatRelTime(cam.last_sync_at)}</>}
                 </div>
+                <CameraStatusLine status={cam.status} />
                 {cam.health && !cam.health.healthy && (
                   <div className="cam-health-warn" title={cam.health.reason}>
                     <AlertTriangle size={12} /> {cam.health.reason}

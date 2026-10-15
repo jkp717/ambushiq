@@ -28,6 +28,17 @@ from app.settings.service import get_settings
 log = logging.getLogger(__name__)
 
 
+
+def apply_camera_status(cam_row, info: dict) -> None:
+    """Copy a provider's per-camera report (fetch_cameras) onto the Camera row: the health fields
+    (last check-in, photo plan) and the status fields (battery, signal, SD card, temperature, model).
+    The one place these are written, so sync and discovery can't drift apart."""
+    cam_row.last_seen_at = info.get("last_seen_at")
+    cam_row.photo_count = info.get("photo_count")
+    cam_row.photo_limit = info.get("photo_limit")
+    for k in cameras_mod.STATUS_KEYS:
+        setattr(cam_row, k, info.get(k))
+
 def _sanitize_path_component(name: str) -> str:
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in (name or "unnamed")).strip()
     return safe or "unnamed"
@@ -304,9 +315,7 @@ async def _sync_one_camera(camera_id: int, since_days: Optional[int] = None) -> 
             with Session(engine) as s:
                 cam_row = s.get(Camera, camera_id)
                 if cam_row:
-                    cam_row.last_seen_at = sp_cam.get("last_seen_at")
-                    cam_row.photo_count = sp_cam.get("photo_count")
-                    cam_row.photo_limit = sp_cam.get("photo_limit")
+                    apply_camera_status(cam_row, sp_cam)
                     s.commit()
     except Exception as exc:
         log.warning("cam %s (%s): health refresh failed: %s: %s",

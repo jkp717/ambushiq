@@ -539,4 +539,5 @@ def score_with_breakdown(stand: dict, hour: dict, period: str | None = None,
         "thermal_phase": base["thermal_phase"] if base["thermal_known"] else "unknown",
         "drainage_deg": base["drainage_deg"],
         "scent_score": base["scent_score"],
+        "lee_eddy": base["lee_eddy"],
     }

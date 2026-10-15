@@ -20,6 +20,7 @@ import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
 import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 import SelectionBar from "../components/SelectionBar.jsx";
+import { HuntIcons, sitAt, sitSummary } from "../components/HuntFlags.jsx";
 
 const WX_ICONS = { sun: Sun, partly: CloudSun, cloud: Cloud, drizzle: CloudDrizzle, rain: CloudRain, snow: CloudSnow };
 
@@ -54,6 +55,7 @@ function DayStrip({ days, dayIdx, ratings, utcOffset, onPick }) {
               {Icon && <Icon size={18} />}
             </span>
             <span className="map-day-chip-score" style={rating ? { "--tone": ratingTone(rating) } : undefined}>{score ?? "–"}</span>
+            <HuntIcons hunt={d.hunt} size={11} />
           </button>
         );
       })}
@@ -756,6 +758,15 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           {/* Day strip: moving between days (the tab above spells out the chosen date and time) */}
           <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
             onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
+
+          {/* the selected time falls in a sit with swirling winds, rain or high wind: say so beside the arrows */}
+          {(() => {
+            const sit = sitAt(curDay, curHour?.hour);
+            const txt = sit && sitSummary(curDay?.hunt?.[sit]);
+            return txt ? (
+              <div className="map-hunt-chip" role="status">{sit === "morning" ? "☀ Morning" : "☾ Evening"} · {txt}</div>
+            ) : null;
+          })()}
 
           {/* Media-control row: back/forward step buttons + play/pause flank the
               slider (15-min steps, period colours painted on the track) + hour/15-min

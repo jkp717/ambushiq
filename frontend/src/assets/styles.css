@@ -253,6 +253,26 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .od-est   { font-size: 9px; color: var(--sub); }
 
 /* day detail panel */
+/* hunt conditions (HuntFlags.jsx): swirling winds / rain / high wind for a day's sits */
+.hunt-icons { display: inline-flex; align-items: center; justify-content: center; gap: 3px; margin-top: 2px;
+              color: var(--amber); line-height: 1; }
+.hunt-swirl { font-weight: 700; color: #0E7C8A; line-height: 1; }
+.hunt-conditions { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: var(--surf);
+                   border-left: 3px solid var(--amber); }
+.hunt-conditions-hd { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.hunt-sit { display: flex; gap: 10px; font-size: 12.5px; line-height: 1.45; }
+.hunt-sit + .hunt-sit { margin-top: 6px; }
+.hunt-sit-name { flex: 0 0 74px; font-weight: 600; color: var(--sub); }
+.hunt-sit-items { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hunt-sit-items svg { vertical-align: -2px; color: var(--amber); }
+.eddy-tag { font-size: 10.5px; font-weight: 600; color: #0E7C8A; background: rgba(14,124,138,.1);
+            padding: 1px 6px; border-radius: 6px; cursor: help; }
+.map-hunt-chip { margin: 6px 0 2px; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 500;
+                 background: rgba(133,79,11,.1); color: var(--amber); }
+@media (prefers-color-scheme: dark) {
+  .map-hunt-chip, .hunt-icons, .hunt-sit-items svg { color: #E0A84F; }
+  .hunt-swirl, .eddy-tag { color: #4FB7C4; }
+}
 .day-detail {
   background: var(--surf); border: 1px solid var(--bord);
   border-radius: 16px; padding: 16px;
@@ -641,6 +661,58 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   transition: background 0.12s;
 }
 .top-bar-nav-trigger:hover { background: var(--surf); }
+/* alerts bell (App.jsx) + its popup (AlertsPanel.jsx) */
+.top-bar-alerts { position: relative; }
+.top-bar-bell { position: relative; }
+.bell-badge {
+  position: absolute; top: 1px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box;
+  border-radius: 8px; font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; color: #fff;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.bell-badge.critical { background: var(--red); }
+.bell-badge.warning  { background: var(--amber); }
+.bell-badge.info     { background: var(--navy); }
+.bell-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%;
+            background: var(--sub); box-shadow: 0 0 0 2px var(--bg); }
+.alerts-backdrop { display: none; }
+.alerts-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 1100;
+  width: 380px; max-width: calc(100vw - 28px); max-height: 70vh; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg); border: 1px solid var(--bord); border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
+}
+.alerts-hd { display: flex; align-items: center; gap: 8px; padding: 10px 8px 8px 14px; position: sticky; top: 0;
+             background: var(--bg); border-bottom: 1px solid var(--bord); z-index: 1; }
+.alerts-count { font-size: 11.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px; background: var(--surf); color: var(--sub); }
+.alerts-offline { font-size: 12px; color: var(--sub); padding: 8px 14px; background: var(--surf); }
+.alerts-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 28px 14px;
+                color: var(--green); font-weight: 500; }
+.alerts-group-hd { font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+                   color: var(--sub); padding: 10px 14px 4px; }
+.alert-row { display: flex; gap: 10px; padding: 9px 8px 9px 11px; border-left: 3px solid var(--bord2); }
+.alert-row + .alert-row { border-top: 1px solid var(--bord); }
+.alert-row.sev-critical { border-left-color: var(--red); }
+.alert-row.sev-warning  { border-left-color: var(--amber); }
+.alert-row.sev-info     { border-left-color: var(--navy); }
+.alert-row.quiet        { border-left-color: var(--bord2); }
+.alert-icon { flex-shrink: 0; margin-top: 1px; color: var(--sub); }
+.alert-row.sev-critical .alert-icon { color: var(--red); }
+.alert-row.sev-warning .alert-icon  { color: var(--amber); }
+.alert-body { flex: 1; min-width: 0; }
+.alert-title { font-size: 13.5px; font-weight: 600; }
+.alert-detail { font-size: 12px; color: var(--sub); margin-top: 2px; line-height: 1.4; }
+.alert-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.alert-time { font-size: 11px; color: var(--sub); margin-right: 2px; }
+.alert-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.alert-links .stand-links { margin-top: 0; }
+.alert-dismiss { flex-shrink: 0; align-self: flex-start; display: flex; padding: 5px; border: none; border-radius: 6px;
+                 background: transparent; color: var(--sub); cursor: pointer; }
+.alert-dismiss:hover { background: var(--surf); color: var(--txt); }
+/* phones: a full-width sheet dropping down under the top bar, the page dimmed below it */
+@media (max-width: 600px) {
+  .alerts-backdrop { display: block; position: fixed; inset: calc(var(--top-bar-h) + env(safe-area-inset-top)) 0 0 0; z-index: 1099; background: rgba(0,0,0,.35); }
+  .alerts-panel { position: fixed; top: calc(var(--top-bar-h) + env(safe-area-inset-top)); left: 0; right: 0; width: auto; max-width: none;
+                  max-height: 75vh; border-radius: 0 0 12px 12px; border-left: none; border-right: none; }
+}
 .top-bar-nav-menu {
   position: absolute; top: calc(100% + 6px); right: 0;
   background: var(--bg); border: 1px solid var(--bord);
@@ -965,6 +1037,10 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   display: flex; align-items: center; gap: 4px;
   font-size: 11px; color: var(--amber); margin-top: 3px;
 }
+/* Camera Setup: the camera's battery / signal / SD / temperature / model (CameraStatusLine) */
+.cam-status { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11.5px; color: var(--sub); margin-top: 3px; }
+.cam-status span { display: inline-flex; align-items: center; gap: 3px; }
+.cam-status .low { color: var(--red); font-weight: 600; }
 .cam-active-chip {
   margin-left: auto; font-size: 11.5px; font-weight: 500;
   padding: 2px 8px; border-radius: 10px; cursor: pointer;

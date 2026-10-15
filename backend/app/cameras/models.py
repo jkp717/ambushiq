@@ -36,6 +36,26 @@ class Camera(Base):
     # capture time is the camera's local clock, not UTC). Until then the next sync reaches back over
     # every stored photo and corrects their times.
     times_rechecked: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Provider-reported camera status, refreshed with the health fields above (cameras.service
+    # apply_camera_status). Best-effort: None wherever the brand doesn't report it. Drives the camera
+    # alerts (battery, signal, SD card) and the status line on Camera Setup.
+    battery_pct: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    battery_level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)   # low / medium / high
+    power_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)      # AA / SOLAR / ...
+    signal_pct: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    signal_bars: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    low_signal: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)         # 1 = the brand flags it weak
+    sd_used_mb: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sd_size_mb: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    temperature_f: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    def status_dict(self) -> dict:
+        return {"battery_pct": self.battery_pct, "battery_level": self.battery_level, "power_type": self.power_type,
+                "signal_pct": self.signal_pct, "signal_bars": self.signal_bars,
+                "low_signal": None if self.low_signal is None else bool(self.low_signal),
+                "sd_used_mb": self.sd_used_mb, "sd_size_mb": self.sd_size_mb,
+                "temperature_f": self.temperature_f, "model": self.model}
 
     def to_dict(self) -> dict:
         # NEVER expose credentials
@@ -47,6 +67,7 @@ class Camera(Base):
             "has_credentials": bool(self.credentials_json),
             "last_seen_at": self.last_seen_at,
             "photo_count": self.photo_count, "photo_limit": self.photo_limit,
+            "status": self.status_dict(),
         }
 
 

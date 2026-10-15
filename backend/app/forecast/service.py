@@ -552,6 +552,20 @@ def _fc_key(lat: float, lon: float, days: int, settings: dict, tz_name: str) -> 
     return f"{FC_SCHEMA}:{lat:.3f},{lon:.3f}:{days}:{primary_id}:{secondary_id}:{tz_name}"
 
 
+# Last outcome of a real upstream fetch per location (in memory), for the "weather provider failing" alert.
+_fetch_status: dict[tuple[float, float], dict] = {}
+
+
+def _loc(lat: float, lon: float) -> tuple[float, float]:
+    return round(float(lat), 3), round(float(lon), 3)
+
+
+def fetch_status(lat: float, lon: float) -> dict:
+    """{ok_at, error_at, error, provider} for the most recent fetches at this location (epoch seconds),
+    or {} before any fetch since the app started."""
+    return dict(_fetch_status.get(_loc(lat, lon), {}))
+
+
 async def _fetch_and_store(key: str, lat: float, lon: float, days: int, tz_name: str, settings: dict) -> dict:
     """One real upstream fetch (primary + optional secondary solar backfill and/or
     day-range extension), gap-filled and cached in memory and Postgres."""
@@ -559,7 +573,14 @@ async def _fetch_and_store(key: str, lat: float, lon: float, days: int, tz_name:
     secondary_id = str(settings.get("weather_secondary_provider") or "")
     primary = get_weather_provider(primary_id, decrypt_settings_key(settings.get(f"weather_api_key__{primary_id}")))
     t0 = time.monotonic()
-    forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
+    status = _fetch_status.setdefault(_loc(lat, lon), {})
+    status["provider"] = primary.label
+    try:
+        forecast = await _fetch_with_retry(primary, lat, lon, days, tz_name)
+    except Exception as exc:
+        status.update(error_at=time.time(), error=str(exc) or type(exc).__name__)
+        raise
+    status["ok_at"] = time.time()
     _pad_to_local_midnight(forecast["hourly"])
     forecast["daily"]["source"] = [primary.label] * len(forecast["daily"].get("sunrise", []))
     covered_days = _hourly_day_count(forecast["hourly"])
