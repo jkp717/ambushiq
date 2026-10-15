@@ -120,10 +120,26 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
                    width, height });
   }, []);
   useLayoutEffect(() => { setActiveDeer(null); measurePhoto(); }, [viewIdx, measurePhoto]);
+  // Re-measure whenever the photo's box changes. Rotating a phone fires `resize` before the new layout
+  // (and dvh) settles, so a window listener alone reads the old size and leaves the outlines where the
+  // photo used to be; observing the img and its slide catches the size and offset once layout is done.
   useEffect(() => {
-    window.addEventListener("resize", measurePhoto);
-    return () => window.removeEventListener("resize", measurePhoto);
-  }, [measurePhoto]);
+    const img = curImg.current;
+    if (!img) return;
+    const ro = new ResizeObserver(() => measurePhoto());
+    ro.observe(img);
+    if (img.parentElement) ro.observe(img.parentElement);
+    let raf = 0;
+    const onWindow = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measurePhoto); };
+    window.addEventListener("resize", onWindow);
+    window.addEventListener("orientationchange", onWindow);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onWindow);
+      window.removeEventListener("orientationchange", onWindow);
+    };
+  }, [viewIdx, measurePhoto]);
 
   // Nearest index from `from` in direction `dir` (±1) that has a photo to show, or -1.
   const photoIdx = (from, dir) => {
