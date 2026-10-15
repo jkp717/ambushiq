@@ -12,6 +12,9 @@ const PAGE = 48;
 // width or flick speed that turns a drag into a swipe, and how much a drag toward no photo is damped.
 const DRAG_START_PX = 10, SWIPE_FRACTION = 0.2, FLICK_PX_PER_MS = 0.4, EDGE_RESIST = 3;
 const SLIDE_MS = 250;
+// Pinch-to-zoom on the open photo: the most it zooms, where a double-tap zooms to, and what counts as a
+// double-tap (two taps on the photo this close together in time and place).
+const MAX_ZOOM = 4, TAP_ZOOM = 2.5, DOUBLE_TAP_MS = 300, DOUBLE_TAP_PX = 30;
 const OUTLINES_KEY = "ambushiq.gallery.outlines";
 const circled = (n) => String.fromCharCode(0x2460 + n);   // ① ② ③ …
 
@@ -38,6 +41,15 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, s
   const [photoRect, setPhotoRect] = useState(null);
   const [activeDeer, setActiveDeer] = useState(null);
   const curImg = useRef(null);
+  // Zoom: the open photo's slide is scaled/moved with a CSS transform (origin top-left), so the deer outlines
+  // inside it zoom with the photo and the outline maths above is untouched. Written straight to the DOM like
+  // the swipe track. `pinch` holds the two-finger gesture's starting point while it lasts.
+  const lightboxRef = useRef(null);
+  const curSlide = useRef(null);
+  const zoomedEl = useRef(null);
+  const zoom = useRef({ s: 1, x: 0, y: 0 });
+  const pinch = useRef(null);
+  const lastTap = useRef(null);
   const query = filterParams(filters, { time: true }).toString();
   const count = activeFilterCount(filters, { time: true });
 
@@ -120,18 +132,57 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, s
     setPhotoRect({ left: img.offsetLeft + (img.clientWidth - width) / 2, top: img.offsetTop + (img.clientHeight - height) / 2,
                    width, height });
   }, []);
-  useLayoutEffect(() => { setActiveDeer(null); measurePhoto(); }, [viewIdx, measurePhoto]);
+  // Draw the zoom; at 1x the slide has no transform at all. `animate` for double-tap.
+  const applyZoom = (animate = false) => {
+    const el = curSlide.current, z = zoom.current;
+    if (el) {
+      el.style.transition = animate ? "transform 200ms ease-out" : "none";
+      el.style.transform = z.s > 1 ? `translate(${z.x}px, ${z.y}px) scale(${z.s})` : "";
+      el.style.setProperty("--zoom", String(z.s));
+      zoomedEl.current = el;
+    }
+    lightboxRef.current?.classList.toggle("zoomed", z.s > 1);
+  };
+  // Keep the zoomed photo covering its slide: it can't be dragged past its own edges.
+  const clampZoom = () => {
+    const el = curSlide.current, z = zoom.current;
+    if (!el || z.s <= 1) { zoom.current = { s: 1, x: 0, y: 0 }; return; }
+    z.x = Math.min(0, Math.max(el.clientWidth * (1 - z.s), z.x));
+    z.y = Math.min(0, Math.max(el.clientHeight * (1 - z.s), z.y));
+  };
+  // Back to 1x. Also clears the slide that was zoomed, in case the photo changed underneath it.
+  const resetZoom = () => {
+    zoom.current = { s: 1, x: 0, y: 0 };
+    pinch.current = null;
+    if (zoomedEl.current && zoomedEl.current !== curSlide.current) {
+      zoomedEl.current.style.transform = "";
+      zoomedEl.current.style.removeProperty("--zoom");
+    }
+    applyZoom();
+  };
+  // Double-tap: zoom in to TAP_ZOOM on the tapped point, or back out to 1x.
+  const toggleZoomAt = (px, py) => {
+    const el = curSlide.current;
+    if (!el) return;
+    if (zoom.current.s > 1) { zoom.current = { s: 1, x: 0, y: 0 }; applyZoom(true); return; }
+    const r = el.getBoundingClientRect();
+    zoom.current = { s: TAP_ZOOM, x: (px - r.left) * (1 - TAP_ZOOM), y: (py - r.top) * (1 - TAP_ZOOM) };
+    clampZoom();
+    applyZoom(true);
+  };
+
+  useLayoutEffect(() => { setActiveDeer(null); resetZoom(); measurePhoto(); }, [viewIdx, measurePhoto]); // eslint-disable-line react-hooks/exhaustive-deps
   // Re-measure whenever the photo's box changes. Rotating a phone fires `resize` before the new layout
   // (and dvh) settles, so a window listener alone reads the old size and leaves the outlines where the
   // photo used to be; observing the img and its slide catches the size and offset once layout is done.
   useEffect(() => {
     const img = curImg.current;
     if (!img) return;
-    const ro = new ResizeObserver(() => measurePhoto());
+    const ro = new ResizeObserver(() => { resetZoom(); measurePhoto(); });
     ro.observe(img);
     if (img.parentElement) ro.observe(img.parentElement);
     let raf = 0;
-    const onWindow = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measurePhoto); };
+    const onWindow = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { resetZoom(); measurePhoto(); }); };
     window.addEventListener("resize", onWindow);
     window.addEventListener("orientationchange", onWindow);
     return () => {
@@ -141,6 +192,23 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, s
       window.removeEventListener("orientationchange", onWindow);
     };
   }, [viewIdx, measurePhoto]);
+
+  // A pinch zooms the photo, not the page. React's touch listeners are passive and can't prevent the
+  // browser's own page zoom, so native non-passive ones on the open viewer do (iOS also sends gesture events).
+  const lightboxOpen = viewIdx != null;
+  useEffect(() => {
+    const el = lightboxRef.current;
+    if (!el) return undefined;
+    const stop = (e) => { if (!e.touches || e.touches.length > 1) e.preventDefault(); };
+    el.addEventListener("touchmove", stop, { passive: false });
+    el.addEventListener("gesturestart", stop, { passive: false });
+    el.addEventListener("gesturechange", stop, { passive: false });
+    return () => {
+      el.removeEventListener("touchmove", stop);
+      el.removeEventListener("gesturestart", stop);
+      el.removeEventListener("gesturechange", stop);
+    };
+  }, [lightboxOpen]);
 
   // Nearest index from `from` in direction `dir` (±1) that has a photo to show, or -1.
   const photoIdx = (from, dir) => {
@@ -196,16 +264,56 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, s
   useLayoutEffect(() => { placeTrack(0, false); }, [viewIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onTouchStart(e) {
+    if (e.touches.length === 2 && !sliding.current && curSlide.current) {
+      // pinch: remember where it started; the slide's untransformed origin is its box minus the current offset
+      drag.current = null;
+      dragged.current = true;
+      const [a, b] = e.touches, z = zoom.current, r = curSlide.current.getBoundingClientRect();
+      pinch.current = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+                        mx: (a.clientX + b.clientX) / 2, my: (a.clientY + b.clientY) / 2,
+                        s: z.s, x: z.x, y: z.y, bx: r.left - z.x, by: r.top - z.y };
+      return;
+    }
     if (sliding.current || e.touches.length > 1) { drag.current = null; return; }
     const t = e.touches[0];
-    drag.current = { x: t.clientX, y: t.clientY, t: performance.now(), dx: 0, axis: null };
+    drag.current = { x: t.clientX, y: t.clientY, t: performance.now(), dx: 0, axis: null,
+                     pan: zoom.current.s > 1, zx: zoom.current.x, zy: zoom.current.y,
+                     onPhoto: !!e.target.closest?.(".lightbox-img, .deer-outline") };
     dragged.current = false;
   }
   function onTouchMove(e) {
+    const p = pinch.current;
+    if (p) {
+      if (e.touches.length < 2) return;
+      const [a, b] = e.touches;
+      const s = Math.min(MAX_ZOOM, Math.max(1, p.s * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / p.dist));
+      const mx = (a.clientX + b.clientX) / 2, my = (a.clientY + b.clientY) / 2;
+      // the photo point that was under the fingers stays under them (which also pans as they move)
+      const ux = (p.mx - p.bx - p.x) / p.s, uy = (p.my - p.by - p.y) / p.s;
+      zoom.current = { s, x: mx - p.bx - ux * s, y: my - p.by - uy * s };
+      clampZoom();
+      cancelAnimationFrame(frame.current);
+      frame.current = requestAnimationFrame(() => applyZoom());
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const t = e.touches[0];
     const dx = t.clientX - d.x, dy = t.clientY - d.y;
+    if (d.pan) {
+      // zoomed in: one finger moves the photo around instead of swiping to the next one
+      if (!d.axis) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_START_PX) return;
+        d.axis = "pan";
+        dragged.current = true;
+      }
+      zoom.current.x = d.zx + dx;
+      zoom.current.y = d.zy + dy;
+      clampZoom();
+      cancelAnimationFrame(frame.current);
+      frame.current = requestAnimationFrame(() => applyZoom());
+      return;
+    }
     if (!d.axis) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_START_PX) return;
       d.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";   // a vertical drag is left to scroll the page
@@ -218,9 +326,26 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, s
     cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => placeTrack(shown, false));
   }
-  function onTouchEnd() {
+  function onTouchEnd(e) {
+    if (pinch.current) {
+      // the pinch is over once fewer than two fingers are down; a zoom that ended near 1x snaps back
+      if (e.touches.length < 2) {
+        pinch.current = null;
+        if (zoom.current.s < 1.05) resetZoom();
+      }
+      return;
+    }
     const d = drag.current;
     drag.current = null;
+    if (d && !d.axis && d.onPhoto) {
+      const now = performance.now(), lt = lastTap.current;
+      if (lt && now - lt.t < DOUBLE_TAP_MS && Math.hypot(d.x - lt.x, d.y - lt.y) < DOUBLE_TAP_PX) {
+        lastTap.current = null;
+        toggleZoomAt(d.x, d.y);
+        return;
+      }
+      lastTap.current = { t: now, x: d.x, y: d.y };
+    }
     if (!d || d.axis !== "x") return;
     cancelAnimationFrame(frame.current);
     const width = trackRef.current?.clientWidth || window.innerWidth;
@@ -317,12 +442,13 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, s
       )}
 
       {viewIdx != null && items[viewIdx] && (
-        <div className="lightbox" onClick={onBackdropClick}
+        <div className="lightbox" ref={lightboxRef} onClick={onBackdropClick}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
           <div className="lightbox-track" ref={trackRef} onTransitionEnd={onTrackSlid}>
             {slideIdx.map((j, k) => (
               // keyed by photo so, after a swipe, the slide already showing the new photo is kept
-              <div className="lightbox-slide" key={j >= 0 ? items[j].id : `none-${k}`}>
+              <div className="lightbox-slide" key={j >= 0 ? items[j].id : `none-${k}`}
+                ref={j === viewIdx ? curSlide : undefined}>
                 {j >= 0 && <img src={items[j].image_url} alt={j === viewIdx ? "full-size sighting" : ""}
                   ref={j === viewIdx ? curImg : undefined} onLoad={j === viewIdx ? measurePhoto : undefined}
                   className="lightbox-img" draggable={false} onClick={(e) => e.stopPropagation()} />}

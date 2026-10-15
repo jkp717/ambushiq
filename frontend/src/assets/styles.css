@@ -1221,16 +1221,20 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   flex: 0 0 100%; min-width: 0; box-sizing: border-box; padding: 0 16px;
   display: flex; align-items: flex-start; justify-content: center;
   position: relative;   /* deer outlines are placed against the slide */
+  transform-origin: 0 0; /* pinch zoom scales the open slide from its top-left (GalleryTab applyZoom) */
 }
+/* zoomed in: one finger pans the photo, so the viewer itself must not scroll or hand the touch to the browser */
+.lightbox.zoomed { touch-action: none; overflow: hidden; cursor: default; }
 /* ── deer outlines + Buck toggles (buck model) ── */
 /* thin and see-through, so antlers stay visible through it; drawn around a padded box (detection.pad_box) */
 .deer-outline {
   position: absolute; box-sizing: border-box; z-index: 2; cursor: pointer;
-  border: 1px solid rgba(255,255,255,.6); border-radius: 4px;
+  /* --zoom (set while pinch-zoomed) keeps the line the same thin width on screen at any zoom */
+  border: calc(1px / var(--zoom, 1)) solid rgba(255,255,255,.6); border-radius: 4px;
   box-shadow: 0 0 0 1px rgba(0,0,0,.15);
 }
 .deer-outline.on { border-color: rgba(245,163,0,.75); }
-.deer-outline.active { border-width: 1.5px; border-color: #fff; }
+.deer-outline.active { border-width: calc(1.5px / var(--zoom, 1)); border-color: #fff; }
 .deer-outline.on.active { border-color: #F5A300; }
 .deer-outline .deer-num { position: absolute; top: -2px; left: -2px; transform: translateY(-100%); }
 .deer-num {
