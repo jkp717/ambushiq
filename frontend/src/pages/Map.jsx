@@ -20,7 +20,13 @@ import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
 import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 import SelectionBar from "../components/SelectionBar.jsx";
-import { HuntIcons, sitAt, sitSummary } from "../components/HuntFlags.jsx";
+import { HuntIcons, sitAt, sitParts, sitDetail } from "../components/HuntFlags.jsx";
+
+// "06:58" (the /hours sunrise/sunset strings) -> "6:58"
+const clock12 = (hhmm) => {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")}`;
+};
 
 const WX_ICONS = { sun: Sun, partly: CloudSun, cloud: Cloud, drizzle: CloudDrizzle, rain: CloudRain, snow: CloudSnow };
 
@@ -147,6 +153,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                    openStandEditor, onEditFeature, onDeleteFeature, standNav, focusRequest, clearFocusRequest }) {
   const [days, setDays] = useState([]);
   const daysRef = useRef(days);
+  const shownHunt = useRef(null);   // the last day's hunt chips shown, kept while that row eases closed
   daysRef.current = days;
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
@@ -759,13 +766,41 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
             onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
 
-          {/* the selected time falls in a sit with swirling winds, rain or high wind: say so beside the arrows */}
+          {/* the selected day's weather in words (also on phones, where the day card's tooltip never shows) */}
+          {curDay && (
+            <div className="map-day-summary">
+              <span className="map-day-summary-text"><b>{curDay.label}</b>{curDay.wx?.text && <> · {curDay.wx.text}</>}</span>
+              {curDay.sunrise && curDay.sunset && (
+                <span className="map-day-summary-sun" title="Sunrise · sunset">↑ {clock12(curDay.sunrise)} · ↓ {clock12(curDay.sunset)}</span>
+              )}
+            </div>
+          )}
+
+          {/* The selected day's hunt conditions, one chip per flagged sit. Keyed by the DAY, not the time, so
+              scrubbing never makes this row appear or disappear and the slider below never moves mid-drag; the
+              sit the selected time is in is only outlined. The row eases open/closed (the last chips stay
+              rendered while it closes, so they fade out instead of blanking). */}
           {(() => {
-            const sit = sitAt(curDay, curHour?.hour);
-            const txt = sit && sitSummary(curDay?.hunt?.[sit]);
-            return txt ? (
-              <div className="map-hunt-chip" role="status">{sit === "morning" ? "☀ Morning" : "☾ Evening"} · {txt}</div>
-            ) : null;
+            const sits = ["morning", "evening"].filter((s) => curDay?.hunt?.[s]);
+            if (sits.length) shownHunt.current = { day: curDay, sits };
+            const shown = shownHunt.current;
+            const activeSit = sitAt(curDay, curHour?.hour);
+            return (
+              <div className={"map-day-alerts" + (sits.length ? " open" : "")} aria-hidden={!sits.length}>
+                <div className="map-day-alerts-inner"><div className="map-day-alerts-row">
+                  {shown?.sits.map((s) => {
+                    const c = shown.day.hunt[s];
+                    return (
+                      <span key={s} title={sitDetail(c)}
+                        className={"map-hunt-sit" + (sits.length && shown.day === curDay && s === activeSit ? " active" : "")}>
+                        <span className="map-hunt-sit-name">{s === "morning" ? "☀ Morning" : "☾ Evening"}</span>
+                        {sitParts(c).map((p) => <span key={p.kind} className={`hunt-part ${p.kind}`}>{p.text}</span>)}
+                      </span>
+                    );
+                  })}
+                </div></div>
+              </div>
+            );
           })()}
 
           {/* Media-control row: back/forward step buttons + play/pause flank the

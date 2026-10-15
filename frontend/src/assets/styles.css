@@ -267,10 +267,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .hunt-sit-items svg { vertical-align: -2px; color: var(--amber); }
 .eddy-tag { font-size: 10.5px; font-weight: 600; color: #0E7C8A; background: rgba(14,124,138,.1);
             padding: 1px 6px; border-radius: 6px; cursor: help; }
-.map-hunt-chip { margin: 6px 0 2px; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 500;
-                 background: rgba(133,79,11,.1); color: var(--amber); }
 @media (prefers-color-scheme: dark) {
-  .map-hunt-chip, .hunt-icons, .hunt-sit-items svg { color: #E0A84F; }
+  .hunt-icons, .hunt-sit-items svg { color: #E0A84F; }
   .hunt-swirl, .eddy-tag { color: #4FB7C4; }
 }
 .day-detail {
@@ -323,13 +321,16 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   background: var(--bg); border-top: 1px solid var(--bord);
   padding: 8px 12px calc(6px + env(safe-area-inset-bottom, 0px));
   display: grid; align-items: start;
-  column-gap: 6px; row-gap: 8px;
+  --row-gap: 8px;
+  column-gap: 6px; row-gap: var(--row-gap);
   /* minmax(0, 1fr): the flexible column may shrink below its content, so nothing pushes the panel
      past the screen edge on a narrow phone */
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "strip strip strip strip"
-    "back  track fwd   play";
+    "strip   strip   strip   strip"
+    "summary summary summary summary"
+    "alerts  alerts  alerts  alerts"
+    "back    track   fwd     play";
 }
 
 /* ── bottom time sheet: a tab that is always visible at the bottom-center plus a panel that
@@ -376,6 +377,46 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   scroll-snap-type: x proximity; touch-action: pan-x; scrollbar-width: none;
 }
 .map-day-strip::-webkit-scrollbar { display: none; }
+/* the selected day's weather in words, one line (its height never changes) */
+.map-day-summary {
+  grid-area: summary; min-width: 0; display: flex; align-items: baseline; gap: 10px;
+  font-size: 12.5px; color: var(--sub); margin-top: -2px;
+}
+.map-day-summary-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-day-summary-text b { color: var(--txt); font-weight: 600; }
+.map-day-summary-sun { flex-shrink: 0; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* The selected day's hunt-condition chips. Eases open/closed (height via the 0fr/1fr grid-row trick, plus
+   opacity) instead of popping in. Closed it takes no space at all: the negative margin cancels the grid's
+   row gap, and the chips' own spacing lives inside the part that collapses. It only changes with the day,
+   never while scrubbing, so the slider below doesn't move mid-drag. */
+.map-day-alerts {
+  grid-area: alerts; min-width: 0; margin-top: calc(-1 * var(--row-gap));
+  display: grid; grid-template-rows: 0fr; opacity: 0;
+  transition: grid-template-rows .25s ease, opacity .2s ease;
+}
+.map-day-alerts:not(.open) { pointer-events: none; }
+.map-day-alerts.open { grid-template-rows: 1fr; opacity: 1; }
+.map-day-alerts-inner { min-height: 0; overflow: hidden; }
+.map-day-alerts-row { display: flex; flex-wrap: wrap; gap: 6px; padding-top: var(--row-gap); }
+.map-hunt-sit {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%;
+  padding: 4px 10px; border-radius: 8px; font-size: 12px; cursor: help;
+  background: var(--surf); border: 1.5px solid transparent; transition: border-color .15s ease;
+}
+.map-hunt-sit.active { border-color: var(--bord2); }
+.map-hunt-sit-name { font-weight: 600; color: var(--txt); }
+.hunt-part { font-weight: 600; white-space: nowrap; }
+.hunt-part.swirl { color: #0E7C8A; }
+.hunt-part.wind  { color: var(--amber); }
+.hunt-part.rain  { color: var(--blue); }
+@media (prefers-color-scheme: dark) {
+  .hunt-part.swirl { color: #4FB7C4; }
+  .hunt-part.wind  { color: #E0A84F; }
+  .hunt-part.rain  { color: #6FA8DC; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-day-alerts, .map-hunt-sit { transition: none; }
+}
 /* centred when every day fits (desktop); auto margins, unlike justify-content: center, never push the
    first days out of reach when the strip has to scroll (phone) */
 .map-day-chip:first-child { margin-left: auto; }
@@ -639,11 +680,13 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   .map-ctrl-panel {
     grid-template-columns: 1fr auto auto auto 1fr;
     grid-template-areas:
-      "strip strip strip strip strip"
-      "track track track track track"
-      ".     back  play  fwd   .";
+      "strip   strip   strip   strip   strip"
+      "summary summary summary summary summary"
+      "alerts  alerts  alerts  alerts  alerts"
+      "track   track   track   track   track"
+      ".       back    play    fwd     .";
     align-items: center;
-    row-gap: 4px;
+    --row-gap: 4px;
   }
   .map-step-btn { margin-top: 0; }
 }

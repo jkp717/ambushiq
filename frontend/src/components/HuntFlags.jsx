@@ -10,14 +10,14 @@ const SIT_ICON = { morning: "☀", evening: "☾" };
 
 const swirls = (c) => !!(c?.swirl || c?.eddy_stands?.length);
 
-function swirlText(c) {
+export function swirlText(c) {
   const parts = [];
   if (c.swirl) parts.push(`wind swings ${c.swirl.swings}× (${c.swirl.dirs.join(" → ")})`);
   if (c.eddy_stands?.length) parts.push(`lee eddy at ${c.eddy_stands.map((s) => s.name).join(", ")}`);
   return parts.join("; ");
 }
-const rainText = (c) => `${c.rain.in_per_h} in/h at ${c.rain.at}`;
-const windText = (c) => `wind ${c.wind.mph} mph, gusts to ${c.wind.gust_mph} mph (${c.wind.at})`;
+export const rainText = (c) => `${c.rain.in_per_h} in/h at ${c.rain.at}`;
+export const windText = (c) => `wind ${c.wind.mph} mph, gusts to ${c.wind.gust_mph} mph (${c.wind.at})`;
 
 /** The ⟲ / rain / wind icons for a whole day (any sit), for the day chips. Nothing when the day is clear. */
 export function HuntIcons({ hunt, size = 12 }) {
@@ -44,11 +44,20 @@ export function sitAt(day, hour) {
   return null;
 }
 
-/** One sit's conditions in a few words, for the map's time panel: "⟲ Swirling · gusts 32 mph". */
-export function sitSummary(c) {
+/** One sit's conditions as short coloured parts for the map's time panel chips:
+ *  [{kind: "swirl" | "wind" | "rain", text}]. */
+export function sitParts(c) {
+  if (!c) return [];
+  return [swirls(c) && { kind: "swirl", text: "⟲ Swirling" },
+          c.wind && { kind: "wind", text: `💨 Gusts ${c.wind.gust_mph} mph` },
+          c.rain && { kind: "rain", text: `🌧 ${c.rain.in_per_h} in/h rain` }].filter(Boolean);
+}
+
+/** The same sit in full sentences, for a chip's tooltip. */
+export function sitDetail(c) {
   if (!c) return "";
-  return [swirls(c) && "⟲ Swirling", c.wind && `gusts ${c.wind.gust_mph} mph`, c.rain && `rain ${c.rain.in_per_h} in/h`]
-    .filter(Boolean).join(" · ");
+  return [swirls(c) && `Swirling winds: ${swirlText(c)}`, c.wind && `High ${windText(c)}`, c.rain && `Rain ${rainText(c)}`]
+    .filter(Boolean).join(". ");
 }
 
 /** The selected day's conditions, one line per flagged sit (Outlook day detail). Nothing when clear. */
