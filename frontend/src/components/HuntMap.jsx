@@ -237,11 +237,51 @@ function leeZoneImage(z) {
 // Plain-English lee-eddy explanation for the stand popup: what to expect, then the numbers behind it.
 function eddyNoteHtml(eddy, leeLayerOn) {
   if (!eddy) return "";
-  return `<div style="font-size:12px; line-height:1.4; margin:4px 0 8px; padding:6px 8px; max-width:260px;
-      border-left:3px solid ${COLORS.eddy}; background:rgba(14,124,138,.08); border-radius:4px;">
+  return `<div class="stand-pop-eddy" style="border-left-color:${COLORS.eddy}">
+    <div class="stand-pop-eddy-hd">⟲ Lee eddy</div>
     <div>${escHtml(eddy.text)}</div>
-    <div style="color:#666; margin-top:4px;">${escHtml(eddy.why)}</div>
-    ${leeLayerOn ? "" : `<div style="color:#666; margin-top:4px; font-style:italic;">Turn on the Lee eddies map layer to see the sheltered area.</div>`}
+    <div class="stand-pop-muted">${escHtml(eddy.why)}</div>
+    ${leeLayerOn ? "" : `<div class="stand-pop-muted stand-pop-hint">Turn on the Lee eddies map layer to see the sheltered area.</div>`}
+  </div>`;
+}
+
+// Stand popup: name, the hour's conditions as labelled rows (each with a swatch matching its map arrow), the
+// lee-eddy callout, per-stand arrow toggles as chips, then the stand's links and edit/delete, and where it is.
+// `rows`: [{ label, value, swatch: { color, dashed } }] (plain text, escaped here); `can`: standActions.can().
+const STAND_LAYER_CHIPS = [
+  { key: "wind", label: "Wind", color: COLORS.wind },
+  { key: "thermal", label: "Thermal", color: COLORS.thermal },
+  { key: "scent", label: "Scent", color: "#2D8A2D" },
+  { key: "deer", label: "Deer", color: COLORS.deer },
+];
+function standPopupHtml({ title, color, rows, note, sl, position, can }) {
+  const rowHtml = (rows || []).map((r) => `<div class="stand-pop-row">
+      <span class="stand-pop-swatch${r.swatch?.dashed ? " dashed" : ""}" style="border-color:${r.swatch?.color || "#999"}"></span>
+      <span class="stand-pop-k">${escHtml(r.label)}</span>
+      <span class="stand-pop-v">${escHtml(r.value)}</span>
+    </div>`).join("");
+  const chips = STAND_LAYER_CHIPS.map((c) => `<label class="stand-pop-chip" style="--chip:${c.color}">
+      <input type="checkbox" data-layer="${c.key}" ${sl[c.key] ? "checked" : ""}><span>${c.label}</span></label>`).join("");
+  const pos = position && position.lat != null && position.lon != null
+    ? `<div class="stand-pop-pos">${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>` : "";
+  return `<div class="feat-popup stand-pop">
+    <div class="stand-pop-hd"><span class="stand-pop-dot" style="background:${color}"></span>
+      <span class="feat-popup-title">${escHtml(title || "(unnamed)")}</span></div>
+    ${rowHtml ? `<div class="stand-pop-rows">${rowHtml}</div>` : `<div class="stand-pop-muted">No forecast for this time.</div>`}
+    ${note || ""}
+    <div class="stand-pop-sec">Show on map</div>
+    <div class="stand-pop-chips">${chips}</div>
+    <div class="stand-pop-actions">
+      <div class="stand-pop-links">
+        ${can.score ? `<button type="button" data-act="score" class="stand-pop-btn primary">📊 Score</button>` : ""}
+        ${can.photos ? `<button type="button" data-act="photos" class="stand-pop-btn primary">📷 Photos</button>` : ""}
+      </div>
+      <div class="stand-pop-tools">
+        <button type="button" data-act="edit" class="stand-pop-btn" title="Edit stand">✎ Edit</button>
+        <button type="button" data-act="del" class="stand-pop-btn del" title="Delete stand" aria-label="Delete stand">🗑</button>
+      </div>
+    </div>
+    ${pos}
   </div>`;
 }
 
@@ -402,7 +442,7 @@ function scoutExtrasHtml(color, comments) {
 // built by this file and goes in as-is.
 function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
                                     dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment,
-                                    standActions }) {
+                                    standActions, rows, pinColor }) {
   const posHtml = position && position.lat != null && position.lon != null
     ? `<div class="feat-popup-pos"><span>${escHtml(position.label || "Location")}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
     : "";
@@ -415,14 +455,8 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
 
   if (kind === "stand") {
     const s = sl || { wind: true, thermal: true, scent: true, deer: true };
-    html += `
-      <div class="feat-popup-toggles" style="display:flex; flex-direction:column; gap:6px; margin: 10px 0; border-top: 1px solid var(--bord); border-bottom: 1px solid var(--bord); padding: 8px 0;">
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="wind" ${s.wind ? 'checked' : ''}> Wind</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="thermal" ${s.thermal ? 'checked' : ''}> Thermal</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="scent" ${s.scent ? 'checked' : ''}> Scent</label>
-        <label style="font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" data-layer="deer" ${s.deer ? 'checked' : ''}> Deer</label>
-      </div>
-    `;
+    html = standPopupHtml({ title, color: pinColor, rows, note, sl: s, position,
+                            can: standActions ? standActions.can(id) : {} });
   }
 
   if (kind === "suggestion") {
@@ -432,11 +466,8 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
         <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
       </div>
     </div>`;
-  } else {
-    const can = kind === "stand" && standActions ? standActions.can(id) : {};
+  } else if (kind !== "stand") {
     html += `<div class="feat-popup-actions">
-        ${can.score ? `<button data-act="score" class="feat-popup-btn">📊 Score</button>` : ""}
-        ${can.photos ? `<button data-act="photos" class="feat-popup-btn">📷 Photos</button>` : ""}
         <button data-act="edit" class="feat-popup-btn">✎ Edit</button>
         <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
       </div>
@@ -448,6 +479,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
   
   layer.bindPopup(html, kind === "suggestion"
     ? { closeButton: true, minWidth: 230, maxWidth: 300 }
+    : kind === "stand" ? { closeButton: true, minWidth: 230, maxWidth: 280, className: "stand-popup" }
     : { closeButton: true, minWidth: 150 });
 
   // Helper function to attach listeners so we can call it dynamically
@@ -1398,13 +1430,18 @@ const HuntMap = forwardRef(function HuntMap({
       const icon = standIcon(vectors, rank, isSelected("stand", s.id), s);
 
       const eddy = v.lee_eddy;
-      const windTxt = v.wind_to_deg == null ? ""
-        : eddy?.level === "likely"
-          ? `Ridge wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph · Near ground ⟲ ${degToCompass(eddy.near_ground_to_deg)}`
-          : `Wind → ${degToCompass(v.wind_to_deg)} ${v.wind_speed}mph`;
+      const rows = [];
+      if (v.wind_to_deg != null) {
+        const likely = eddy?.level === "likely";
+        rows.push({ label: likely ? "Ridge wind" : "Wind", value: `→ ${degToCompass(v.wind_to_deg)} · ${v.wind_speed} mph`,
+                    swatch: { color: COLORS.wind } });
+        if (likely) rows.push({ label: "Near ground", value: `⟲ ${degToCompass(eddy.near_ground_to_deg)}`, swatch: { color: COLORS.eddy } });
+      }
+      if (v.thermal_to_deg != null) {
+        const phase = v.thermal_phase ? v.thermal_phase[0].toUpperCase() + v.thermal_phase.slice(1) : "";
+        rows.push({ label: "Thermal", value: `${phase} → ${degToCompass(v.thermal_to_deg)}`, swatch: { color: COLORS.thermal, dashed: true } });
+      }
       const note = eddyNoteHtml(eddy, layers.leeEddies);
-      const thermTxt = v.thermal_to_deg != null ? `Thermal ${v.thermal_phase} → ${degToCompass(v.thermal_to_deg)}` : "";
-      const subtitle = [windTxt, thermTxt].filter(Boolean).join(" · ");
 
       if (standsMarkers.current[s.id]) {
         const m = standsMarkers.current[s.id];
@@ -1414,7 +1451,8 @@ const HuntMap = forwardRef(function HuntMap({
           m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection instead
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions
+            title: s.name, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions,
+            rows, pinColor: standColor(s)
           });
         }
       } else {
@@ -1430,7 +1468,8 @@ const HuntMap = forwardRef(function HuntMap({
           // no popup while selecting
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions
+            title: s.name, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions,
+            rows, pinColor: standColor(s)
           });
         }
         m.addTo(g);

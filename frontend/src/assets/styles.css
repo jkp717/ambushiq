@@ -864,6 +864,42 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .feat-popup-btn    { font-size: 12px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--bord2); background: var(--bg); color: var(--txt); cursor: pointer; }
 .feat-popup-btn:hover { background: var(--surf); }
 .feat-popup-del    { color: var(--red); border-color: rgba(163,45,45,.4); }
+/* stand popup (HuntMap standPopupHtml). Leaflet popups are always white, so these colors are fixed
+   rather than theme tokens, which would turn light-on-white in dark mode. */
+.stand-popup .leaflet-popup-content { margin: 12px 14px; }
+.stand-pop { color: #1d1d1b; font-size: 12px; }
+.stand-pop-hd { display: flex; align-items: center; gap: 8px; padding-right: 14px; margin-bottom: 8px; }
+.stand-pop-hd .feat-popup-title { margin: 0; font-size: 14px; }
+.stand-pop-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px rgba(0,0,0,.08); }
+.stand-pop-rows { display: grid; gap: 4px; padding: 8px 10px; border-radius: 8px; background: #f4f3ee; }
+.stand-pop-row { display: grid; grid-template-columns: 14px auto 1fr; align-items: center; gap: 6px; }
+.stand-pop-swatch { width: 14px; height: 0; border-top: 2.5px solid; }
+.stand-pop-swatch.dashed { border-top-style: dashed; }
+.stand-pop-k { color: #5f5e5a; }
+.stand-pop-v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stand-pop-muted { color: #5f5e5a; margin-top: 4px; }
+.stand-pop-hint { font-style: italic; }
+.stand-pop-eddy { margin-top: 8px; padding: 7px 9px; line-height: 1.4; border-left: 3px solid; border-radius: 4px; background: rgba(14,124,138,.08); }
+.stand-pop-eddy-hd { font-weight: 600; color: #0E7C8A; margin-bottom: 2px; }
+.stand-pop-sec { margin: 10px 0 5px; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #8a8984; }
+.stand-pop-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.stand-pop-chip { position: relative; display: inline-flex; cursor: pointer; }
+.stand-pop-chip input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.stand-pop-chip span {
+  padding: 3px 9px; border-radius: 12px; font-size: 11.5px;
+  border: 1px solid rgba(0,0,0,.2); color: #8a8984; background: #fff;
+}
+.stand-pop-chip input:checked + span { border-color: var(--chip); color: var(--chip); background: color-mix(in srgb, var(--chip) 10%, #fff); font-weight: 600; }
+.stand-pop-chip input:focus-visible + span { outline: 2px solid var(--chip); outline-offset: 1px; }
+.stand-pop-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap;
+                     margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,.1); }
+.stand-pop-links, .stand-pop-tools { display: flex; gap: 5px; }
+.stand-pop-btn { font-size: 12px; padding: 5px 9px; border-radius: 6px; border: 1px solid rgba(0,0,0,.2); background: #fff; color: #1d1d1b; cursor: pointer; }
+.stand-pop-btn:hover { background: #f4f3ee; }
+.stand-pop-btn.primary { background: #0C447C; border-color: #0C447C; color: #fff; }
+.stand-pop-btn.primary:hover { background: #0a3a6a; }
+.stand-pop-btn.del { color: #A32D2D; border-color: rgba(163,45,45,.35); }
+.stand-pop-pos { margin-top: 8px; font-size: 10.5px; color: #8a8984; font-variant-numeric: tabular-nums; user-select: all; }
 /* scouting spot popup: color swatches + notes (the notes list scrolls when it gets long) */
 .scout-colors { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
 .scout-swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35); cursor: pointer; }
