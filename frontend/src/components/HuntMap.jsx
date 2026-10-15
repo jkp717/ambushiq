@@ -209,6 +209,17 @@ function featurePoints(stands, zones, corridors) {
   return pts;
 }
 
+// The map's opening view: one zoom level closer than an exact fit of the property's features, so the stands
+// fill more of the screen (outlying zones or corridors can sit just past the edge). A region with nothing on
+// it yet opens on its location at DEFAULT_ZOOM.
+const FIT_MAX_ZOOM = 16, DEFAULT_ZOOM = 14;
+function fitProperty(map, pts) {
+  const b = L.latLngBounds(pts);
+  // 100 px = the 50 px margin on each side the plain fit used
+  const z = Math.min(FIT_MAX_ZOOM, map.getBoundsZoom(b, false, L.point(100, 100)) + 1);
+  map.setView(b.getCenter(), z);
+}
+
 // The lee-eddy layer's image for one zone, drawn once and reused: slots from the saved forecast share one
 // zone object per wind direction, so scrubbing the time slider doesn't redraw and re-encode it every step.
 const leeImages = new WeakMap();
@@ -639,10 +650,10 @@ const HuntMap = forwardRef(function HuntMap({
       // screenful of tiles at a default zoom and throwing them away 0.3 s later when the fit kicks in.
       const pts = featurePoints(stands, zones, corridors);
       if (pts.length) {
-        map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+        fitProperty(map, pts);
         fitted.current = true;
       } else {
-        map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], 13);
+        map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], DEFAULT_ZOOM);
       }
     }
     tryInit();
@@ -803,7 +814,7 @@ const HuntMap = forwardRef(function HuntMap({
     seenRegion.current = regionId;
     fitted.current = false;
     const map = mapRef.current;
-    if (map && center && center.lat != null) map.setView([center.lat, center.lon], 13);
+    if (map && center && center.lat != null) map.setView([center.lat, center.lon], DEFAULT_ZOOM);
   }, [regionId]);
 
   useEffect(() => {
@@ -813,7 +824,7 @@ const HuntMap = forwardRef(function HuntMap({
     if (!pts.length) return undefined;
     const t = setTimeout(() => {
       if (fitted.current) return;
-      map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+      fitProperty(map, pts);
       fitted.current = true;
     }, 300);
     return () => clearTimeout(t);
@@ -824,7 +835,7 @@ const HuntMap = forwardRef(function HuntMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || fitted.current || !center || center.lat == null) return;
-    if (!(stands.length || zones.length || corridors.length)) map.setView([center.lat, center.lon], 13);
+    if (!(stands.length || zones.length || corridors.length)) map.setView([center.lat, center.lon], DEFAULT_ZOOM);
   }, [ready, center?.lat, center?.lon]);
 
   // render zones
