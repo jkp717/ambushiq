@@ -30,7 +30,7 @@ function fetchDayRanked(day, p) {
 }
 const ALL_ON = { corridor: true, food: true, bedding: true };
 
-function TodayPage({ stands, onGoDraw, standNav, scoreRequest, clearScoreRequest }) {
+function TodayPage({ stands, standsReady = true, onGoDraw, standNav, scoreRequest, clearScoreRequest }) {
   const [days, setDays] = useState([]);
   const [deerRatings, setDeerRatings] = useState(null);
   // "Yesterday" (from actual observed weather) -- only used for the delta on
@@ -113,6 +113,16 @@ function TodayPage({ stands, onGoDraw, standNav, scoreRequest, clearScoreRequest
       .catch(() => { if (!cancel) setDayRanked(null); });
     return () => { cancel = true; };
   }, [curDay?.day, useProx.corridor, useProx.food, useProx.bedding]);
+
+  // The stand list is still on its way: say so, rather than flashing "No stands yet" at a region that has them.
+  if (!stands.length && !standsReady) {
+    return (
+      <div className="today-empty">
+        <RefreshCw className="spin" size={28} color="var(--sub)" />
+        <p>Loading your outlook…</p>
+      </div>
+    );
+  }
 
   if (!stands.length) {
     return (

@@ -280,7 +280,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
       {/* page content */}
       <main className="main-content">
         {view === "today" && (
-          <TodayPage stands={stands} zones={zones} corridors={corridors}
+          <TodayPage stands={stands} standsReady={standsReady} zones={zones} corridors={corridors}
             onGoDraw={goDraw} openStandEditor={openStandEditor} standNav={standNav}
             scoreRequest={scoreRequest} clearScoreRequest={() => setScoreRequest(null)} />
         )}
