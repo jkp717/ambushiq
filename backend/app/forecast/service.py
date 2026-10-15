@@ -848,31 +848,6 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     return _hist_finish(key, result)  # type: ignore[return-value]
 
 
-def build_sits(forecast: dict) -> list[dict]:
-    times = forecast["hourly"]["time"]
-    sun = forecast["daily"]
-    sits = []
-    for day_i in range(len(sun["sunrise"])):
-        sr = datetime.fromisoformat(sun["sunrise"][day_i])
-        ss = datetime.fromisoformat(sun["sunset"][day_i])
-        sr_h = sr.hour + sr.minute / 60
-        ss_h = ss.hour + ss.minute / 60
-        day_str = sun["sunrise"][day_i][:10]
-        label = format_day_label(datetime.fromisoformat(day_str + "T12:00"))
-        for tag, frm, to in (("morning", sr_h - 1, sr_h + 3), ("evening", ss_h - 3, ss_h + 0.5)):
-            idxs = []
-            lo, hi = math.floor(frm), math.ceil(to)
-            for i, tstr in enumerate(times):
-                if tstr[:10] != day_str:
-                    continue
-                h = datetime.fromisoformat(tstr).hour
-                if lo <= h <= hi:
-                    idxs.append(i)
-            if idxs:
-                sits.append({"label": f"{label} — {tag}", "idxs": idxs, "sunrise_h": sr_h, "sunset_h": ss_h})
-    return sits
-
-
 # ---------- unified stand scoring context ----------
 SUN_MARGIN = timedelta(minutes=30)
 

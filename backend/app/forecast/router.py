@@ -1,8 +1,7 @@
 """Route handlers for forecast, wind/thermal ranking, and the map/day views.
 
 Every ranking endpoint scores stands through one ScoringContext (forecast.service), so
-the same stand at the same hour gets the same score on the map, in sit rankings and in
-the day view."""
+the same stand at the same hour gets the same score on the map and in the day view."""
 from __future__ import annotations
 
 import asyncio
@@ -18,12 +17,11 @@ from app.core.database import engine
 from app.dependencies import get_active_region_id, require_token
 from app.forecast import scoring
 from app.forecast.providers import weather_provider_meta
-from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
+from app.forecast.schemas import DayRankIn, HourRankIn
 from app.forecast.service import (
     _temp_swing_rolling,
     day_weather,
     build_scoring_context,
-    build_sits,
     format_day_label,
     format_hour_label,
     get_forecast,
@@ -174,67 +172,6 @@ def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int
 def weather_providers(_=Depends(require_token)):
     """Provider metadata for the settings weather-source dropdown."""
     return {"providers": weather_provider_meta()}
-
-
-@router.get("/api/forecast")
-async def forecast_endpoint(region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
-    region = get_region_dict(region_id)
-    lat, lon = _forecast_location(region_id)
-    try:
-        fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
-    except Exception as e:
-        raise HTTPException(502, f"forecast unreachable: {e}")
-    return {"sits": build_sits(fc)}
-
-
-@router.post("/api/rank/sit")
-async def rank_sit(body: SitRankIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
-    """Rank stands for one sit: each stand's score is the AVERAGE of its hourly scores
-    over the sit window (day_ranked, by contrast, reports each period's best hour)."""
-    region = get_region_dict(region_id)
-    stands = _active_stands(region_id)
-    lat, lon = _forecast_location(region_id)
-    fc = await get_forecast(lat, lon, tz_name=region["property_timezone"])
-    h = fc["hourly"]
-    temp_swing = _temp_swing_rolling(h)
-    mid = (body.sunrise_h + body.sunset_h) / 2
-    windows = scoring.period_windows(body.sunrise_h, body.sunset_h)
-    ctx = build_scoring_context(region_id, region, get_settings(), int(fc.get("utc_offset_seconds", 0)),
-                                camera_scoring_on=detection_mod.species_available())
-    results = []
-    for st in stands:
-        agg, n, sample = 0.0, 0, None
-        for i in body.sit_idxs:
-            hour = _hour_at(h, i, body.sunrise_h, body.sunset_h, temp_swing)
-            det = ctx.score(st, hour, scoring.period_for_hour(hour["time_h"], windows), windows)
-            agg += det["final_score"]
-            n += 1
-            dist = abs(hour["time_h"] - mid)
-            if sample is None or dist < sample["dist"]:
-                sample = {"hour": hour, "score": _score_view(det), "dist": dist}
-        results.append({"stand": st, "avg": round(agg / max(1, n), 3), "sample": sample})
-    results.sort(key=lambda x: x["avg"], reverse=True)
-    return {"ranked": results}
-
-
-@router.post("/api/rank/manual")
-def rank_manual(body: ManualRankIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
-    region = get_region_dict(region_id)
-    stands = _active_stands(region_id)
-    wind_from = scoring.compass_to_deg(body.wind_dir)
-    time_h = {"morning": 7, "midday": 13, "evening": 18}.get(body.period, 13)
-    solar = 500 if body.period == "midday" else 50
-    ctx = build_scoring_context(region_id, region, get_settings(), 0,
-                                camera_scoring_on=detection_mod.species_available())
-    results = []
-    for st in stands:
-        hour = {"wind_dir": wind_from, "wind_speed": body.wind_speed, "gust": body.gust,
-                "solar": solar, "time_h": time_h, "sunrise_h": 6.5, "sunset_h": 19,
-                "date": _date.today().isoformat()}
-        det = ctx.score(st, hour, body.period, scoring.DEFAULT_PERIOD_WINDOWS)
-        results.append({"stand": st, "avg": det["final_score"], "sample": {"hour": hour, "score": _score_view(det)}})
-    results.sort(key=lambda x: x["avg"], reverse=True)
-    return {"ranked": results}
 
 
 @router.get("/api/hours")

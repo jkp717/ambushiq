@@ -11,7 +11,7 @@ from app.core.database import Base, engine
 from app.deer_ratings import router as deer_router
 from app.forecast import router as fc_router
 from app.forecast import eddy as eddy_mod, scoring
-from app.forecast.schemas import DayRankIn, HourRankIn, ManualRankIn, SitRankIn
+from app.forecast.schemas import DayRankIn, HourRankIn
 from app.regions import terrain as region_terrain
 from app.regions.models import Region
 from app.stands import terrain as terrain_mod
@@ -123,15 +123,6 @@ def test_toggles_zero_out_proximity_types(seeded):
     off = run(fc_router.day_ranked(DayRankIn(day=DAYS[0], use_food=False, use_corridor=False), region_id=1, _=None))
     ridge = lambda d: next(r for r in d["ranked"] if r["stand"]["name"] == "Ridge")["proximity"]
     assert ridge(off)["food"] == 0 and ridge(off)["corridor"] == 0 and ridge(on)["food"] > 0
-
-
-def test_sit_and_manual_rankings_run_through_the_same_pipeline(seeded):
-    sit = run(fc_router.rank_sit(SitRankIn(sit_idxs=[6, 7, 8, 9], sunrise_h=6.75, sunset_h=17.08), region_id=1, _=None))
-    assert len(sit["ranked"]) == 2 and sit["ranked"][0]["avg"] >= sit["ranked"][1]["avg"]
-    assert "breakdown" in sit["ranked"][0]["sample"]["score"]
-    manual = fc_router.rank_manual(ManualRankIn(wind_dir="SW", wind_speed=5, gust=8, period="morning"),
-                                   region_id=1, _=None)
-    assert len(manual["ranked"]) == 2 and manual["ranked"][0]["avg"] > 0
 
 
 def test_deer_ratings_endpoint_uses_sea_level_pressure_and_full_scale(seeded):

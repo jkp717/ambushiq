@@ -6,19 +6,6 @@ from typing import Literal
 from pydantic import BaseModel
 
 
-class SitRankIn(BaseModel):
-    sit_idxs: list[int]
-    sunrise_h: float
-    sunset_h: float
-
-
-class ManualRankIn(BaseModel):
-    wind_dir: str
-    wind_speed: float
-    gust: float
-    period: str  # morning|midday|evening
-
-
 class HourRankIn(BaseModel):
     time_index: int  # index into the forecast hourly arrays
     minute: Literal[0, 15, 30, 45] = 0  # 15-minute slot within the hour (inputs eased toward the next hour)
