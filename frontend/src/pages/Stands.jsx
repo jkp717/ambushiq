@@ -3,8 +3,9 @@ import { degToCompass } from "../utils/compass.js";
 import { fmtFt, fmtYd } from "../utils/units.js";
 import Empty from "../components/ui/Empty.jsx";
 import MiniMap from "../components/MiniMap.jsx";
+import StandLinks from "../components/StandLinks.jsx";
 
-function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
+function StandsPage({ stands, standNav, onAdd, onEdit, onToggle, onDelete }) {
   return (
     <div className="list-page">
       <div className="list-header">
@@ -30,6 +31,7 @@ function StandsPage({ stands, onAdd, onEdit, onToggle, onDelete }) {
                 {s.deer_approach_deg != null && <> · deer from {degToCompass(s.deer_approach_deg)}</>}
                 {s.visibility_m ? <> · visibility {fmtYd(s.visibility_m)}</> : null}
               </div>
+              <StandLinks standId={s.id} standNav={standNav} />
             </div>
             <div className="list-card-actions">
               {s.terrain && <Mountain size={13} color="var(--green)" title={"terrain: " + s.terrain.source} />}

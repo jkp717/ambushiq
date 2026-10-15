@@ -30,7 +30,7 @@ function fetchDayRanked(day, p) {
 }
 const ALL_ON = { corridor: true, food: true, bedding: true };
 
-function TodayPage({ stands, onGoDraw }) {
+function TodayPage({ stands, onGoDraw, standNav, scoreRequest, clearScoreRequest }) {
   const [days, setDays] = useState([]);
   const [deerRatings, setDeerRatings] = useState(null);
   // "Yesterday" (from actual observed weather) -- only used for the delta on
@@ -45,6 +45,16 @@ function TodayPage({ stands, onGoDraw }) {
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
   const [deviceAt, setDeviceAt] = useState(null);  // when the on-phone copy being shown was saved (ms), while offline
   const foregroundTick = useForegroundRefresh();
+  // Arrived from a stand's "Score" link elsewhere: open on that day and point out that stand's card
+  // (until another day is picked; the card scrolls into view once its ranking has loaded).
+  const wantDay = useRef(scoreRequest?.day ?? null);
+  const [highlightStand, setHighlightStand] = useState(null);
+  useEffect(() => {
+    if (!scoreRequest) return;
+    wantDay.current = scoreRequest.day ?? null;
+    setHighlightStand(scoreRequest.standId);
+    clearScoreRequest();
+  }, [scoreRequest, clearScoreRequest]);
 
   // Each open (and return to the foreground) refreshes the ratings, hours and every day's ranking, and
   // keeps them on the phone; with no connection the saved copies are shown instead.
@@ -62,7 +72,9 @@ function TodayPage({ stands, onGoDraw }) {
       setUtcOffset(ofs);
       const today = localDate(ofs);
       const hit = j.ratings.find((r) => r.day === today);
-      setSelectedDay(hit ? today : j.ratings[0]?.day ?? null);
+      const want = wantDay.current;
+      wantDay.current = null;
+      setSelectedDay(want && j.ratings.some((r) => r.day === want) ? want : hit ? today : j.ratings[0]?.day ?? null);
     }).catch(() => setErr("Couldn't load deer ratings."));
   }, [stands.length, foregroundTick]);
 
@@ -139,14 +151,15 @@ function TodayPage({ stands, onGoDraw }) {
         <section>
           <div className="section-label">14-Day Outlook</div>
           <OutlookStrip ratings={deerRatings} selectedDay={selectedDay}
-            loadableDays={loadableDays} onPick={setSelectedDay} utcOffset={utcOffset} />
+            loadableDays={loadableDays} onPick={(d) => { setHighlightStand(null); setSelectedDay(d); }} utcOffset={utcOffset} />
         </section>
       )}
 
       {/* Expanded day detail */}
       {selectedRating && curDay && (
         <DayDetailPanel rating={selectedRating} prevRating={prevRating} day={curDay}
-          dayRanked={dayRanked} useProx={useProx} setUseProx={setUseProx} />
+          dayRanked={dayRanked} useProx={useProx} setUseProx={setUseProx}
+          standNav={standNav} highlightStand={highlightStand} />
       )}
 
       {selectedRating && !curDay && selectedRating.confidence === "low" && (
@@ -242,7 +255,7 @@ function OutlookStrip({ ratings, selectedDay, loadableDays, onPick, utcOffset = 
 }
 
 /* ── Expanded day detail ── */
-function DayDetailPanel({ rating, prevRating, day, dayRanked, useProx, setUseProx }) {
+function DayDetailPanel({ rating, prevRating, day, dayRanked, useProx, setUseProx, standNav, highlightStand }) {
   return (
     <div className="day-detail">
       <div className="day-detail-header">
@@ -277,7 +290,10 @@ function DayDetailPanel({ rating, prevRating, day, dayRanked, useProx, setUsePro
             <PeriodKey color={PERIOD_COLORS.midday}  label="Midday" />
             <PeriodKey color={PERIOD_COLORS.evening} label="Evening" />
           </div>
-          {dayRanked.ranked.map((row) => <DayRankCard key={row.stand.id} row={row} />)}
+          {dayRanked.ranked.map((row) => (
+            <DayRankCard key={row.stand.id} row={row} day={day.day} standNav={standNav}
+              highlight={row.stand.id === highlightStand} />
+          ))}
         </div>
       )}
     </div>

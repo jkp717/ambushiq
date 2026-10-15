@@ -6,10 +6,11 @@ import { BRAND_LABELS, BRAND_COLORS } from "../../utils/cameraBrands.js";
 import Modal from "../ui/Modal.jsx";
 import CameraDiscoverWizard from "../CameraDiscoverWizard.jsx";
 import CameraEditor from "../CameraEditor.jsx";
+import StandLinks from "../StandLinks.jsx";
 
 /* Camera management: connect accounts, sync, verify, edit, delete. The image icon opens the Gallery tab
    filtered to that camera (onViewPhotos). */
-function CameraSetupTab({ cameras, providers, stands, reload, onViewPhotos }) {
+function CameraSetupTab({ cameras, providers, stands, reload, onViewPhotos, standNav }) {
   const [adding, setAdding] = useState(false);
   const [editingCam, setEditingCam] = useState(null);
   const [syncing, setSyncing] = useState({});
@@ -120,6 +121,7 @@ function CameraSetupTab({ cameras, providers, stands, reload, onViewPhotos }) {
                     <AlertTriangle size={12} /> {cam.health.reason}
                   </div>
                 )}
+                {stand && <StandLinks standId={stand.id} standNav={standNav} exclude="photos" />}
               </div>
               <div className="list-card-actions" style={{ flexWrap: "wrap" }}>
                 {prov?.implemented && <>

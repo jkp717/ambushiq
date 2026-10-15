@@ -142,7 +142,7 @@ function conditionsByHour(all) {
 function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion, onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote,
                    drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
-                   openStandEditor, onEditFeature, onDeleteFeature }) {
+                   openStandEditor, onEditFeature, onDeleteFeature, standNav, focusRequest, clearFocusRequest }) {
   const [days, setDays] = useState([]);
   const daysRef = useRef(days);
   daysRef.current = days;
@@ -262,6 +262,26 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   }, [sliderDragging]);
 
   useEffect(() => { if (drawRequest) { setDrawMode(drawRequest); setDraftPoints([]); clearDrawRequest(); } }, [drawRequest, clearDrawRequest]);
+  // Arrived from a stand's "Map" link elsewhere: open on that day (when given) and centre on the stand.
+  const wantDay = useRef(focusRequest?.day ?? null);
+  const [focusStandId, setFocusStandId] = useState(null);
+  useEffect(() => {
+    if (!focusRequest) return;
+    setFocusStandId(focusRequest.standId);
+    if (focusRequest.day) {
+      const i = daysRef.current.findIndex((d) => d.day === focusRequest.day);
+      if (i >= 0) { setDayIdx(i); setHourPos(morningStartIdx(daysRef.current[i])); }
+      else wantDay.current = focusRequest.day;   // hours not loaded yet: applied when they arrive
+    }
+    clearFocusRequest();
+  }, [focusRequest, clearFocusRequest]);
+  // A stand's own links from its map popup: its daily score (on the day shown here) and its camera photos.
+  const standActions = useMemo(() => standNav && ({
+    can: (id) => standNav.can(id),
+    score: (id) => standNav.toScore(id, days[dayIdx]?.day),
+    photos: (id) => standNav.toPhotos(id),
+  }), [standNav, days, dayIdx]);
+
   useEffect(() => { if (relocateRequest) { setRelocating(relocateRequest); setDrawMode("relocate"); setDraftPoints([]); clearRelocateRequest(); } }, [relocateRequest, clearRelocateRequest]);
 
   // Forecast hours drive the time controls. They don't need a stand: the backend falls back to the region's
@@ -286,6 +306,10 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       setUtcOffset(ofs);
       if (positioned) return;   // the live copy doesn't move the slider the saved copy just placed
       positioned = true;
+      const want = wantDay.current;
+      const wi = want ? (j.days || []).findIndex((d) => d.day === want) : -1;
+      if (want) wantDay.current = null;
+      if (wi >= 0) { setDayIdx(wi); setHourPos(morningStartIdx(j.days[wi])); return; }
       const localNow = new Date(Date.now() + ofs * 1000);
       const todayStr  = localNow.toISOString().slice(0, 10);
       const localHour = localNow.getUTCHours();
@@ -913,6 +937,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             boxTool={boxTool} onBoxSelect={addSelected}
             userLocation={userLocation} maptilerKey={maptilerKey} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus}
             onRecSitesStatus={setRecSitesStatus} onRoadsStatus={setRoadsStatus}
+            standActions={standActions} focusStandId={focusStandId} onFocused={() => setFocusStandId(null)}
             regionId={activeRegion.id}
             height="100%" />
         </div>

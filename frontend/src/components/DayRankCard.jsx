@@ -1,15 +1,22 @@
 import { PERIOD_COLORS, PERIOD_LABEL } from "../utils/periods.js";
 import { degToCompass } from "../utils/compass.js";
 import ProximityPill from "./ProximityPill.jsx";
+import { useEffect, useRef } from "react";
 import CameraIndicator from "./CameraIndicator.jsx";
+import StandLinks from "./StandLinks.jsx";
 
-function DayRankCard({ row }) {
+// `highlight`: the user just jumped here from this stand elsewhere, so scroll to it and outline it briefly.
+function DayRankCard({ row, day, standNav, highlight = false }) {
   const { stand, periods, wins, proximity } = row;
   const winColor = wins.length ? PERIOD_COLORS[wins[0]] : undefined;
   const pct = (p) => periods[p] ? Math.round(periods[p].score.total * 100) : null;
   const proxTotal = proximity ? Math.round(proximity.total * 100) : 0;
+  const el = useRef(null);
+  useEffect(() => {
+    if (highlight && el.current) el.current.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlight]);
   return (
-    <div className="card" style={{ padding: "12px 14px", marginBottom: 8, border: winColor ? `2px solid ${winColor}` : undefined }}>
+    <div ref={el} className={"card" + (highlight ? " rank-highlight" : "")} style={{ padding: "12px 14px", marginBottom: 8, border: winColor ? `2px solid ${winColor}` : undefined }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontWeight: 600, fontSize: 15 }}>{stand.name}</span>
         {wins.map((p) => (
@@ -39,6 +46,7 @@ function DayRankCard({ row }) {
           );
         })}
       </div>
+      <StandLinks standId={stand.id} standNav={standNav} exclude="score" day={day} />
     </div>
   );
 }

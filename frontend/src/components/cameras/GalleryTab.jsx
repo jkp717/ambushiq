@@ -4,6 +4,7 @@ import { api, withToken } from "../../services/api.js";
 import { formatDateTime, dateGroupLabel } from "../../utils/formatters.js";
 import Banner from "../ui/Banner.jsx";
 import CameraFilterModal from "./CameraFilterModal.jsx";
+import StandLinks from "../StandLinks.jsx";
 import { activeFilterCount, filterParams } from "./filters.js";
 
 const PAGE = 48;
@@ -14,7 +15,7 @@ const SLIDE_MS = 250;
 const OUTLINES_KEY = "ambushiq.gallery.outlines";
 const circled = (n) => String.fromCharCode(0x2460 + n);   // ① ② ③ …
 
-function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup }) {
+function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup, standNav }) {
   const [items, setItems] = useState([]);
   const [next, setNext] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -363,6 +364,8 @@ function GalleryTab({ cameras, speciesOptions, filters, setFilters, onGoSetup })
               aria-label={showOutlines ? "Hide deer outlines" : "Show deer outlines"} title={showOutlines ? "Hide deer outlines" : "Show deer outlines"}
               onClick={(e) => { e.stopPropagation(); toggleOutlines(); }}><Scan size={20} /></button>
           )}
+          {/* the stand this photo was taken at: its spot on the map and its daily score */}
+          <StandLinks standId={items[viewIdx].stand_id} standNav={standNav} exclude="photos" className="lightbox-stand-links" />
           <button className="lightbox-close" onClick={() => setViewIdx(null)}><X size={20} /></button>
           {hasPrev && (
             <button className="lightbox-nav lightbox-prev" aria-label="Previous photo"

@@ -396,11 +396,13 @@ function scoutExtrasHtml(color, comments) {
 }
 
 // Build a popup with edit/delete buttons and wire them up after it opens.
+// `standActions` ({ can, score, photos }) adds a stand's one-click links to its daily score and camera photos.
 // `position` ({lat, lon, label}) adds a "Location / Center  lat, lon" line so every user-placed item shows where it is.
 // `title`, `subtitle` and `position.label` are plain text (names the user typed) and are escaped; `note` is HTML
 // built by this file and goes in as-is.
 function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
-                                    dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment }) {
+                                    dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment,
+                                    standActions }) {
   const posHtml = position && position.lat != null && position.lon != null
     ? `<div class="feat-popup-pos"><span>${escHtml(position.label || "Location")}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
     : "";
@@ -431,7 +433,10 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
       </div>
     </div>`;
   } else {
+    const can = kind === "stand" && standActions ? standActions.can(id) : {};
     html += `<div class="feat-popup-actions">
+        ${can.score ? `<button data-act="score" class="feat-popup-btn">📊 Score</button>` : ""}
+        ${can.photos ? `<button data-act="photos" class="feat-popup-btn">📷 Photos</button>` : ""}
         <button data-act="edit" class="feat-popup-btn">✎ Edit</button>
         <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
       </div>
@@ -454,6 +459,10 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
     if (editBtn) editBtn.onclick = () => { layer.closePopup(); onEdit && onEdit(kind, id); };
     if (delBtn) delBtn.onclick = () => { layer.closePopup(); onDelete && onDelete(kind, id); };
     if (dismissBtn) dismissBtn.onclick = () => { layer.closePopup(); onDismiss && onDismiss(id, dismissed); };
+    const scoreBtn = popupElement.querySelector('[data-act="score"]');
+    const photosBtn = popupElement.querySelector('[data-act="photos"]');
+    if (scoreBtn) scoreBtn.onclick = () => { layer.closePopup(); standActions.score(id); };
+    if (photosBtn) photosBtn.onclick = () => { layer.closePopup(); standActions.photos(id); };
 
     if (kind === "suggestion") {
       popupElement.querySelectorAll('[data-act="color"]').forEach((b) => {
@@ -502,7 +511,7 @@ const HuntMap = forwardRef(function HuntMap({
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
   userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
-  maptilerKey = "", height = 420,
+  maptilerKey = "", height = 420, standActions = null, focusStandId = null, onFocused,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
   // Multi-select: every selectable feature is identified by a "kind:id" key. In select mode
@@ -1405,7 +1414,7 @@ const HuntMap = forwardRef(function HuntMap({
           m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection instead
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions
           });
         }
       } else {
@@ -1421,7 +1430,7 @@ const HuntMap = forwardRef(function HuntMap({
           // no popup while selecting
         } else if (!drawMode) {
           bindFeaturePopup(m, {
-            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer
+            title: s.name, subtitle, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions
           });
         }
         m.addTo(g);
@@ -1429,7 +1438,21 @@ const HuntMap = forwardRef(function HuntMap({
       }
     });
   }, [stands, conditions, ready, standLayers, drawMode, onEditFeature, onDeleteFeature, onToggleStandLayer,
-      selectMode, selectedKeys, layers.leeEddies]);
+      selectMode, selectedKeys, layers.leeEddies, standActions]);
+
+  // Arrived from a stand's "Map" link elsewhere: centre on that stand and open its popup. Runs after the
+  // stand markers above exist; marks the map as fitted so the open-on-the-property fit doesn't undo it.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || focusStandId == null) return;
+    const s = stands.find((x) => x.id === focusStandId);
+    const m = standsMarkers.current[focusStandId];
+    if (!s || !m) return;   // stands not loaded yet: runs again when they are
+    fitted.current = true;
+    map.setView([s.lat, s.lon], Math.max(map.getZoom(), 16));
+    m.openPopup();
+    onFocused && onFocused();
+  }, [ready, focusStandId, stands]);
 
   // render draft (in-progress drawing)
   useEffect(() => {

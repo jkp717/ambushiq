@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Lock, Menu, Sun, Map as MapIcon, MapPin, Wheat, Camera, Settings as SettingsIcon, RefreshCw,
   MapPinned, ChevronDown, Plus, Pencil, Star, Trash2 } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext.jsx";
@@ -60,6 +60,12 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const [editingZone, setEditingZone] = useState(null);
   const [editingCorridor, setEditingCorridor] = useState(null);
   const [relocateRequest, setRelocateRequest] = useState(null);
+  const [cameras, setCameras] = useState([]);
+  // One-click jumps between features for a stand (see standNav below): each page applies its request
+  // when it opens and clears it, the same way drawRequest / relocateRequest work.
+  const [focusRequest, setFocusRequest] = useState(null);   // Map: { standId, day? }
+  const [scoreRequest, setScoreRequest] = useState(null);   // Outlook: { standId, day? }
+  const [photosRequest, setPhotosRequest] = useState(null); // Cameras: { cameraIds }
 
   // apiSaved: with no signal, the map still gets the stands and features saved on the phone last time.
   const loadStands    = useCallback(async () => {
@@ -69,7 +75,29 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const loadCorridors = useCallback(async () => { try { setCorridors(await apiSaved("/corridors")); } catch {} }, []);
   const loadSign      = useCallback(async () => { try { setSign(await apiSaved("/sign")); } catch {} }, []);
   const loadSuggestions = useCallback(async () => { try { setSuggestions(await apiSaved("/scouting")); } catch {} }, []);
-  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions]);
+  const loadCameras   = useCallback(async () => { try { setCameras(await apiSaved("/cameras")); } catch {} }, []);
+  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions(), loadCameras()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions, loadCameras]);
+
+  // Features stay connected: wherever a stand shows up, one click goes to it on the map, to its daily
+  // score in the Outlook, or to its camera photos (components/StandLinks.jsx renders the buttons).
+  const camerasByStand = useMemo(() => {
+    const m = {};
+    cameras.forEach((c) => { if (c.stand_id != null) (m[c.stand_id] ||= []).push(c.id); });
+    return m;
+  }, [cameras]);
+  const standNav = useMemo(() => ({
+    can: (standId) => {
+      const s = stands.find((x) => x.id === standId);
+      return { map: !!s, score: !!s && s.is_active !== false, photos: !!s && !!camerasByStand[standId]?.length };
+    },
+    toMap: (standId, day) => { setFocusRequest({ standId, day }); setView("map"); },
+    toScore: (standId, day) => { setScoreRequest({ standId, day }); setView("today"); },
+    toPhotos: (standId) => {
+      const cameraIds = camerasByStand[standId];
+      if (!cameraIds?.length) return;
+      setPhotosRequest({ cameraIds }); setView("cameras");
+    },
+  }), [stands, camerasByStand]);
 
   const toggleActiveStand = useCallback(async (stand) => {
     try {
@@ -87,7 +115,8 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   // since regionStore.set() already changed what header future api() calls carry.
   // The previous region's features are cleared first so they can't be drawn (or framed) under the new one.
   useEffect(() => {
-    setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]);
+    setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]); setCameras([]);
+    setFocusRequest(null); setScoreRequest(null); setPhotosRequest(null);
     setStandsReady(false);
     loadAll();
   }, [loadAll, activeRegion?.id]);
@@ -252,7 +281,8 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
       <main className="main-content">
         {view === "today" && (
           <TodayPage stands={stands} zones={zones} corridors={corridors}
-            onGoDraw={goDraw} openStandEditor={openStandEditor} />
+            onGoDraw={goDraw} openStandEditor={openStandEditor} standNav={standNav}
+            scoreRequest={scoreRequest} clearScoreRequest={() => setScoreRequest(null)} />
         )}
         {view === "map" && (
           <MapPage stands={stands} standsReady={standsReady} zones={zones} corridors={corridors} sign={sign} suggestions={suggestions}
@@ -263,10 +293,11 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             onDeleteSuggestionNote={deleteSuggestionNote}
             drawRequest={drawRequest} clearDrawRequest={() => setDrawRequest(null)}
             relocateRequest={relocateRequest} clearRelocateRequest={() => setRelocateRequest(null)}
-            openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature} />
+            openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature}
+            standNav={standNav} focusRequest={focusRequest} clearFocusRequest={() => setFocusRequest(null)} />
         )}
         {view === "stands" && (
-          <StandsPage stands={stands} onAdd={() => goDraw("stand")} onEdit={setEditingStand}
+          <StandsPage stands={stands} standNav={standNav} onAdd={() => goDraw("stand")} onEdit={setEditingStand}
             onToggle={toggleActiveStand}
             onDelete={async (id) => { await api(`/stands/${id}`, { method: "DELETE" }); loadStands(); }} />
         )}
@@ -277,7 +308,10 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             editingCorridor={editingCorridor} setEditingCorridor={setEditingCorridor}
             onMoveOnMap={requestRelocate} />
         )}
-        {view === "cameras" && <CamerasPage stands={stands} />}
+        {view === "cameras" && (
+          <CamerasPage stands={stands} standNav={standNav} onCamerasLoaded={setCameras}
+            photosRequest={photosRequest} clearPhotosRequest={() => setPhotosRequest(null)} />
+        )}
         {view === "settings" && <SettingsPage reloadStands={loadStands} />}
       </main>
 

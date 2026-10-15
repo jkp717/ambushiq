@@ -734,6 +734,21 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   display: flex; align-items: center; gap: 2px; flex-shrink: 0;
 }
 
+/* one-click links from a stand to its map spot / daily score / camera photos (StandLinks.jsx) */
+.stand-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.stand-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; padding: 4px 9px; border-radius: 6px;
+  border: 1px solid var(--bord2); background: var(--bg); color: var(--txt); cursor: pointer;
+}
+.stand-link:hover { background: var(--surf); }
+/* a stand card the user just jumped to: outlined, then fades back */
+.rank-highlight { animation: rank-highlight 3s ease-out; }
+@keyframes rank-highlight {
+  0%, 60% { box-shadow: 0 0 0 3px var(--amber); }
+  100%    { box-shadow: 0 0 0 3px transparent; }
+}
+
 /* sub-tabs (inside Zones page) */
 .sub-tabs {
   display: flex; gap: 2px; margin-bottom: 16px;
@@ -845,7 +860,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .feat-popup-sub    { font-size: 11.5px; color: #555; margin-bottom: 8px; }
 .feat-popup-pos    { font-size: 11.5px; color: #555; margin: -4px 0 8px; font-variant-numeric: tabular-nums; user-select: all; }
 .feat-popup-pos span { font-weight: 600; margin-right: 4px; }
-.feat-popup-actions { display: flex; gap: 6px; }
+.feat-popup-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .feat-popup-btn    { font-size: 12px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--bord2); background: var(--bg); color: var(--txt); cursor: pointer; }
 .feat-popup-btn:hover { background: var(--surf); }
 .feat-popup-del    { color: var(--red); border-color: rgba(163,45,45,.4); }
@@ -1280,6 +1295,10 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   transition: background .15s;
 }
 .lightbox-close:hover { background: rgba(255,255,255,.3); }
+/* the photo's stand: Map / Score links, top left (StandLinks.jsx) */
+.lightbox-stand-links { position: absolute; top: 14px; left: 14px; margin: 0; z-index: 3; }
+.lightbox-stand-links .stand-link { background: rgba(255,255,255,.15); border: none; color: #fff; padding: 7px 11px; border-radius: 18px; }
+.lightbox-stand-links .stand-link:hover { background: rgba(255,255,255,.3); }
 .lightbox-nav {
   position: fixed; top: 50%; transform: translateY(-50%);
   background: rgba(255,255,255,.15); border: none; border-radius: 50%;
@@ -1304,6 +1323,7 @@ input[type="range"]::-moz-range-track { background: var(--bord2); height: 4px; b
   .lightbox-slide { padding: 0; height: 100dvh; align-items: center; }
   .lightbox-img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; border-radius: 0; }
   .lightbox-close { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+  .lightbox-stand-links { top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); }
   .lightbox-fav { top: max(8px, env(safe-area-inset-top)); right: calc(max(8px, env(safe-area-inset-right)) + 44px); }
   .lightbox-outlines { top: max(8px, env(safe-area-inset-top)); right: calc(max(8px, env(safe-area-inset-right)) + 88px); }
   .lightbox-bucks { bottom: max(8px, env(safe-area-inset-bottom)); }
