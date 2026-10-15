@@ -379,10 +379,10 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .map-day-strip::-webkit-scrollbar { display: none; }
 /* the selected day's weather in words, one line (its height never changes) */
 .map-day-summary {
-  grid-area: summary; min-width: 0; display: flex; align-items: baseline; gap: 10px;
+  grid-area: summary; min-width: 0; display: flex; align-items: baseline; justify-content: center; gap: 10px;
   font-size: 12.5px; color: var(--sub); margin-top: -2px;
 }
-.map-day-summary-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-day-summary-text { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .map-day-summary-text b { color: var(--txt); font-weight: 600; }
 .map-day-summary-sun { flex-shrink: 0; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 /* The selected day's hunt-condition chips. Eases open/closed (height via the 0fr/1fr grid-row trick, plus
@@ -397,7 +397,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .map-day-alerts:not(.open) { pointer-events: none; }
 .map-day-alerts.open { grid-template-rows: 1fr; opacity: 1; }
 .map-day-alerts-inner { min-height: 0; overflow: hidden; }
-.map-day-alerts-row { display: flex; flex-wrap: wrap; gap: 6px; padding-top: var(--row-gap); }
+.map-day-alerts-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding-top: var(--row-gap); }
 .map-hunt-sit {
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%;
   padding: 4px 10px; border-radius: 8px; font-size: 12px; cursor: help;
