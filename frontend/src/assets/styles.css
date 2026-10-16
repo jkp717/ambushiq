@@ -327,10 +327,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
      past the screen edge on a narrow phone */
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "strip   strip   strip   strip"
-    "summary summary summary summary"
-    "alerts  alerts  alerts  alerts"
-    "back    track   fwd     play";
+    "strip strip strip strip"
+    "back  track fwd   play";
 }
 
 /* ── bottom time sheet: a tab that is always visible at the bottom-center plus a panel that
@@ -360,7 +358,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 }
 .bottom-sheet-header:active { cursor: grabbing; }
 .bottom-sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--bord2); flex-shrink: 0; }
-.bottom-sheet-title { display: inline-flex; align-items: center; gap: 6px; line-height: 20px; white-space: nowrap; max-width: 100%; }
+.bottom-sheet-title { display: block; width: 100%; line-height: 20px; }
 .bottom-sheet-safe-probe { position: absolute; width: 0; height: env(safe-area-inset-bottom, 0px); visibility: hidden; pointer-events: none; }
 /* a closed panel is off-screen: keep it out of the tab order, but visible while it is being dragged open */
 .bottom-sheet.is-closed .bottom-sheet-panel { visibility: hidden; transition: visibility 0s linear .22s; }
@@ -378,30 +376,36 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   scroll-snap-type: x proximity; touch-action: pan-x; scrollbar-width: none;
 }
 .map-day-strip::-webkit-scrollbar { display: none; }
-/* the selected day's weather in words, one line (its height never changes) */
-.map-day-summary {
-  grid-area: summary; min-width: 0; display: flex; align-items: baseline; justify-content: center; gap: 10px;
-  font-size: 12.5px; color: var(--sub); margin-top: -2px;
-}
-.map-day-summary-text { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.map-day-summary-text b { color: var(--txt); font-weight: 600; }
-.map-day-summary-sun { flex-shrink: 0; font-size: 11.5px; font-variant-numeric: tabular-nums; }
-/* The selected day's hunt-condition chips. Eases open/closed (height via the 0fr/1fr grid-row trick, plus
-   opacity) instead of popping in. Closed it takes no space at all: the negative margin cancels the grid's
-   row gap, and the chips' own spacing lives inside the part that collapses. It only changes with the day,
-   never while scrubbing, so the slider below doesn't move mid-drag. */
+/* The shelf header (Map.jsx): date + time, the day's weather in words beside it, and the day's hunt
+   chips. Desktop: one centred row. Phones: the weather wraps under the date/time when it doesn't fit, and
+   the chips sit centred on their own line below. */
+.sheet-hd { display: flex; flex-direction: column; align-items: center; }
+.sheet-hd-line { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 12px; max-width: 100%; }
+.sheet-hd-when { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.sheet-hd-wx { font-size: 12.5px; font-weight: 500; color: var(--sub); white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; max-width: 100%; }
+.sheet-hd-sun { margin-left: 10px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* Hunt chips: ease open/closed (height via the 0fr/1fr grid-row trick, plus opacity) instead of popping
+   in. They change only with the day, never while scrubbing, so nothing moves under a dragging finger. */
 .map-day-alerts {
-  grid-area: alerts; min-width: 0; margin-top: calc(-1 * var(--row-gap));
-  display: grid; grid-template-rows: 0fr; opacity: 0;
+  display: grid; grid-template-rows: 0fr; opacity: 0; max-width: 100%;
   transition: grid-template-rows .25s ease, opacity .2s ease;
 }
 .map-day-alerts:not(.open) { pointer-events: none; }
 .map-day-alerts.open { grid-template-rows: 1fr; opacity: 1; }
 .map-day-alerts-inner { min-height: 0; overflow: hidden; }
-.map-day-alerts-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding-top: var(--row-gap); }
+.map-day-alerts-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding-top: 6px;
+                      font-weight: 400; }
+/* desktop: everything on one row, the chips beside the weather (they fade and widen in instead) */
+@media (min-width: 700px) {
+  .sheet-hd { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+  .map-day-alerts { grid-template-rows: 1fr; max-width: 0; transition: max-width .3s ease, opacity .2s ease; }
+  .map-day-alerts.open { max-width: 100%; }
+  .map-day-alerts-row { padding-top: 0; flex-wrap: nowrap; }
+}
 .map-hunt-sit {
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%;
-  padding: 4px 10px; border-radius: 8px; font-size: 12px; cursor: help;
+  padding: 3px 10px; border-radius: 8px; font-size: 12px; line-height: 18px;
   background: var(--surf); border: 1.5px solid transparent; transition: border-color .15s ease;
 }
 .map-hunt-sit.active { border-color: var(--bord2); }
@@ -681,11 +685,9 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   .map-ctrl-panel {
     grid-template-columns: 1fr auto auto auto 1fr;
     grid-template-areas:
-      "strip   strip   strip   strip   strip"
-      "summary summary summary summary summary"
-      "alerts  alerts  alerts  alerts  alerts"
-      "track   track   track   track   track"
-      ".       back    play    fwd     .";
+      "strip strip strip strip strip"
+      "track track track track track"
+      ".     back  play  fwd   .";
     align-items: center;
     --row-gap: 4px;
   }

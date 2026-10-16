@@ -756,52 +756,56 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           header={(() => {
             const h = curHour?.hour ?? 0, ampm = h >= 12 ? "PM" : "AM";
             const time = curHour ? `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}` : "";
-            // the time sits in a fixed-width box so the header doesn't shift while scrubbing
-            return <>
-              <span>{curDay?.label || (!time && "Time")}{curDay?.label && time && " ·"}</span>
-              {time && <span className="map-time-fixed">{time}</span>}</>;
-          })()}>
-        <div className="map-ctrl-panel">
-          {/* Day strip: moving between days (the tab above spells out the chosen date and time) */}
-          <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
-            onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
-
-          {/* the selected day's weather in words (also on phones, where the day card's tooltip never shows) */}
-          {curDay && (
-            <div className="map-day-summary">
-              <span className="map-day-summary-text"><b>{curDay.label}</b>{curDay.wx?.text && <> · {curDay.wx.text}</>}</span>
-              {curDay.sunrise && curDay.sunset && (
-                <span className="map-day-summary-sun" title="Sunrise · sunset">↑ {clock12(curDay.sunrise)} · ↓ {clock12(curDay.sunset)}</span>
-              )}
-            </div>
-          )}
-
-          {/* The selected day's hunt conditions, one chip per flagged sit. Keyed by the DAY, not the time, so
-              scrubbing never makes this row appear or disappear and the slider below never moves mid-drag; the
-              sit the selected time is in is only outlined. The row eases open/closed (the last chips stay
-              rendered while it closes, so they fade out instead of blanking). */}
-          {(() => {
+            // The selected day's hunt conditions, one chip per flagged sit. Keyed by the DAY, not the time,
+            // so scrubbing never makes them appear or disappear (nothing above the slider moves mid-drag);
+            // the sit the selected time is in is only outlined. They ease in/out (the last chips stay
+            // rendered while closing, so they fade instead of blanking).
             const sits = ["morning", "evening"].filter((s) => curDay?.hunt?.[s]);
             if (sits.length) shownHunt.current = { day: curDay, sits };
             const shown = shownHunt.current;
             const activeSit = sitAt(curDay, curHour?.hour);
+            // The shelf's always-visible header: date + time, the day's weather in words beside it (wraps under
+            // it on a narrow phone), then the hunt chips beside that on desktop / centred below on phones.
             return (
-              <div className={"map-day-alerts" + (sits.length ? " open" : "")} aria-hidden={!sits.length}>
-                <div className="map-day-alerts-inner"><div className="map-day-alerts-row">
-                  {shown?.sits.map((s) => {
-                    const c = shown.day.hunt[s];
-                    return (
-                      <span key={s} title={sitDetail(c)}
-                        className={"map-hunt-sit" + (sits.length && shown.day === curDay && s === activeSit ? " active" : "")}>
-                        <span className="map-hunt-sit-name">{s === "morning" ? "☀ Morning" : "☾ Evening"}</span>
-                        {sitParts(c).map((p) => <span key={p.kind} className={`hunt-part ${p.kind}`}>{p.text}</span>)}
-                      </span>
-                    );
-                  })}
-                </div></div>
-              </div>
+              <span className="sheet-hd">
+                <span className="sheet-hd-line">
+                  {/* the time sits in a fixed-width box so the header doesn't shift while scrubbing */}
+                  <span className="sheet-hd-when">
+                    <span>{curDay?.label || (!time && "Time")}{curDay?.label && time && " ·"}</span>
+                    {time && <span className="map-time-fixed">{time}</span>}
+                  </span>
+                  {(curDay?.wx?.text || (curDay?.sunrise && curDay?.sunset)) && (
+                    <span className="sheet-hd-wx">
+                      {curDay.wx?.text}
+                      {curDay.sunrise && curDay.sunset && (
+                        <span className="sheet-hd-sun" title="Sunrise · sunset">↑ {clock12(curDay.sunrise)} · ↓ {clock12(curDay.sunset)}</span>
+                      )}
+                    </span>
+                  )}
+                </span>
+                {shown && (
+                  <span className={"map-day-alerts" + (sits.length ? " open" : "")} aria-hidden={!sits.length}>
+                    <span className="map-day-alerts-inner"><span className="map-day-alerts-row">
+                      {shown.sits.map((s) => {
+                        const c = shown.day.hunt[s];
+                        return (
+                          <span key={s} title={sitDetail(c)}
+                            className={"map-hunt-sit" + (sits.length && shown.day === curDay && s === activeSit ? " active" : "")}>
+                            <span className="map-hunt-sit-name">{s === "morning" ? "☀ Morning" : "☾ Evening"}</span>
+                            {sitParts(c).map((p) => <span key={p.kind} className={`hunt-part ${p.kind}`}>{p.text}</span>)}
+                          </span>
+                        );
+                      })}
+                    </span></span>
+                  </span>
+                )}
+              </span>
             );
-          })()}
+          })()}>
+        <div className="map-ctrl-panel">
+          {/* Day strip: moving between days (the shelf's header above spells out the chosen date, time and weather) */}
+          <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
+            onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
 
           {/* Media-control row: back/forward step buttons + play/pause flank the
               slider (15-min steps, period colours painted on the track) + hour/15-min
