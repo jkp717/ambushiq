@@ -318,8 +318,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
    (see the override below), without duplicating markup. */
 .map-ctrl-panel {
   flex-shrink: 0;
-  background: var(--bg); border-top: 1px solid var(--bord);
-  padding: 8px 12px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);   /* the shelf (.bottom-sheet) draws the top edge */
+  padding: 4px 12px calc(6px + env(safe-area-inset-bottom, 0px));
   display: grid; align-items: start;
   --row-gap: 8px;
   column-gap: 6px; row-gap: var(--row-gap);
@@ -338,29 +338,30 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
    and publishes --sheet-lift (visible panel height) on .map-page so the corner controls below can
    ride above it. The sheet itself is click-through; only the tab and panel take pointer events. ── */
 .bottom-sheet {
-  --tab-h: 44px;
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 600;
   display: flex; flex-direction: column; align-items: stretch;
-  pointer-events: none;
+  background: var(--bg); border-top: 1px solid var(--bord); border-radius: 16px 16px 0 0;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, .18);
   transition: transform .22s cubic-bezier(.2, .8, .2, 1);
 }
-/* Closed: slide down until only the tab shows, flush on the bottom edge of the screen in the browser
-   and the installed PWA alike (BottomSheet.jsx mirrors this distance). */
-.bottom-sheet.is-closed { transform: translateY(calc(100% - var(--tab-h))); }
-.bottom-sheet-tab {
-  pointer-events: auto; align-self: center; position: relative; margin-bottom: -1px; /* covers the panel's top border */
-  height: var(--tab-h); box-sizing: border-box;
-  padding: 0 16px;
-  display: inline-flex; align-items: center; gap: 8px;
-  background: var(--bg); color: var(--txt);
-  border: 1px solid var(--bord); border-bottom: none; border-radius: 14px 14px 0 0;
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, .18);
-  font: inherit; font-size: 14px; font-weight: 700; white-space: nowrap;
+/* Closed: slide down until only the header (handle + date/time) shows, held above the bottom safe area
+   (a phone's home indicator) in the browser and the installed PWA alike (BottomSheet.jsx mirrors this
+   distance; it writes --sheet-header-h). */
+.bottom-sheet.is-closed {
+  transform: translateY(calc(100% - var(--sheet-header-h, 40px) - env(safe-area-inset-bottom, 0px)));
+}
+/* the drag/tap zone: a short grab bar with the header line centred under it */
+.bottom-sheet-header {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  width: 100%; box-sizing: border-box; padding: 6px 16px 4px;
+  background: none; border: none; border-radius: 16px 16px 0 0; color: var(--txt);
+  font: inherit; font-size: 14px; font-weight: 700;
   cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
 }
-.bottom-sheet-tab:active { cursor: grabbing; }
-.bottom-sheet-tab svg { color: var(--sub); flex-shrink: 0; }
-.bottom-sheet-panel { pointer-events: auto; }
+.bottom-sheet-header:active { cursor: grabbing; }
+.bottom-sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--bord2); flex-shrink: 0; }
+.bottom-sheet-title { display: inline-flex; align-items: center; gap: 6px; line-height: 20px; white-space: nowrap; max-width: 100%; }
+.bottom-sheet-safe-probe { position: absolute; width: 0; height: env(safe-area-inset-bottom, 0px); visibility: hidden; pointer-events: none; }
 /* a closed panel is off-screen: keep it out of the tab order, but visible while it is being dragged open */
 .bottom-sheet.is-closed .bottom-sheet-panel { visibility: hidden; transition: visibility 0s linear .22s; }
 .bottom-sheet.is-closed.dragging .bottom-sheet-panel { visibility: visible; transition: none; }

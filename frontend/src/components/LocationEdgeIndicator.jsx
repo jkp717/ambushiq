@@ -3,8 +3,8 @@ import { Navigation2 } from "lucide-react";
 import { placeEdgeArrow } from "../utils/edgeIndicator.js";
 
 // Map controls the arrow must not sit on (looked up inside the map page each time, so panels that open
-// or close are respected). The bottom time-sheet tab is handled separately: a strip along the bottom edge
-// is reserved for it, so an arrow for a device due south sits above the tab instead of being pushed aside.
+// or close are respected). The bottom time shelf is handled separately: its visible height (--sheet-lift,
+// which includes its always-showing header) is taken off the bottom of the map.
 const OBSTACLES = [
   ".layer-overlay", ".map-weather-card", ".map-scout-progress", ".map-add-btn",
   ".leaflet-control-zoom", ".leaflet-control-layers",
@@ -47,7 +47,7 @@ function LocationEdgeIndicator({ getMap, location }) {
       const pt = map.latLngToContainerPoint([loc.lat, loc.lon]);
       const px = pt.x + (mapRect.left - bodyRect.left), py = pt.y + (mapRect.top - bodyRect.top);
 
-      // the bottom time sheet covers the lower part of the map while it is open
+      // the bottom time shelf covers the lower part of the map (at least its header, even when closed)
       let covered = 0;
       if (page) {
         const lift = parseFloat(getComputedStyle(page).getPropertyValue("--sheet-lift")) || 0;
@@ -58,9 +58,7 @@ function LocationEdgeIndicator({ getMap, location }) {
         return { left: r.left - bodyRect.left - 6, top: r.top - bodyRect.top - 6, right: r.right - bodyRect.left + 6, bottom: r.bottom - bodyRect.top + 6 };
       }).filter((o) => o.right > o.left && o.bottom > o.top);
 
-      const tab = page && page.querySelector(".bottom-sheet-tab");
-      const reserveBottom = tab ? tab.getBoundingClientRect().height + 6 : 0;
-      const next = placeEdgeArrow({ px, py, width: bodyRect.width, visHeight: bodyRect.height - covered, obstacles, reserveBottom });
+      const next = placeEdgeArrow({ px, py, width: bodyRect.width, visHeight: bodyRect.height - covered, obstacles, reserveBottom: 0 });
       setArrow((prev) => {
         if (!next || !prev) return next;
         return Math.abs(prev.x - next.x) < 0.5 && Math.abs(prev.y - next.y) < 0.5 && Math.abs(prev.angle - next.angle) < 0.5 ? prev : next;

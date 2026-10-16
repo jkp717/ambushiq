@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, GripHorizontal, Navigation2,
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2,
          Sun, CloudSun, Cloud, CloudDrizzle, CloudRain, CloudSnow } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
@@ -209,7 +209,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [hoursSettled, setHoursSettled] = useState(false);
   const [firstSlotDone, setFirstSlotDone] = useState(false);
   const foregroundTick = useForegroundRefresh();
-  const [timeOpen, setTimeOpen] = useState(false);   // bottom time sheet: closed (tab only) by default
+  const [timeOpen, setTimeOpen] = useState(true);   // bottom time shelf: open by default (closed still shows the date/time)
   const [ratings, setRatings] = useState(null);      // day -> deer movement rating, for the day strip
   const huntMapRef = useRef(null);
   const [showOfflinePanel, setShowOfflinePanel] = useState(false);
@@ -752,12 +752,12 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           dragged up (or tapped); the sheet is absolutely positioned over the map, so it takes no
           layout space. ── */}
       {days.length > 0 && (
-        <BottomSheet open={timeOpen} onOpenChange={setTimeOpen}
-          tab={(() => {
+        <BottomSheet open={timeOpen} onOpenChange={setTimeOpen} label="time controls"
+          header={(() => {
             const h = curHour?.hour ?? 0, ampm = h >= 12 ? "PM" : "AM";
             const time = curHour ? `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}` : "";
-            // the time sits in a fixed-width box so the tab doesn't grow and shrink while scrubbing
-            return <><GripHorizontal size={18} />
+            // the time sits in a fixed-width box so the header doesn't shift while scrubbing
+            return <>
               <span>{curDay?.label || (!time && "Time")}{curDay?.label && time && " ·"}</span>
               {time && <span className="map-time-fixed">{time}</span>}</>;
           })()}>
