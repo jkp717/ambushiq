@@ -24,13 +24,14 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
   const safeRef = useRef(null);
   const drag = useRef(null);
 
-  // Where the sheet rests, as a downward offset from fully open. Closed leaves the header plus the
-  // bottom safe area showing (so the header sits above a phone's home indicator). A later "expanded"
-  // stop (an hourly forecast graph under the panel) belongs here too.
+  // Where the sheet rests, as a downward offset from fully open. Closed leaves the header showing with a
+  // gap of sheet under it (--sheet-closed-gap: at least 14px, or the bottom safe area / a phone's home
+  // indicator where that's bigger). A later "expanded" stop (an hourly forecast graph under the panel)
+  // belongs here too.
   const stops = useCallback(() => {
     const sheet = sheetRef.current, head = headerRef.current;
     if (!sheet || !head) return { open: 0, closed: 0, height: 0 };
-    const safe = safeRef.current?.offsetHeight || 0;   // env(safe-area-inset-bottom) can't be read from JS directly
+    const safe = safeRef.current?.offsetHeight || 0;   // the closed gap (CSS env()/max() can't be read from JS directly)
     const height = sheet.offsetHeight;
     return { open: 0, closed: Math.max(0, height - head.offsetHeight - safe), height };
   }, []);

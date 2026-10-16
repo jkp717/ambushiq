@@ -342,11 +342,13 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   box-shadow: 0 -4px 16px rgba(0, 0, 0, .18);
   transition: transform .22s cubic-bezier(.2, .8, .2, 1);
 }
-/* Closed: slide down until only the header (handle + date/time) shows, held above the bottom safe area
-   (a phone's home indicator) in the browser and the installed PWA alike (BottomSheet.jsx mirrors this
-   distance; it writes --sheet-header-h). */
+/* Closed: slide down until only the header (handle + date/time) shows, with a gap of sheet below it so it
+   doesn't sit on the bottom edge: at least 14px, or the safe area (a phone's home indicator) where that is
+   bigger. Same in the browser and the installed PWA (BottomSheet.jsx reads the gap from its probe element
+   and mirrors this distance; it writes --sheet-header-h). */
+.bottom-sheet { --sheet-closed-gap: max(14px, env(safe-area-inset-bottom, 0px)); }
 .bottom-sheet.is-closed {
-  transform: translateY(calc(100% - var(--sheet-header-h, 40px) - env(safe-area-inset-bottom, 0px)));
+  transform: translateY(calc(100% - var(--sheet-header-h, 40px) - var(--sheet-closed-gap)));
 }
 /* the drag/tap zone: a short grab bar with the header line centred under it */
 .bottom-sheet-header {
@@ -359,7 +361,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .bottom-sheet-header:active { cursor: grabbing; }
 .bottom-sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--bord2); flex-shrink: 0; }
 .bottom-sheet-title { display: block; width: 100%; line-height: 20px; }
-.bottom-sheet-safe-probe { position: absolute; width: 0; height: env(safe-area-inset-bottom, 0px); visibility: hidden; pointer-events: none; }
+.bottom-sheet-safe-probe { position: absolute; width: 0; height: var(--sheet-closed-gap); visibility: hidden; pointer-events: none; }
 /* a closed panel is off-screen: keep it out of the tab order, but visible while it is being dragged open */
 .bottom-sheet.is-closed .bottom-sheet-panel { visibility: hidden; transition: visibility 0s linear .22s; }
 .bottom-sheet.is-closed.dragging .bottom-sheet-panel { visibility: visible; transition: none; }
