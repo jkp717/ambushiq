@@ -404,9 +404,15 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 /* desktop: everything on one row, the chips beside the weather (they fade and widen in instead) */
 @media (min-width: 700px) {
   .sheet-hd { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
-  .map-day-alerts { grid-template-rows: 1fr; max-width: 0; transition: max-width .3s ease, opacity .2s ease; }
+  /* closed it also keeps zero height (0fr, from above) and cancels the row's 14px gap, so a day without
+     chips doesn't leave the header row as tall as a chip */
+  .map-day-alerts { max-width: 0; transition: max-width .3s ease, grid-template-rows .25s ease, opacity .2s ease; }
+  .map-day-alerts:not(.open) { margin-left: -14px; }
   .map-day-alerts.open { max-width: 100%; }
-  .map-day-alerts-row { padding-top: 0; flex-wrap: nowrap; }
+  /* the chips keep their natural one-line size however narrow the (animating) box is: squeezed, they used
+     to wrap word by word into a tall column and push the header taller */
+  .map-day-alerts-row { padding-top: 0; flex-wrap: nowrap; width: max-content; }
+  .map-day-alerts-row .map-hunt-sit { flex-wrap: nowrap; white-space: nowrap; }
 }
 .map-hunt-sit {
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%;
