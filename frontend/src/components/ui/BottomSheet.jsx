@@ -21,13 +21,13 @@ const FLICK_PX_PER_MS = 0.4; // release speed that overrides the halfway rule
 function BottomSheet({ open, onOpenChange, header, label = "controls", children }) {
   const sheetRef = useRef(null);
   const headerRef = useRef(null);
+  const panelRef = useRef(null);
   const safeRef = useRef(null);
   const drag = useRef(null);
 
-  // Where the sheet rests, as a downward offset from fully open. Closed leaves the header showing with a
-  // gap of sheet under it (--sheet-closed-gap: at least 14px, or the bottom safe area / a phone's home
-  // indicator where that's bigger). A later "expanded" stop (an hourly forecast graph under the panel)
-  // belongs here too.
+  // Where the sheet rests, as a downward offset from fully open. Closed leaves the header showing, held
+  // above the bottom safe area (--sheet-closed-gap: a phone's home indicator). A later "expanded" stop (an
+  // hourly forecast graph under the panel) belongs here too.
   const stops = useCallback(() => {
     const sheet = sheetRef.current, head = headerRef.current;
     if (!sheet || !head) return { open: 0, closed: 0, height: 0 };
@@ -67,6 +67,7 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
     const sheet = sheetRef.current;
     sheet.style.transition = "";
     sheet.style.transform = "";
+    if (panelRef.current) panelRef.current.style.opacity = "";   // back to the open/closed CSS (which fades)
     sheet.classList.remove("dragging");
     sheet.parentElement?.classList.remove("sheet-dragging");
     if (settleOpen === open) {                        // no state change → no effect re-run
@@ -99,6 +100,8 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
     }
     d.t = Math.max(0, Math.min(d.closed, d.startT + dy));   // never past open, never below the header
     sheetRef.current.style.transform = `translateY(${d.t}px)`;
+    // the panel fades in as it comes up (and out as it goes down) instead of popping in
+    if (panelRef.current) panelRef.current.style.opacity = String(d.closed > 0 ? 1 - d.t / d.closed : 1);
     setLift(d.height - d.t);
     const now = performance.now();
     d.velocity = (e.clientY - d.lastY) / Math.max(1, now - d.lastTime);   // px/ms, negative = upward
@@ -134,7 +137,7 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
         <span className="bottom-sheet-handle" aria-hidden="true" />
         <span className="bottom-sheet-title">{header}</span>
       </button>
-      <div className="bottom-sheet-panel">{children}</div>
+      <div ref={panelRef} className="bottom-sheet-panel">{children}</div>
       <span ref={safeRef} className="bottom-sheet-safe-probe" aria-hidden="true" />
     </div>
   );

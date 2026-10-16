@@ -342,18 +342,18 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   box-shadow: 0 -4px 16px rgba(0, 0, 0, .18);
   transition: transform .22s cubic-bezier(.2, .8, .2, 1);
 }
-/* Closed: slide down until only the header (handle + date/time) shows, with a gap of sheet below it so it
-   doesn't sit on the bottom edge: at least 14px, or the safe area (a phone's home indicator) where that is
-   bigger. Same in the browser and the installed PWA (BottomSheet.jsx reads the gap from its probe element
-   and mirrors this distance; it writes --sheet-header-h). */
-.bottom-sheet { --sheet-closed-gap: max(14px, env(safe-area-inset-bottom, 0px)); }
+/* Closed: slide down until only the header (handle + date/time, with its own bottom padding) shows, held
+   above the bottom safe area (a phone's home indicator). Same in the browser and the installed PWA
+   (BottomSheet.jsx reads the gap from its probe element and mirrors this distance; it writes
+   --sheet-header-h). */
+.bottom-sheet { --sheet-closed-gap: env(safe-area-inset-bottom, 0px); }
 .bottom-sheet.is-closed {
   transform: translateY(calc(100% - var(--sheet-header-h, 40px) - var(--sheet-closed-gap)));
 }
 /* the drag/tap zone: a short grab bar with the header line centred under it */
 .bottom-sheet-header {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
-  width: 100%; box-sizing: border-box; padding: 6px 16px 4px;
+  width: 100%; box-sizing: border-box; padding: 6px 16px 14px;   /* the same gap under it open or closed */
   background: none; border: none; border-radius: 16px 16px 0 0; color: var(--txt);
   font: inherit; font-size: 14px; font-weight: 700;
   cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
@@ -362,9 +362,12 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .bottom-sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--bord2); flex-shrink: 0; }
 .bottom-sheet-title { display: block; width: 100%; line-height: 20px; }
 .bottom-sheet-safe-probe { position: absolute; width: 0; height: var(--sheet-closed-gap); visibility: hidden; pointer-events: none; }
-/* a closed panel is off-screen: keep it out of the tab order, but visible while it is being dragged open */
-.bottom-sheet.is-closed .bottom-sheet-panel { visibility: hidden; transition: visibility 0s linear .22s; }
-.bottom-sheet.is-closed.dragging .bottom-sheet-panel { visibility: visible; transition: none; }
+/* The panel fades with the sheet instead of switching on: closed it is transparent and (once faded) out of
+   the tab order; while dragging, BottomSheet.jsx sets its opacity from how far open the sheet is, so the
+   day cards fade in as they come up rather than popping in. */
+.bottom-sheet-panel { transition: opacity .22s ease; }
+.bottom-sheet.is-closed .bottom-sheet-panel { opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility 0s linear .22s; }
+.bottom-sheet.dragging .bottom-sheet-panel { visibility: visible; transition: none; }
 
 .map-nav-btn {
   color: var(--navy) !important;
