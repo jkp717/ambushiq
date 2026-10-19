@@ -879,9 +879,11 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           })()}>
         <div className="map-ctrl-panel">
           {/* Day strip: moving between days (the shelf's header above spells out the chosen date, time and weather) */}
-          <div className="shelf-label map-days-label">{days.length}-day forecast</div>
-          <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
-            onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
+          <div className="map-days">
+            <div className="shelf-label map-days-label">{days.length}-day forecast</div>
+            <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
+              onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
+          </div>
 
           {/* Media-control row: back/forward step buttons + play/pause flank the
               slider (15-min steps, period colours painted on the track) + hour/15-min
@@ -929,7 +931,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               // spanning the full panel width on their own) so their hPct()-based
               // percentage positions keep lining up under the now-narrower slider.
               <>
-              <div className="shelf-label map-time-label">Time</div>
+              <div className="shelf-label map-time-label">Time of day</div>
               <div className="map-scrub-row">
                 <button className="icon-btn map-nav-btn map-step-btn map-scrub-back"
                   onClick={() => { setPlaying(false); setHourPos((p) => Math.max(0, p - 1)); }}
