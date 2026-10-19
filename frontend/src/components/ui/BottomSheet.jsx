@@ -25,7 +25,9 @@ const clamp01 = (v) => Math.max(0, Math.min(1, v));
   publishes its visible height (header plus whatever of the panel and extra section shows) as the CSS
   variable --sheet-lift on that parent, so sibling controls can ride above it (bottom: calc(20px +
   var(--sheet-lift))), and toggles the class "sheet-dragging" on the parent so those controls can skip
-  their transition mid-drag. It writes these straight to the DOM instead of through React state so a
+  their transition mid-drag. Controls that should stay put once the sheet is past open (the map's corner
+  controls, which the expanded sheet simply covers) use --sheet-controls-lift instead: the same height,
+  but never more than at the open stop. It writes these straight to the DOM instead of through React state so a
   drag doesn't re-render the page on every pointer move.
 */
 function BottomSheet({ stop, onStopChange, header, label = "controls", children, extra = null }) {
@@ -49,9 +51,13 @@ function BottomSheet({ stop, onStopChange, header, label = "controls", children,
     return { expanded: 0, open, closed: Math.max(open, height - head.offsetHeight - safe), height };
   }, []);
 
-  const setLift = useCallback((px) => {
+  // `t`: the sheet's offset from fully expanded; `s`: stops()
+  const setLift = useCallback((t, s) => {
     const parent = sheetRef.current?.parentElement;
-    if (parent) parent.style.setProperty("--sheet-lift", `${Math.max(0, Math.round(px))}px`);
+    if (!parent) return;
+    const px = (v) => `${Math.max(0, Math.round(v))}px`;
+    parent.style.setProperty("--sheet-lift", px(s.height - t));
+    parent.style.setProperty("--sheet-controls-lift", px(s.height - Math.max(t, s.open)));
   }, []);
 
   // Resting lift (the sheet's visible height), re-measured when the sheet resizes. The header's and the
@@ -61,7 +67,7 @@ function BottomSheet({ stop, onStopChange, header, label = "controls", children,
       const s = stops();
       sheetRef.current?.style.setProperty("--sheet-header-h", `${headerRef.current?.offsetHeight || 0}px`);
       sheetRef.current?.style.setProperty("--sheet-extra-h", `${s.open}px`);
-      setLift(s.height - s[stop]);
+      setLift(s[stop], s);
     };
     apply();
     const sheet = sheetRef.current;
@@ -74,7 +80,11 @@ function BottomSheet({ stop, onStopChange, header, label = "controls", children,
   // Leave no stale variable/class behind on the parent when the sheet goes away.
   useEffect(() => () => {
     const parent = sheetRef.current?.parentElement;
-    if (parent) { parent.style.removeProperty("--sheet-lift"); parent.classList.remove("sheet-dragging"); }
+    if (parent) {
+      parent.style.removeProperty("--sheet-lift");
+      parent.style.removeProperty("--sheet-controls-lift");
+      parent.classList.remove("sheet-dragging");
+    }
   }, []);
 
   // The panel fades in as the sheet comes up from closed to open, and the extra section from open to
@@ -110,7 +120,7 @@ function BottomSheet({ stop, onStopChange, header, label = "controls", children,
     sheet.parentElement?.classList.remove("sheet-dragging");
     if (settleStop === stop) {                        // no state change → no effect re-run
       const s = stops();
-      setLift(s.height - s[stop]);
+      setLift(s[stop], s);
     } else onStopChange(settleStop);
   };
 
@@ -144,7 +154,7 @@ function BottomSheet({ stop, onStopChange, header, label = "controls", children,
     d.over = vis !== d.t;
     sheetRef.current.style.transform = `translateY(${vis}px)`;
     setFades(d.t, s);
-    setLift(s.height - d.t);
+    setLift(d.t, s);
     const now = performance.now();
     d.velocity = (e.clientY - d.lastY) / Math.max(1, now - d.lastTime);   // px/ms, negative = upward
     d.lastY = e.clientY;

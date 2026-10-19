@@ -333,8 +333,9 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 
 /* ── bottom time sheet: a tab that is always visible at the bottom-center plus a panel that
    slides up from beneath it (drag logic in components/ui/BottomSheet.jsx). It sits over the map
-   and publishes --sheet-lift (visible panel height) on .map-page so the corner controls below can
-   ride above it. The sheet itself is click-through; only the tab and panel take pointer events. ── */
+   and publishes --sheet-lift (visible panel height) on .map-page, plus --sheet-controls-lift (the same, but
+   never more than with the sheet open) so the corner controls below ride above it up to the open stop and
+   are simply covered when it is pulled up to the hourly forecast. The sheet itself is click-through; only the tab and panel take pointer events. ── */
 .bottom-sheet {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 600;
   display: flex; flex-direction: column; align-items: stretch;
@@ -621,10 +622,10 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 
 /* ── layer overlay — collapsible ── */
 .layer-overlay {
-  position: absolute; bottom: calc(20px + var(--sheet-lift, 0px)); left: 10px; z-index: 500;
+  position: absolute; bottom: calc(20px + var(--sheet-controls-lift, 0px)); left: 10px; z-index: 500;
   display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
   /* never grow past the top of the map: 90px clears Leaflet's top-left zoom control */
-  max-height: calc(100% - 20px - var(--sheet-lift, 0px) - 90px);
+  max-height: calc(100% - 20px - var(--sheet-controls-lift, 0px) - 90px);
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
 }
 .layer-overlay > .layer-toggle-btn { flex-shrink: 0; }
@@ -708,7 +709,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 
 /* ── floating weather card, bottom-right — mirrors the layer toggle's style ── */
 .map-weather-card {
-  position: absolute; bottom: calc(20px + var(--sheet-lift, 0px)); right: 10px; z-index: 500;
+  position: absolute; bottom: calc(20px + var(--sheet-controls-lift, 0px)); right: 10px; z-index: 500;
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
   display: flex; flex-direction: column; align-items: flex-end; gap: 3px;
   background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
@@ -717,7 +718,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 
 /* ── floating scouting-analysis progress/error card, bottom-left ── */
 .map-scout-progress {
-  position: absolute; bottom: calc(20px + var(--sheet-lift, 0px)); left: 10px; z-index: 500;
+  position: absolute; bottom: calc(20px + var(--sheet-controls-lift, 0px)); left: 10px; z-index: 500;
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
   width: 220px;
   background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
