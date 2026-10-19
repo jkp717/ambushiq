@@ -453,7 +453,7 @@ function scoutExtrasHtml(color, comments) {
 // built by this file and goes in as-is.
 function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDelete, sl, onToggleStandLayer,
                                     dismissed, onDismiss, position, color, comments, onColor, onAddComment, onDeleteComment,
-                                    standActions, rows, pinColor }) {
+                                    standActions, rows, pinColor, editLabel = "✎ Edit" }) {
   const posHtml = position && position.lat != null && position.lon != null
     ? `<div class="feat-popup-pos"><span>${escHtml(position.label || "Location")}</span> ${(+position.lat).toFixed(5)}, ${(+position.lon).toFixed(5)}</div>`
     : "";
@@ -479,7 +479,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
     </div>`;
   } else if (kind !== "stand") {
     html += `<div class="feat-popup-actions">
-        <button data-act="edit" class="feat-popup-btn">✎ Edit</button>
+        <button data-act="edit" class="feat-popup-btn">${escHtml(editLabel)}</button>
         <button data-act="del" class="feat-popup-btn feat-popup-del">🗑 Delete</button>
       </div>
     </div>`;
@@ -548,7 +548,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
 
 const HuntMap = forwardRef(function HuntMap({
   stands, zones, corridors, sign, suggestions, conditions, drainage = null,
-  drawMode, onMapClick, draftPoints, onFinishCorridor,
+  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion,
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
@@ -562,6 +562,8 @@ const HuntMap = forwardRef(function HuntMap({
   // the pointer for itself.
   const isSelected = (kind, id) => selectMode && !!selectedKeys?.has(`${kind}:${id}`);
   const interactiveFor = () => (selectMode ? !boxTool : !drawMode);
+  // "Edit on map": the feature being edited is left out of its own layer and drawn by the edit layer below.
+  const isEditing = (kinds, id) => !!mapEdit && kinds.includes(mapEdit.kind) && mapEdit.id === id;
   const bindToggle = (layer, kind, id) => layer.on("click", (e) => {
     L.DomEvent.stopPropagation(e);
     onToggleSelect && onToggleSelect(`${kind}:${id}`);
@@ -845,7 +847,8 @@ const HuntMap = forwardRef(function HuntMap({
     if (!layers.zones) return;
     // Largest first: paths stack in the order they're added, so a smaller zone inside a bigger one is
     // drawn on top and stays tappable. (Don't bringToFront the selected zone — it would cover them again.)
-    [...zones].sort((a, b) => (b.radius_m || 0) - (a.radius_m || 0)).forEach((z) => {
+    zones.filter((z) => !isEditing(["food", "bedding"], z.id))
+      .sort((a, b) => (b.radius_m || 0) - (a.radius_m || 0)).forEach((z) => {
       const active = !!z.is_active;
       const sel = isSelected("zone", z.id);
       const baseColor = sel ? COLORS.selected : (COLORS[z.kind] || "#888");
@@ -868,7 +871,8 @@ const HuntMap = forwardRef(function HuntMap({
       });
       circle.addTo(g);
     });
-  }, [zones, ready, layers.zones, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect]);
+  }, [zones, ready, layers.zones, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect,
+      mapEdit?.kind, mapEdit?.id]);
 
   // render corridors
   useEffect(() => {
@@ -876,6 +880,7 @@ const HuntMap = forwardRef(function HuntMap({
     const g = layerGroups.current.corridors; g.clearLayers();
     if (!layers.corridors) return;
     corridors.forEach((c) => {
+      if (isEditing(["corridor"], c.id)) return;
       const sel = isSelected("corridor", c.id);
       const line = L.polyline(c.points, sel
         ? { color: COLORS.selected, weight: 6, opacity: 1, lineCap: "round", interactive: interactiveFor() }
@@ -888,7 +893,8 @@ const HuntMap = forwardRef(function HuntMap({
       });
       line.addTo(g);
     });
-  }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect]);
+  }, [corridors, ready, layers.corridors, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect,
+      mapEdit?.kind, mapEdit?.id]);
 
   // render deer sign (scrapes + rubs)
   useEffect(() => {
@@ -899,6 +905,7 @@ const HuntMap = forwardRef(function HuntMap({
       const isScrape = sg.kind === "scrape";
       if (isScrape  && !layers.scrapes) return;
       if (!isScrape && !layers.rubs)    return;
+      if (isEditing(["scrape", "rub"], sg.id)) return;
       const color = isScrape ? "#E87800" : "#8B3A1A";
       const g     = isScrape ? gS : gR;
       const sel   = isSelected("sign", sg.id);
@@ -911,15 +918,68 @@ const HuntMap = forwardRef(function HuntMap({
         bindFeaturePopup(m, {
           title: sg.name,
           subtitle: sg.kind, position: { lat: sg.lat, lon: sg.lon },
-          kind: sg.kind, id: sg.id, onEdit: onEditFeature, onDelete: onDeleteFeature,
+          kind: sg.kind, id: sg.id, onEdit: onEditFeature, onDelete: onDeleteFeature, editLabel: "Edit on map",
         });
       }
       m.addTo(g);
     });
-  }, [sign, ready, layers.scrapes, layers.rubs, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect]);
+  }, [sign, ready, layers.scrapes, layers.rubs, drawMode, onEditFeature, onDeleteFeature, selectMode, selectedKeys, boxTool, onToggleSelect,
+      mapEdit?.kind, mapEdit?.id]);
 
-  // render scout-analysis draft circle: drag-to-resize, mirrors MiniMap.jsx's
-  // Geoman pattern (L.circle + circle.pm.enable) ported onto the main map.
+  // "Edit on map": the feature being edited, drawn on its own with drag handles: Geoman's center and edge
+  // handles for a zone, its point and midpoint handles for a corridor, a draggable pin for a stand or sign.
+  // Drags report the new geometry through onMapEditChange; the layer is rebuilt only when `rev` changes
+  // (entering edit mode, a map tap), never mid-gesture. The map is framed on the feature once per edit.
+  const editFramed = useRef(null);
+  const mapEditRef = useRef(mapEdit);
+  mapEditRef.current = mapEdit;
+  useEffect(() => {
+    const map = mapRef.current;
+    const e = mapEditRef.current;
+    if (!e) editFramed.current = null;
+    if (!ready || !map || !e) return undefined;
+    const emit = (geom) => onMapEditChange && onMapEditChange(geom);
+    const g = e.geom;
+    let layer;
+    if (e.kind === "corridor") {
+      // not bubbling: a tap on the line itself shouldn't also add a point to the end
+      layer = L.polyline(g.points, { color: COLORS.deer, weight: 4, opacity: 0.9, lineCap: "round", bubblingMouseEvents: false }).addTo(map);
+      if (layer.pm) {
+        layer.pm.enable({ allowSelfIntersection: true });
+        const send = () => emit({ points: layer.getLatLngs().map((p) => [p.lat, p.lng]) });
+        ["pm:edit", "pm:markerdragend", "pm:vertexadded", "pm:vertexremoved"].forEach((ev) => layer.on(ev, send));
+      }
+    } else if (e.kind === "food" || e.kind === "bedding") {
+      const color = COLORS[e.kind];
+      layer = L.circle([g.lat, g.lon], { radius: g.radius_m, color, fillColor: color, fillOpacity: 0.2, weight: 2 }).addTo(map);
+      if (layer.pm) {
+        layer.pm.enable({ allowEditing: true });
+        const send = () => {
+          const ll = layer.getLatLng();
+          emit({ lat: ll.lat, lon: ll.lng, radius_m: Math.max(10, Math.round(layer.getRadius())) });
+        };
+        ["pm:edit", "pm:dragend", "pm:markerdragend"].forEach((ev) => layer.on(ev, send));
+      }
+    } else {
+      const color = e.kind === "scrape" ? "#E87800" : "#8B3A1A";
+      const icon = e.kind === "stand" ? standIcon({}, 99, false, e.record)
+        : L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+                      html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 0 0 2px ${color}"></div>` });
+      layer = L.marker([g.lat, g.lon], { icon, draggable: true, zIndexOffset: 1000 }).addTo(map);
+      layer.on("dragend", () => { const ll = layer.getLatLng(); emit({ lat: ll.lat, lon: ll.lng }); });
+    }
+    const key = `${e.kind}:${e.id}`;
+    if (editFramed.current !== key) {
+      editFramed.current = key;
+      fitted.current = true;   // don't let the open-on-the-property fit undo this
+      if (layer.getBounds) map.fitBounds(layer.getBounds(), { padding: [40, 40], maxZoom: 17 });
+      else map.setView([g.lat, g.lon], Math.max(map.getZoom(), 16));
+    }
+    return () => { map.removeLayer(layer); };
+  }, [ready, mapEdit?.kind, mapEdit?.id, mapEdit?.rev, onMapEditChange]);
+
+  // render scout-analysis draft circle: drag-to-resize with Geoman (L.circle + circle.pm.enable),
+  // the same way the edit layer above resizes a zone.
   useEffect(() => {
     if (!ready) return;
     const map = mapRef.current;
@@ -1353,6 +1413,7 @@ const HuntMap = forwardRef(function HuntMap({
     }
 
     stands.forEach((s) => {
+      if (isEditing(["stand"], s.id)) return;   // its cone would sit at the old spot while it's being moved
       const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true };
       if (!sl.scent) return; // Individual stand scent check
 
@@ -1406,7 +1467,7 @@ const HuntMap = forwardRef(function HuntMap({
         });
       }
     });
-  }, [stands, conditions, ready, standLayers]);
+  }, [stands, conditions, ready, standLayers, mapEdit?.kind, mapEdit?.id]);
 
   // render stands with indicators
   useEffect(() => {
@@ -1427,6 +1488,10 @@ const HuntMap = forwardRef(function HuntMap({
     });
 
     stands.forEach((s) => {
+      if (isEditing(["stand"], s.id)) {   // drawn by the edit layer; recreated here when editing ends
+        if (standsMarkers.current[s.id]) { g.removeLayer(standsMarkers.current[s.id]); delete standsMarkers.current[s.id]; }
+        return;
+      }
       const sl = standLayers?.[s.id] || { wind: true, thermal: true, scent: true, deer: true };
       const v = byId[s.id] || {};
       const vectors = {
@@ -1488,7 +1553,7 @@ const HuntMap = forwardRef(function HuntMap({
       }
     });
   }, [stands, conditions, ready, standLayers, drawMode, onEditFeature, onDeleteFeature, onToggleStandLayer,
-      selectMode, selectedKeys, layers.leeEddies, standActions]);
+      selectMode, selectedKeys, layers.leeEddies, standActions, mapEdit?.kind, mapEdit?.id]);
 
   // Arrived from a stand's "Map" link elsewhere: centre on that stand and open its popup. Runs after the
   // stand markers above exist; marks the map as fitted so the open-on-the-property fit doesn't undo it.

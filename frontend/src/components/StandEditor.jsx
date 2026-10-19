@@ -7,7 +7,7 @@ import TerrainPanel from "./TerrainPanel.jsx";
 import { ydInput, ydFromInput } from "../utils/units.js";
 import { STAND_TYPES, STAND_COLORS, standColor, standGlyph } from "../utils/standStyle.js";
 
-function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
+function StandEditor({ stand, onSave, onCancel, reload, onEditOnMap }) {
   const [s, setS] = useState({ ...stand });
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -206,7 +206,7 @@ function StandEditor({ stand, onSave, onCancel, reload, onMoveOnMap }) {
         <button className="btn btn-primary" disabled={!valid} onClick={() => onSave({ name: s.name, lat: +s.lat, lon: +s.lon, is_active: s.is_active !== false, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m, stand_type: s.stand_type || "tree", color: s.color || null }, savedId)}>
           <Save size={15} /> Save stand
         </button>
-        {onMoveOnMap && <button className="btn" onClick={() => { onMoveOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Move on Map</button>}
+        {onEditOnMap && <button className="btn" onClick={() => { onEditOnMap(savedId || stand.id); onCancel(); }}><MapPin size={14} /> Edit on map</button>}
         <button className="btn" onClick={onCancel}>Cancel</button>
       </div>
     </div>

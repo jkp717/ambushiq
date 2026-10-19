@@ -1,22 +1,14 @@
-import { useState, useEffect } from "react";
-import { Wheat, Trees, Footprints, Target, Plus, Eye, EyeOff, Edit3, Trash2, MapPin, Save, X } from "lucide-react";
+import { useState } from "react";
+import { Wheat, Trees, Footprints, Target, Plus, Eye, EyeOff, Edit3, Trash2 } from "lucide-react";
 import { api } from "../services/api.js";
 import { corridorLengthFt } from "../utils/formatters.js";
-import { fmtYd, ydInput, ydFromInput } from "../utils/units.js";
+import { fmtYd } from "../utils/units.js";
 import Empty from "../components/ui/Empty.jsx";
-import Modal from "../components/ui/Modal.jsx";
-import Field from "../components/ui/Field.jsx";
 import MiniMap from "../components/MiniMap.jsx";
 
 function ZonesTabPage({ zones, corridors, sign, reloadSign, onAdd, reloadZones, reloadCorridors,
-                        editingZone, setEditingZone, editingCorridor, setEditingCorridor, onMoveOnMap }) {
+                        onEditZone, onEditCorridor }) {
   const [tab, setTab] = useState("food");
-  useEffect(() => {
-    if (editingCorridor) setTab("corridors");
-  }, [editingCorridor]);
-  useEffect(() => {
-    if (editingZone) setTab(editingZone.kind === "bedding" ? "bedding" : "food");
-  }, [editingZone]);
   const TABS = [
     { key: "food",      label: "Food",      icon: Wheat },
     { key: "bedding",   label: "Bedding",   icon: Trees },
@@ -35,11 +27,11 @@ function ZonesTabPage({ zones, corridors, sign, reloadSign, onAdd, reloadZones, 
       {(tab === "food" || tab === "bedding") && (
         <ZonesPage kind={tab} zones={zones.filter((z) => z.kind === tab)}
           onAdd={() => onAdd(tab)} reload={reloadZones}
-          editing={editingZone} setEditing={setEditingZone} onMoveOnMap={onMoveOnMap} />
+          onEdit={onEditZone} />
       )}
       {tab === "corridors" && (
         <CorridorsPage corridors={corridors} onAdd={() => onAdd("corridor")}
-          reload={reloadCorridors} editing={editingCorridor} setEditing={setEditingCorridor} onMoveOnMap={onMoveOnMap} />
+          reload={reloadCorridors} onEdit={onEditCorridor} />
       )}
       {tab === "sign" && (
         <SignPage sign={sign} reload={reloadSign} />
@@ -51,25 +43,7 @@ function ZonesTabPage({ zones, corridors, sign, reloadSign, onAdd, reloadZones, 
 /* ════════════════════════════════════════════════════
    ZONES / CORRIDORS (inner pages, used inside ZonesTabPage)
    ════════════════════════════════════════════════════ */
-function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMap }) {
-  const [geom, setGeom] = useState(null);
-  const [editQuality, setEditQuality] = useState(5);
-  useEffect(() => {
-    if (editing) {
-      setGeom({ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m });
-      if (kind === "food") setEditQuality(editing.quality ?? 5);
-    }
-  }, [editing && editing.id]);
-  async function save() {
-    const g = geom || { lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m };
-    const body = { kind, name: editing.name || null, lat: g.lat, lon: g.lon, radius_m: +g.radius_m,
-                   is_active: editing.is_active !== false };
-    if (kind === "food") body.quality = editQuality;
-    try {
-      await api(`/zones/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
-      setEditing(null); reload();
-    } catch {}
-  }
+function ZonesPage({ kind, zones, onAdd, reload, onEdit }) {
   async function toggleZone(z) {
     try {
       await api(`/zones/${z.id}`, { method: "PUT", body: JSON.stringify({
@@ -106,80 +80,17 @@ function ZonesPage({ kind, zones, onAdd, reload, editing, setEditing, onMoveOnMa
                 onClick={() => toggleZone(z)}>
                 {z.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
               </button>
-              <button className="icon-btn" onClick={() => setEditing({ ...z })}><Edit3 size={15} /></button>
+              <button className="icon-btn" onClick={() => onEdit({ ...z })}><Edit3 size={15} /></button>
               <button className="icon-btn" onClick={async () => { await api(`/zones/${z.id}`, { method: "DELETE" }); reload(); }}><Trash2 size={15} /></button>
             </div>
           </div>
         ))}
       </div>
-      {editing && (
-        <Modal onClose={() => setEditing(null)}>
-          <div className="card" style={{ padding: 16, border: "2px solid var(--navy)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <strong>Edit {noun}</strong>
-              <button className="icon-btn" onClick={() => setEditing(null)}><X size={16} /></button>
-            </div>
-            <Field label="Name"><input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={noun} /></Field>
-            {kind === "food" && (
-              <div style={{ marginTop: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <label style={{ fontSize: 13, fontWeight: 500 }}>Food quality</label>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--green)" }}>{editQuality}/10</span>
-                </div>
-                <input type="range" min={1} max={10} value={editQuality} onChange={(e) => setEditQuality(+e.target.value)} style={{ width: "100%" }} />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--sub)", marginTop: 2 }}>
-                  <span>Poor</span><span>Premium</span>
-                </div>
-              </div>
-            )}
-            <div style={{ marginTop: 12 }}>
-              <span style={{ fontSize: 12, color: "var(--sub)", display: "block", marginBottom: 4 }}>Drag the center to move · drag the edge to resize</span>
-              <MiniMap kind={kind} editable height={240} feature={{ lat: editing.lat, lon: editing.lon, radius_m: editing.radius_m }} onChange={(g) => setGeom(g)} />
-            </div>
-            {geom && <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{geom.lat.toFixed(5)}, {geom.lon.toFixed(5)} · {fmtYd(geom.radius_m)} radius</div>}
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14 }}>
-              <input type="checkbox" checked={editing.is_active !== false}
-                onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} />
-              Active — contributes to stand rankings this season
-            </label>
-            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-              <button className="btn btn-primary" onClick={save}><Save size={15} /> Save</button>
-              {onMoveOnMap && editing.id && <button className="btn" onClick={() => { onMoveOnMap(editing.kind || kind, editing.id); setEditing(null); }}><MapPin size={14} /> Move on Map</button>}
-              <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }
 
-function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOnMap }) {
-  const [geom, setGeom] = useState(null);
-  const [editUsage, setEditUsage] = useState(5);
-  const [editFalloff, setEditFalloff] = useState("");
-  const [editWidth, setEditWidth] = useState("");
-  useEffect(() => {
-    if (editing) {
-      setGeom({ points: editing.points });
-      setEditUsage(editing.usage ?? 5);
-      setEditFalloff(ydInput(editing.falloff_m));   // inputs are in yards
-      setEditWidth(ydInput(editing.width_m));
-    }
-  }, [editing && editing.id]);
-  async function save() {
-    const pts = (geom && geom.points) || editing.points;
-    try {
-      await api(`/corridors/${editing.id}`, { method: "PUT", body: JSON.stringify({
-        name: editing.name || null, points: pts,
-        is_active: editing.is_active !== false,
-        usage: editUsage,
-        falloff_m: ydFromInput(editFalloff),
-        width_m: ydFromInput(editWidth),
-      }) });
-      setEditing(null); reload();
-    } catch {}
-  }
+function CorridorsPage({ corridors, onAdd, reload, onEdit }) {
   async function toggleCorridor(c) {
     try {
       await api(`/corridors/${c.id}`, { method: "PUT", body: JSON.stringify({
@@ -219,65 +130,12 @@ function CorridorsPage({ corridors, onAdd, reload, editing, setEditing, onMoveOn
                 onClick={() => toggleCorridor(c)}>
                 {c.is_active ? <Eye size={15} /> : <EyeOff size={15} />}
               </button>
-              <button className="icon-btn" onClick={() => setEditing({ ...c })}><Edit3 size={15} /></button>
+              <button className="icon-btn" onClick={() => onEdit({ ...c })}><Edit3 size={15} /></button>
               <button className="icon-btn" onClick={async () => { await api(`/corridors/${c.id}`, { method: "DELETE" }); reload(); }}><Trash2 size={15} /></button>
             </div>
           </div>
         ))}
       </div>
-      {editing && (
-        <Modal onClose={() => setEditing(null)}>
-          <div className="card" style={{ padding: 16, border: "2px solid var(--navy)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <strong>Edit corridor</strong>
-              <button className="icon-btn" onClick={() => setEditing(null)}><X size={16} /></button>
-            </div>
-            <Field label="Name"><input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="corridor" /></Field>
-            {/* Usage frequency */}
-            <div style={{ marginTop: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <label style={{ fontSize: 13, fontWeight: 500 }}>Usage frequency</label>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)" }}>{editUsage}/10</span>
-              </div>
-              <input type="range" min={1} max={10} value={editUsage} onChange={(e) => setEditUsage(+e.target.value)} style={{ width: "100%" }} />
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--sub)", marginTop: 2 }}>
-                <span>Rarely used</span><span>Heavily used</span>
-              </div>
-            </div>
-            {/* Per-corridor falloff */}
-            <div style={{ marginTop: 14 }}>
-              <Field label="Falloff distance (yd) — leave blank to use global setting">
-                <input type="number" value={editFalloff} min={50} max={2200} step={25}
-                  placeholder="global default"
-                  onChange={(e) => setEditFalloff(e.target.value)} />
-              </Field>
-            </div>
-            {/* Corridor width */}
-            <div style={{ marginTop: 14 }}>
-              <Field label="Corridor width (yd) — leave blank for a thin travel line">
-                <input type="number" value={editWidth} min={0} max={440} step={10}
-                  placeholder="e.g. 35 (creek bottom)"
-                  onChange={(e) => setEditWidth(e.target.value)} />
-              </Field>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <span style={{ fontSize: 12, color: "var(--sub)", display: "block", marginBottom: 4 }}>Drag any point to reshape the path</span>
-              <MiniMap kind="corridor" editable height={240} feature={{ points: editing.points }} onChange={(g) => setGeom(g)} />
-            </div>
-            <div style={{ fontSize: 12, color: "var(--sub)", marginTop: 6 }}>{((geom && geom.points) || editing.points).length} points</div>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 14 }}>
-              <input type="checkbox" checked={editing.is_active !== false}
-                onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} />
-              Active — contributes to stand rankings this season
-            </label>
-            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-              <button className="btn btn-primary" onClick={save}><Save size={15} /> Save</button>
-              {onMoveOnMap && editing.id && <button className="btn" onClick={() => { onMoveOnMap("corridor", editing.id); setEditing(null); }}><MapPin size={14} /> Move on Map</button>}
-              <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }

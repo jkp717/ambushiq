@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2,
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save,
          Sun, CloudSun, Cloud, CloudDrizzle, CloudRain, CloudSnow } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
@@ -147,9 +147,25 @@ function conditionsByHour(all) {
   return out;
 }
 
+// "Edit on map": the part of a feature that edit mode changes, and the banner's instructions for it.
+const EDIT_NOUN = { stand: "this stand", food: "this food zone", bedding: "this bedding zone", corridor: "this corridor",
+                    scrape: "this scrape", rub: "this rub" };
+function editGeom(kind, f) {
+  if (kind === "corridor") return { points: f.points.map((p) => [p[0], p[1]]) };
+  if (kind === "food" || kind === "bedding") return { lat: +f.lat, lon: +f.lon, radius_m: +f.radius_m };
+  return { lat: +f.lat, lon: +f.lon };
+}
+function editHint({ kind, geom }) {
+  if (kind === "corridor")
+    return `Drag a point to move it, drag a midpoint to add one, long-press a point to remove it, or tap the map to extend the path (${geom.points.length} points).`;
+  if (kind === "food" || kind === "bedding")
+    return `Drag the center to move, drag the edge to resize (${fmtYd(geom.radius_m)}), or tap the map to move it there.`;
+  return "Drag the pin, or tap the map to move it there.";
+}
+
 function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestions, activeRegion, reloadStands, reloadZones, reloadCorridors, reloadSign,
                    reloadSuggestions, onDismissSuggestion, onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote,
-                   drawRequest, clearDrawRequest, relocateRequest, clearRelocateRequest,
+                   drawRequest, clearDrawRequest, editRequest, clearEditRequest, editGuardRef,
                    openStandEditor, onEditFeature, onDeleteFeature, standNav, focusRequest, clearFocusRequest }) {
   const [days, setDays] = useState([]);
   const daysRef = useRef(days);
@@ -164,7 +180,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [conditions, setConditions] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [drawMode, setDrawMode] = useState(null);
-  const [relocating, setRelocating] = useState(null); // { kind, id }
+  // "Edit on map": { kind, id, name, record, geom, orig, rev } (see editGeom). `rev` changes only when the
+  // geometry is set from outside the edit layer (entering, a map tap), so drags don't rebuild it mid-gesture.
+  const [mapEdit, setMapEdit] = useState(null);
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
@@ -291,7 +309,19 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     photos: (id) => standNav.toPhotos(id),
   }), [standNav, days, dayIdx]);
 
-  useEffect(() => { if (relocateRequest) { setRelocating(relocateRequest); setDrawMode("relocate"); setDraftPoints([]); clearRelocateRequest(); } }, [relocateRequest, clearRelocateRequest]);
+  // Arrived from a feature's "Edit on map": open edit mode on it, starting from its saved geometry.
+  useEffect(() => {
+    if (!editRequest) return;
+    const { kind, id } = editRequest;
+    const list = { stand: stands, food: zones, bedding: zones, corridor: corridors, scrape: sign, rub: sign }[kind] || [];
+    const f = list.find((x) => x.id === id);
+    if (f) {
+      const geom = editGeom(kind, f);
+      setMapEdit({ kind, id, name: f.name || EDIT_NOUN[kind], record: f, geom, orig: geom, rev: 0 });
+      setDrawMode("edit"); setDraftPoints([]);
+    }
+    clearEditRequest();
+  }, [editRequest, clearEditRequest]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Forecast hours drive the time controls. They don't need a stand: the backend falls back to the region's
   // own location, so a brand-new region gets a working map straight away. Re-fetched when the first stand
@@ -535,37 +565,48 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       setDrawMode(null);
     } else if (drawMode === "scout" && !scoutDraft) {
       setScoutDraft({ lat: pt.lat, lon: pt.lon, radius_m: scoutSettings.scout_radius_default_m });
-    } else if (drawMode === "relocate" && relocating) {
-      const { kind, id } = relocating;
-      if (kind === "corridor") { setDraftPoints((p) => [...p, pt]); return; }
-      try {
-        if (kind === "stand") {
-          const s = stands.find((x) => x.id === id);
-          if (s) await api(`/stands/${id}`, { method: "PUT", body: JSON.stringify({ name: s.name, lat: pt.lat, lon: pt.lon, downhill_deg: s.downhill_deg, deer_approach_deg: s.deer_approach_deg, visibility_m: s.visibility_m }) });
-          await reloadStands();
-        } else if (kind === "food" || kind === "bedding") {
-          const z = zones.find((x) => x.id === id);
-          if (z) await api(`/zones/${id}`, { method: "PUT", body: JSON.stringify({ kind: z.kind, name: z.name, lat: pt.lat, lon: pt.lon, radius_m: z.radius_m }) });
-          await reloadZones();
-        }
-      } catch { setErr("Couldn't move feature."); }
-      setRelocating(null); setDrawMode(null);
+    } else if (drawMode === "edit" && mapEdit) {
+      // a tap moves a point (or a zone's center) there, or adds a point to the end of a corridor
+      setMapEdit((e) => ({ ...e, rev: e.rev + 1, geom: e.kind === "corridor"
+        ? { points: [...e.geom.points, [pt.lat, pt.lon]] }
+        : { ...e.geom, lat: pt.lat, lon: pt.lon } }));
     }
-  }, [drawMode, relocating, stands, zones, openStandEditor, reloadStands, reloadZones, scoutDraft, scoutSettings]);
+  }, [drawMode, mapEdit, openStandEditor, scoutDraft, scoutSettings]);
+  // drags in the edit layer: the new geometry, without bumping `rev`
+  const onMapEditChange = useCallback((geom) => setMapEdit((e) => e && { ...e, geom }), []);
 
   function finishCorridor() {
     if (draftPoints.length >= 2)
       setPendingName({ type: "corridor", title: "Name this corridor", payload: { points: draftPoints.map((p) => [p.lat, p.lon]) } });
     setDraftPoints([]); setDrawMode(null);
   }
-  async function finishRelocateCorridor() {
-    if (draftPoints.length < 2 || !relocating) return;
+  // Save the edited geometry with the rest of the feature unchanged. Returns whether it saved.
+  async function saveMapEdit() {
+    const e = mapEdit;
+    if (!e) return false;
+    const r = e.record, g = e.geom, active = !!(r.is_active ?? true);
+    const put = (path, body) => api(path, { method: "PUT", body: JSON.stringify(body) });
     try {
-      const c = corridors.find((x) => x.id === relocating.id);
-      await api(`/corridors/${relocating.id}`, { method: "PUT", body: JSON.stringify({ name: c?.name || null, points: draftPoints.map((p) => [p.lat, p.lon]) }) });
-      await reloadCorridors();
-    } catch { setErr("Couldn't move corridor."); }
-    setRelocating(null); setDraftPoints([]); setDrawMode(null);
+      if (e.kind === "stand") {
+        await put(`/stands/${e.id}`, { name: r.name, lat: g.lat, lon: g.lon, is_active: active,
+          downhill_deg: r.downhill_deg, deer_approach_deg: r.deer_approach_deg, visibility_m: r.visibility_m,
+          stand_type: r.stand_type || "tree", color: r.color || null });
+        await reloadStands();
+      } else if (e.kind === "food" || e.kind === "bedding") {
+        await put(`/zones/${e.id}`, { kind: r.kind, name: r.name || null, lat: g.lat, lon: g.lon,
+          radius_m: Math.round(g.radius_m), is_active: active, quality: r.quality ?? null });
+        await reloadZones();
+      } else if (e.kind === "corridor") {
+        await put(`/corridors/${e.id}`, { name: r.name || null, points: g.points, is_active: active,
+          usage: r.usage ?? 5, falloff_m: r.falloff_m ?? null, width_m: r.width_m ?? null });
+        await reloadCorridors();
+      } else {
+        await put(`/sign/${e.id}`, { kind: r.kind, lat: g.lat, lon: g.lon, is_active: active });
+        await reloadSign();
+      }
+    } catch { setErr("Couldn't save changes."); return false; }
+    setMapEdit(null); setDrawMode(null);
+    return true;
   }
   async function confirmName(name, extra1, extra2, extra3) {
     const pn = pendingName; setPendingName(null); if (!pn) return;
@@ -581,7 +622,26 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       }
     } catch { setErr(`Couldn't save ${pn.type}.`); }
   }
-  function cancelDraw() { setDraftPoints([]); setDrawMode(null); setRelocating(null); setScoutDraft(null); }
+  function cancelDraw() { setDraftPoints([]); setDrawMode(null); setMapEdit(null); setScoutDraft(null); }
+
+  // Unsaved map edits: App asks to save or discard them before leaving the map, and closing the tab
+  // gets the browser's own "leave site?" prompt.
+  // Another draw mode took over from edit mode: drop the edit. (Only on that change — on opening the page the
+  // edit request above sets the edit and the mode together.)
+  const prevDrawMode = useRef(drawMode);
+  useEffect(() => {
+    if (prevDrawMode.current === "edit" && drawMode !== "edit") setMapEdit(null);
+    prevDrawMode.current = drawMode;
+  }, [drawMode]);
+  const mapEditDirty = !!mapEdit && JSON.stringify(mapEdit.geom) !== JSON.stringify(mapEdit.orig);
+  if (editGuardRef) editGuardRef.current = { dirty: mapEditDirty, name: mapEdit?.name, save: saveMapEdit, discard: cancelDraw };
+  useEffect(() => () => { if (editGuardRef) editGuardRef.current = null; }, [editGuardRef]);
+  useEffect(() => {
+    if (!mapEditDirty) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [mapEditDirty]);
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
 
   // ── device location ──
@@ -947,9 +1007,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           {drawMode === "scout" && !scoutDraft && "Click the map to drop the scouting-analysis area."}
           {drawMode === "scout" && scoutDraft && `Drag the circle's edge to resize (${fmtDist(scoutDraft.radius_m)}).`}
           {drawMode === "scout" && scoutDraft && <button className="btn" style={{ marginLeft: 8 }} onClick={confirmScoutArea} disabled={scoutAnalyzing}>Scout this area</button>}
-          {drawMode === "relocate" && relocating?.kind !== "corridor" && "Tap the map to move to the new location."}
-          {drawMode === "relocate" && relocating?.kind === "corridor" && `Click new path points (${draftPoints.length} set).`}
-          {drawMode === "relocate" && relocating?.kind === "corridor" && <button className="btn" style={{ marginLeft: 8 }} onClick={finishRelocateCorridor} disabled={draftPoints.length < 2}>Finish</button>}
+          {drawMode === "edit" && mapEdit && editHint(mapEdit)}
+          {drawMode === "edit" && mapEdit && <button className="btn btn-primary" style={{ marginLeft: 8 }} onClick={saveMapEdit} disabled={!mapEditDirty}><Save size={13} /> Save</button>}
           <button className="btn" style={{ marginLeft: 8 }} onClick={cancelDraw}>Cancel</button>
         </div>
       )}
@@ -977,6 +1036,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign}
             suggestions={suggestions} conditions={conditions} drainage={drainage}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
+            mapEdit={mapEdit} onMapEditChange={onMapEditChange}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
             onDismissSuggestion={onDismissSuggestion} onSuggestionColor={onSuggestionColor}

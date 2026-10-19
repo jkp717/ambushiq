@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Lock, Menu, Sun, Map as MapIcon, MapPin, Wheat, Camera, Settings as SettingsIcon, RefreshCw,
-  MapPinned, ChevronDown, Plus, Pencil, Star, Trash2, Bell } from "lucide-react";
+  MapPinned, ChevronDown, Plus, Pencil, Star, Trash2, Bell, Save } from "lucide-react";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import { useAuth } from "./hooks/useAuth.js";
 import { api, regionStore, apiSaved, fromDevice } from "./services/api.js";
@@ -10,6 +10,8 @@ import { pruneSavedAreasForRegion } from "./utils/offlineTiles.js";
 import Centered from "./components/ui/Centered.jsx";
 import Modal from "./components/ui/Modal.jsx";
 import StandEditor from "./components/StandEditor.jsx";
+import ZoneEditor from "./components/ZoneEditor.jsx";
+import CorridorEditor from "./components/CorridorEditor.jsx";
 import RegionEditor from "./components/RegionEditor.jsx";
 import Login from "./pages/Login.jsx";
 import TodayPage from "./pages/Today.jsx";
@@ -61,10 +63,10 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const [editingStand, setEditingStand] = useState(null);
   const [editingZone, setEditingZone] = useState(null);
   const [editingCorridor, setEditingCorridor] = useState(null);
-  const [relocateRequest, setRelocateRequest] = useState(null);
+  const [editRequest, setEditRequest] = useState(null);   // Map: { kind, id } to open in map edit mode
   const [cameras, setCameras] = useState([]);
   // One-click jumps between features for a stand (see standNav below): each page applies its request
-  // when it opens and clears it, the same way drawRequest / relocateRequest work.
+  // when it opens and clears it, the same way drawRequest / editRequest work.
   const [focusRequest, setFocusRequest] = useState(null);   // Map: { standId, day? }
   const [scoreRequest, setScoreRequest] = useState(null);   // Outlook: { standId, day? }
   const [photosRequest, setPhotosRequest] = useState(null); // Cameras: { cameraIds }
@@ -138,12 +140,27 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
     toCameraPhotos: (cameraIds) => { setPhotosRequest({ cameraIds }); setView("cameras"); },
     toView: (v) => setView(v),
   }), [stands, camerasByStand]);
+  // Map edit mode with unsaved changes: anything that leaves the map asks to save or discard them first.
+  // MapPage keeps editGuardRef.current = { dirty, name, save, discard } while it's open.
+  const editGuardRef = useRef(null);
+  const [pendingLeave, setPendingLeave] = useState(null);   // the action waiting on that answer
+  const guardLeave = useCallback((fn) => (...args) => {
+    if (editGuardRef.current?.dirty) setPendingLeave(() => () => fn(...args));
+    else fn(...args);
+  }, []);
+  async function leaveSaving() {
+    if (await editGuardRef.current?.save()) { const go = pendingLeave; setPendingLeave(null); go(); }
+  }
+  function leaveDiscarding() {
+    editGuardRef.current?.discard();
+    const go = pendingLeave; setPendingLeave(null); go();
+  }
   // the same links from inside the alerts popup also close it
   const alertNav = useMemo(() => {
-    const close = (fn) => (...args) => { setAlertsOpen(false); fn(...args); };
+    const close = (fn) => guardLeave((...args) => { setAlertsOpen(false); fn(...args); });
     return { ...standNav, toMap: close(standNav.toMap), toScore: close(standNav.toScore), toPhotos: close(standNav.toPhotos),
              toCameraPhotos: close(standNav.toCameraPhotos), toView: close(standNav.toView) };
-  }, [standNav]);
+  }, [standNav, guardLeave]);
   const counted = alerts.filter((a) => !a.quiet);
   const badgeTone = counted.some((a) => a.severity === "critical") ? "critical"
     : counted.some((a) => a.severity === "warning") ? "warning" : "info";
@@ -176,8 +193,9 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
 
   const editFeature = useCallback((kind, id) => {
     if (kind === "stand") { const s = stands.find((x) => x.id === id); if (s) setEditingStand(s); }
-    else if (kind === "food" || kind === "bedding") { const z = zones.find((x) => x.id === id); if (z) { setEditingZone(z); setView("zones"); } }
-    else if (kind === "corridor") { const c = corridors.find((x) => x.id === id); if (c) { setEditingCorridor(c); setView("zones"); } }
+    else if (kind === "food" || kind === "bedding") { const z = zones.find((x) => x.id === id); if (z) setEditingZone(z); }
+    else if (kind === "corridor") { const c = corridors.find((x) => x.id === id); if (c) setEditingCorridor(c); }
+    else if (kind === "scrape" || kind === "rub") requestMapEdit(kind, id);   // no dialog: nothing but the position to edit
   }, [stands, zones, corridors]);
 
   const deleteFeature = useCallback(async (kind, id) => {
@@ -218,8 +236,9 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
                       stand_type: "tree", color: null });
   }
 
-  function requestRelocate(kind, id) {
-    setRelocateRequest({ kind, id });
+  // "Edit on map": close any edit dialog and open the map in edit mode for that feature.
+  function requestMapEdit(kind, id) {
+    setEditRequest({ kind, id });
     setEditingStand(null);
     setEditingZone(null);
     setEditingCorridor(null);
@@ -255,7 +274,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
     <div className="app-shell">
       {/* top bar */}
       <header className="top-bar">
-        <button className="top-bar-brand" onClick={() => setView("today")} title="Overview">
+        <button className="top-bar-brand" onClick={guardLeave(() => setView("today"))} title="Overview">
           <img src="/icon.png" alt="" className="top-bar-icon" />
           <strong>AmbushIQ</strong>
           {version && <span className="top-bar-ver">v{version}</span>}
@@ -269,12 +288,12 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             <div className="top-bar-region-menu">
               {regions.map((r) => (
                 <button key={r.id} className={"top-bar-nav-item" + (r.id === activeRegion.id ? " active" : "")}
-                  onClick={() => { onSwitchRegion(r.id); setRegionOpen(false); }}>
+                  onClick={() => { setRegionOpen(false); guardLeave(onSwitchRegion)(r.id); }}>
                   <span className="region-menu-name">{r.name}</span>{r.is_default && <span className="region-badge">default</span>}
                 </button>
               ))}
               <div className="top-bar-nav-divider" />
-              <button className="top-bar-nav-item" onClick={() => { setRegionOpen(false); setEditingRegion({ id: null }); }}>
+              <button className="top-bar-nav-item" onClick={() => { setRegionOpen(false); guardLeave(setEditingRegion)({ id: null }); }}>
                 <Plus size={15} /><span>New region</span>
               </button>
               <button className="top-bar-nav-item" onClick={() => { setRegionOpen(false); setEditingRegion(activeRegion); }}>
@@ -286,7 +305,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
                 </button>
               )}
               <button className="top-bar-nav-item" disabled={regions.length <= 1}
-                onClick={() => { setRegionOpen(false); confirmDeleteRegion(activeRegion); }}>
+                onClick={() => { setRegionOpen(false); guardLeave(confirmDeleteRegion)(activeRegion); }}>
                 <Trash2 size={15} /><span>Delete region</span>
               </button>
             </div>
@@ -319,12 +338,12 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
               <div className="top-bar-nav-menu">
                 {NAV.map(({ key, label, icon: Icon }) => (
                   <button key={key} className={"top-bar-nav-item" + (view === key ? " active" : "")}
-                    onClick={() => { setView(key); setNavOpen(false); }}>
+                    onClick={() => { setNavOpen(false); if (key !== view) guardLeave(setView)(key); }}>
                     <Icon size={15} /><span>{label}</span>
                   </button>
                 ))}
                 <div className="top-bar-nav-divider" />
-                <button className="top-bar-nav-item" onClick={() => { setNavOpen(false); onLogout(); }}>
+                <button className="top-bar-nav-item" onClick={() => { setNavOpen(false); guardLeave(onLogout)(); }}>
                   <Lock size={15} /><span>Lock</span>
                 </button>
               </div>
@@ -361,7 +380,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
             onSuggestionColor={setSuggestionColor} onAddSuggestionNote={addSuggestionNote}
             onDeleteSuggestionNote={deleteSuggestionNote}
             drawRequest={drawRequest} clearDrawRequest={() => setDrawRequest(null)}
-            relocateRequest={relocateRequest} clearRelocateRequest={() => setRelocateRequest(null)}
+            editRequest={editRequest} clearEditRequest={() => setEditRequest(null)} editGuardRef={editGuardRef}
             openStandEditor={openStandEditor} onEditFeature={editFeature} onDeleteFeature={deleteFeature}
             standNav={standNav} focusRequest={focusRequest} clearFocusRequest={() => setFocusRequest(null)} />
         )}
@@ -373,9 +392,7 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
         {view === "zones" && (
           <ZonesTabPage zones={zones} corridors={corridors} sign={sign} reloadSign={loadSign}
             onAdd={goDraw} reloadZones={loadZones} reloadCorridors={loadCorridors}
-            editingZone={editingZone} setEditingZone={setEditingZone}
-            editingCorridor={editingCorridor} setEditingCorridor={setEditingCorridor}
-            onMoveOnMap={requestRelocate} />
+            onEditZone={setEditingZone} onEditCorridor={setEditingCorridor} />
         )}
         {view === "cameras" && (
           <CamerasPage stands={stands} standNav={standNav} onCamerasLoaded={setCameras}
@@ -387,7 +404,37 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
       {editingStand && (
         <Modal onClose={() => setEditingStand(null)}>
           <StandEditor stand={editingStand} onSave={saveStand} onCancel={() => setEditingStand(null)} reload={loadStands}
-            onMoveOnMap={editingStand.id ? (id) => requestRelocate("stand", id) : null} />
+            onEditOnMap={editingStand.id ? (id) => requestMapEdit("stand", id) : null} />
+        </Modal>
+      )}
+
+      {editingZone && (
+        <Modal onClose={() => setEditingZone(null)}>
+          <ZoneEditor zone={editingZone} onSaved={() => { setEditingZone(null); loadZones(); }}
+            onCancel={() => setEditingZone(null)} onEditOnMap={requestMapEdit} />
+        </Modal>
+      )}
+
+      {editingCorridor && (
+        <Modal onClose={() => setEditingCorridor(null)}>
+          <CorridorEditor corridor={editingCorridor} onSaved={() => { setEditingCorridor(null); loadCorridors(); }}
+            onCancel={() => setEditingCorridor(null)} onEditOnMap={requestMapEdit} />
+        </Modal>
+      )}
+
+      {pendingLeave && (
+        <Modal onClose={() => setPendingLeave(null)}>
+          <div className="card" style={{ padding: 16, border: "2px solid var(--navy)" }}>
+            <strong>Unsaved changes</strong>
+            <p style={{ fontSize: 13.5, margin: "10px 0 0" }}>
+              You moved or reshaped <strong>{editGuardRef.current?.name || "this feature"}</strong> on the map but haven't saved it.
+            </p>
+            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+              <button className="btn btn-primary" onClick={leaveSaving}><Save size={15} /> Save</button>
+              <button className="btn" onClick={leaveDiscarding}>Discard</button>
+              <button className="btn" onClick={() => setPendingLeave(null)}>Keep editing</button>
+            </div>
+          </div>
         </Modal>
       )}
 
