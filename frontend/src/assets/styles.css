@@ -377,13 +377,17 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
    sheet is pulled up to "expanded" (BottomSheet.jsx writes its height as --sheet-extra-h), and fades the
    same way the panel does. */
 .bottom-sheet.is-open { transform: translateY(var(--sheet-extra-h, 0px)); }
-.bottom-sheet-extra { padding-bottom: env(safe-area-inset-bottom, 0px); transition: opacity .22s ease; }
+.bottom-sheet-extra { transition: opacity .22s ease; }
 .bottom-sheet:not(.is-expanded) .bottom-sheet-extra { opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility 0s linear .22s; }
 .bottom-sheet.dragging .bottom-sheet-extra { visibility: visible; transition: none; }
 
 /* ── hourly forecast cards (components/HourlyForecast.jsx), in the time shelf's extra section ── */
-.hourly { border-top: 1px solid var(--bord); }
-.hourly-hd { padding: 8px 14px 0; font-size: 12px; font-weight: 600; }
+/* a band a shade lighter than the shelf (dark mode; off-white in light), running down past the home
+   indicator, with the cards staying the shelf's colour on it and a small, quiet, centred label */
+.hourly { border-top: 1px solid var(--bord); background: var(--surf); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.bottom-sheet:has(.hourly)::after { background: var(--surf); }   /* the fill under a stretched sheet matches */
+.hourly-hd { padding: 8px 14px 0; text-align: center; color: var(--sub);
+             font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
 .hourly-strip {
   display: flex; gap: 6px; overflow-x: auto; padding: 6px 12px 10px;
   scroll-snap-type: x proximity; touch-action: pan-x; scrollbar-width: none;
