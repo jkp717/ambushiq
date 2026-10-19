@@ -335,9 +335,13 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 /* the shelf's section labels (14-day forecast, time, hourly forecast): small, quiet and centred */
 .shelf-label { text-align: center; color: var(--sub); font-size: 10.5px; font-weight: 600; line-height: 1.2;
                text-transform: uppercase; letter-spacing: .08em; }
-.map-days-label, .map-time-label { margin-bottom: calc(4px - var(--row-gap)); }   /* ~4px above its section */
-.map-days-label { grid-area: dlabel; }
-.map-time-label { grid-area: tlabel; margin-top: 2px; }
+/* Each label opens its section under a full-width dividing line, like the hourly forecast's: the negative
+   side margins reach across the panel's 12px padding, and the label sits ~4px above its section. */
+.map-days-label, .map-time-label {
+  margin: 0 -12px calc(4px - var(--row-gap)); padding-top: 8px; border-top: 1px solid var(--bord);
+}
+.map-days-label { grid-area: dlabel; margin-top: -4px; }   /* the line sits right under the shelf's header */
+.map-time-label { grid-area: tlabel; margin-top: 4px; }
 
 /* ── bottom time sheet: a tab that is always visible at the bottom-center plus a panel that
    slides up from beneath it (drag logic in components/ui/BottomSheet.jsx). It sits over the map
