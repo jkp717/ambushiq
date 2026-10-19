@@ -209,15 +209,33 @@ function featurePoints(stands, zones, corridors) {
   return pts;
 }
 
+// The map page's bottom time shelf sits over the lower part of the map (BottomSheet publishes its visible
+// height as --sheet-lift): how many pixels of the map it covers right now, so framing can center things
+// in the part of the map that's still showing.
+function shelfCover(map) {
+  const el = map.getContainer(), page = el.closest(".map-page");
+  if (!page) return 0;
+  const lift = parseFloat(getComputedStyle(page).getPropertyValue("--sheet-lift")) || 0;
+  return Math.max(0, el.getBoundingClientRect().bottom - (page.getBoundingClientRect().bottom - lift));
+}
+// Padding for fitBounds that keeps the fitted area above the shelf.
+const shelfPadding = (map, px) => ({ paddingTopLeft: [px, px], paddingBottomRight: [px, px + shelfCover(map)] });
+
+// setView with `latlng` in the middle of the visible part of the map (above the shelf), not the whole map.
+function centerVisible(map, latlng, zoom) {
+  const c = map.unproject(map.project(L.latLng(latlng), zoom).add([0, shelfCover(map) / 2]), zoom);
+  map.setView(c, zoom, { animate: false });
+}
+
 // The map's opening view: one zoom level closer than an exact fit of the property's features, so the stands
 // fill more of the screen (outlying zones or corridors can sit just past the edge). A region with nothing on
 // it yet opens on its location at DEFAULT_ZOOM.
 const FIT_MAX_ZOOM = 16, DEFAULT_ZOOM = 14;
 function fitProperty(map, pts) {
   const b = L.latLngBounds(pts);
-  // 100 px = the 50 px margin on each side the plain fit used
-  const z = Math.min(FIT_MAX_ZOOM, map.getBoundsZoom(b, false, L.point(100, 100)) + 1);
-  map.setView(b.getCenter(), z);
+  // 100 px = the 50 px margin on each side the plain fit used, plus the strip under the shelf
+  const z = Math.min(FIT_MAX_ZOOM, map.getBoundsZoom(b, false, L.point(100, 100 + shelfCover(map))) + 1);
+  centerVisible(map, b.getCenter(), z);
 }
 
 // The lee-eddy layer's image for one zone, drawn once and reused: slots from the saved forecast share one
@@ -652,10 +670,10 @@ const HuntMap = forwardRef(function HuntMap({
       // screenful of tiles at a default zoom and throwing them away 0.3 s later when the fit kicks in.
       const pts = featurePoints(stands, zones, corridors);
       if (pts.length) {
-        fitProperty(map, pts);
+        frame({ kind: "fit", pts });
         fitted.current = true;
       } else {
-        map.setView(center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], DEFAULT_ZOOM);
+        frame({ kind: "point", latlng: center && center.lat != null ? [center.lat, center.lon] : [34.7, -92.3], zoom: DEFAULT_ZOOM });
       }
     }
     tryInit();
@@ -809,6 +827,48 @@ const HuntMap = forwardRef(function HuntMap({
   // location when it has none. Switching regions starts over: recenter on the new region straight away and
   // fit its features when they arrive. The fit waits a moment so stands, zones and corridors (which load
   // separately) are all in before it frames them.
+  // Automatic framing (these, and a stand's "Map" link) centers in the part of the map above the time shelf.
+  // The shelf only appears once the forecast loads, usually after the map has opened, and can be opened or
+  // closed, so the last automatic framing is kept and re-applied whenever the shelf's height changes, until
+  // the map is panned or zoomed by hand (see the effect below).
+  const autoFrame = useRef(null);   // { kind: "fit", pts } | { kind: "point", latlng, zoom }
+  const framing = useRef(false);    // our own setView is running: its zoomstart isn't the user's
+  const frame = useCallback((f) => {
+    const map = mapRef.current;
+    if (!map) return;
+    framing.current = true;
+    try { if (f.kind === "fit") fitProperty(map, f.pts); else centerVisible(map, f.latlng, f.zoom); }
+    finally { framing.current = false; }
+    autoFrame.current = f;
+  }, []);
+  useEffect(() => {
+    const map = mapRef.current;
+    const page = map?.getContainer().closest(".map-page");
+    if (!ready || !map) return undefined;
+    const handOff = () => { autoFrame.current = null; };
+    const zoomStart = () => { if (!framing.current) handOff(); };
+    map.on("dragstart", handOff);
+    map.on("zoomstart", zoomStart);
+    let mo = null, raf = 0, last = shelfCover(map);
+    const check = () => {
+      raf = 0;
+      if (page.classList.contains("sheet-dragging")) return;   // settle first: the class goes when the drag ends
+      const cover = shelfCover(map);
+      if (Math.abs(cover - last) < 1) return;
+      last = cover;
+      if (autoFrame.current) frame(autoFrame.current);
+    };
+    if (page && typeof MutationObserver !== "undefined") {
+      mo = new MutationObserver(() => { if (!raf) raf = requestAnimationFrame(check); });
+      mo.observe(page, { attributes: true, attributeFilter: ["style", "class"] });
+    }
+    return () => {
+      map.off("dragstart", handOff); map.off("zoomstart", zoomStart);
+      if (mo) mo.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [ready, frame]);
+
   const fitted = useRef(false);
   const seenRegion = useRef(regionId);
   useEffect(() => {
@@ -816,7 +876,7 @@ const HuntMap = forwardRef(function HuntMap({
     seenRegion.current = regionId;
     fitted.current = false;
     const map = mapRef.current;
-    if (map && center && center.lat != null) map.setView([center.lat, center.lon], DEFAULT_ZOOM);
+    if (map && center && center.lat != null) frame({ kind: "point", latlng: [center.lat, center.lon], zoom: DEFAULT_ZOOM });
   }, [regionId]);
 
   useEffect(() => {
@@ -826,7 +886,7 @@ const HuntMap = forwardRef(function HuntMap({
     if (!pts.length) return undefined;
     const t = setTimeout(() => {
       if (fitted.current) return;
-      fitProperty(map, pts);
+      frame({ kind: "fit", pts });
       fitted.current = true;
     }, 300);
     return () => clearTimeout(t);
@@ -837,7 +897,7 @@ const HuntMap = forwardRef(function HuntMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || fitted.current || !center || center.lat == null) return;
-    if (!(stands.length || zones.length || corridors.length)) map.setView([center.lat, center.lon], DEFAULT_ZOOM);
+    if (!(stands.length || zones.length || corridors.length)) frame({ kind: "point", latlng: [center.lat, center.lon], zoom: DEFAULT_ZOOM });
   }, [ready, center?.lat, center?.lon]);
 
   // render zones
@@ -972,8 +1032,8 @@ const HuntMap = forwardRef(function HuntMap({
     if (editFramed.current !== key) {
       editFramed.current = key;
       fitted.current = true;   // don't let the open-on-the-property fit undo this
-      if (layer.getBounds) map.fitBounds(layer.getBounds(), { padding: [40, 40], maxZoom: 17 });
-      else map.setView([g.lat, g.lon], Math.max(map.getZoom(), 16));
+      if (layer.getBounds) { autoFrame.current = null; map.fitBounds(layer.getBounds(), { ...shelfPadding(map, 40), maxZoom: 17 }); }
+      else frame({ kind: "point", latlng: [g.lat, g.lon], zoom: Math.max(map.getZoom(), 16) });
     }
     return () => { map.removeLayer(layer); };
   }, [ready, mapEdit?.kind, mapEdit?.id, mapEdit?.rev, onMapEditChange]);
@@ -1000,7 +1060,8 @@ const HuntMap = forwardRef(function HuntMap({
       circle.on("pm:edit", emit);
       circle.on("pm:dragend", emit);
     }
-    map.fitBounds(circle.getBounds(), { padding: [40, 40] });
+    autoFrame.current = null;
+    map.fitBounds(circle.getBounds(), shelfPadding(map, 40));
     scoutDraftLayer.current = circle;
     return () => { map.removeLayer(circle); scoutDraftLayer.current = null; };
     // scoutDraft.radius_m intentionally excluded — re-running this effect on every
@@ -1564,7 +1625,7 @@ const HuntMap = forwardRef(function HuntMap({
     const m = standsMarkers.current[focusStandId];
     if (!s || !m) return;   // stands not loaded yet: runs again when they are
     fitted.current = true;
-    map.setView([s.lat, s.lon], Math.max(map.getZoom(), 16));
+    frame({ kind: "point", latlng: [s.lat, s.lon], zoom: Math.max(map.getZoom(), 16) });
     m.openPopup();
     onFocused && onFocused();
   }, [ready, focusStandId, stands]);
