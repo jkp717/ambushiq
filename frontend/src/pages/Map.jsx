@@ -879,6 +879,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           })()}>
         <div className="map-ctrl-panel">
           {/* Day strip: moving between days (the shelf's header above spells out the chosen date, time and weather) */}
+          <div className="shelf-label map-days-label">{days.length}-day forecast</div>
           <DayStrip days={days} dayIdx={dayIdx} ratings={ratings} utcOffset={utcOffset}
             onPick={(i) => { setPlaying(false); setDayIdx(i); setHourPos(morningStartIdx(days[i])); }} />
 
@@ -927,6 +928,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               // nested inside the same flex-sized column as the slider (rather than
               // spanning the full panel width on their own) so their hPct()-based
               // percentage positions keep lining up under the now-narrower slider.
+              <>
+              <div className="shelf-label map-time-label">Time</div>
               <div className="map-scrub-row">
                 <button className="icon-btn map-nav-btn map-step-btn map-scrub-back"
                   onClick={() => { setPlaying(false); setHourPos((p) => Math.max(0, p - 1)); }}
@@ -999,6 +1002,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                   {playing ? <Pause size={16} /> : <Play size={16} />}
                 </button>
               </div>
+              </>
             );
           })()}
         </div>

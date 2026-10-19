@@ -24,7 +24,7 @@ function HourlyForecast({ day, selectedIndex, onPick }) {
   if (!day) return null;
   return (
     <div className="hourly">
-      <div className="hourly-hd">Hourly forecast</div>
+      <div className="shelf-label hourly-hd">Hourly forecast</div>
       <div className="hourly-strip" ref={stripRef} role="listbox" aria-label={`Hourly forecast, ${day.label}`}>
         {day.hours.map((hr, i) => {
           const wx = hr.wx || {};
