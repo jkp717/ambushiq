@@ -146,6 +146,8 @@ def no_stands(seeded):
 def test_a_region_with_no_stands_still_gets_forecast_hours_and_an_empty_map(no_stands):
     hours = run(fc_router.list_hours(region_id=1, _=None))
     assert [d["day"] for d in hours["days"]] == DAYS
+    # every hour carries its weather for the shelf's hourly cards
+    assert all("wx" in hr and "temp_f" in hr["wx"] for d in hours["days"] for hr in d["hours"])
     conditions = run(fc_router.map_conditions(HourRankIn(time_index=7), region_id=1, _=None))
     assert conditions["stands"] == [] and conditions["ranked"] == []
     assert conditions["time"]["wind_speed"] is not None                 # the weather card still has data

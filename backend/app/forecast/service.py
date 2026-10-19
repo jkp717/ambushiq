@@ -19,7 +19,7 @@ from app.cameras.models import Camera, CameraSighting
 from app.core.database import engine
 from app.core.security import decrypt_settings_key
 from app.corridors.models import Corridor
-from app.deer_ratings.rating import phase_proximity_multipliers, rut_intensity
+from app.deer_ratings.rating import HPA_TO_INHG, phase_proximity_multipliers, rut_intensity
 from app.deer_sign.models import DeerSign
 from app.forecast import eddy as eddy_mod
 from app.forecast import scoring
@@ -281,6 +281,56 @@ _WX_TEXT = {"sun": "Sunny", "partly": "Partly cloudy", "cloud": "Cloudy",
             "drizzle": "Drizzle", "rain": "Rain", "snow": "Snow"}
 
 
+def _sky_icon(cloud: Optional[float], rain_in: float, snow_in: float, night: bool = False) -> Optional[str]:
+    """The weather icon for a day or an hour: snow, rain, drizzle by the precipitation (inches), else by
+    cloud cover (%); a clear or partly cloudy sky at night is "night" / "night-partly". None with neither."""
+    if snow_in >= 0.01:
+        return "snow"
+    if rain_in >= 0.10:
+        return "rain"
+    if rain_in >= 0.01:
+        return "drizzle"
+    if cloud is None:
+        return None
+    sky = "sun" if cloud < 25 else "partly" if cloud < 60 else "cloud"
+    return {"sun": "night", "partly": "night-partly"}.get(sky, sky) if night else sky
+
+
+PRESSURE_TREND_INHG = 0.02   # a change over 3 hours at least this big reads as rising / falling
+
+
+def hour_weather(hourly: dict, i: int, sr_h: float, ss_h: float, pressures: list) -> dict:
+    """One forecast hour for the map shelf's hourly cards: {"icon", "temp_f", "wind_mph", "wind_dir",
+    "gust_mph", "rain_in", "pressure_inhg", "pressure_change_inhg", "pressure_trend"}. `pressures` is
+    pressure_msl_series for the forecast; the trend compares the hour with 3 hours before (or the
+    earliest hour there is). Values a provider doesn't send are None."""
+    def val(name):
+        vals = hourly.get(name) or []
+        return vals[i] if i < len(vals) else None
+
+    temp_c, precip, cloud = val("temperature_2m"), val("precipitation"), val("cloud_cover")
+    rain_in = (precip or 0) / 25.4
+    hour = datetime.fromisoformat(hourly["time"][i]).hour
+    night = not (sr_h <= hour + 0.5 <= ss_h)   # the middle of the hour is before sunrise or after sunset
+    icon = _sky_icon(cloud, rain_in, rain_in if temp_c is not None and temp_c <= 0 else 0.0, night)
+
+    p_now = pressures[i] if i < len(pressures) else None
+    p_then = next((pressures[j] for j in range(max(0, i - 3), i) if pressures[j] is not None), None)
+    change = (p_now - p_then) * HPA_TO_INHG if p_now is not None and p_then is not None else None
+    trend = None if change is None else "rising" if change >= PRESSURE_TREND_INHG         else "falling" if change <= -PRESSURE_TREND_INHG else "steady"
+    rnd = lambda v, n=0: None if v is None else (round(v) if n == 0 else round(v, n))
+    return {
+        "icon": icon,
+        "temp_f": rnd(temp_c * 9 / 5 + 32) if temp_c is not None else None,
+        "wind_mph": rnd(val("wind_speed_10m")), "wind_dir": rnd(val("wind_direction_10m")),
+        "gust_mph": rnd(val("wind_gusts_10m")),
+        "rain_in": round(rain_in, 2) if precip is not None else None,
+        "pressure_inhg": round(p_now * HPA_TO_INHG, 2) if p_now is not None else None,
+        "pressure_change_inhg": round(change, 3) if change is not None else None,
+        "pressure_trend": trend,
+    }
+
+
 def day_weather(hourly: dict, idxs: list[int], sr_h: float, ss_h: float) -> dict:
     """One forecast day summed up for its weather icon on the map's day strip:
     {"icon": sun|partly|cloud|drizzle|rain|snow or None, "text", "high_f", "low_f", "rain_in"}.
@@ -302,16 +352,7 @@ def day_weather(hourly: dict, idxs: list[int], sr_h: float, ss_h: float) -> dict
     rain_in = rain_mm / 25.4
     cloud = sum(clouds) / len(clouds) if clouds else None
 
-    if precip and snow_mm / 25.4 >= 0.01:
-        icon = "snow"
-    elif precip and rain_in >= 0.10:
-        icon = "rain"
-    elif precip and rain_in >= 0.01:
-        icon = "drizzle"
-    elif cloud is not None:
-        icon = "sun" if cloud < 25 else "partly" if cloud < 60 else "cloud"
-    else:
-        icon = None
+    icon = _sky_icon(cloud, rain_in, snow_mm / 25.4)
 
     high_f = round(max(v for _, v in temps) * 9 / 5 + 32) if temps else None
     low_f = round(min(v for _, v in temps) * 9 / 5 + 32) if temps else None
@@ -808,7 +849,6 @@ async def get_historical_day_weather(lat: float, lon: float, d: date) -> Optiona
     if hit:
         return cached  # type: ignore[return-value]
 
-    HPA_TO_INHG = 0.02953  # matches app/deer_ratings/rating.py's own constant
     url = (
         "https://archive-api.open-meteo.com/v1/archive"
         f"?latitude={lat}&longitude={lon}&start_date={d.isoformat()}&end_date={d.isoformat()}"

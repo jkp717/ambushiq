@@ -22,6 +22,8 @@ from app.forecast.schemas import DayRankIn, HourRankIn
 from app.forecast.service import (
     _temp_swing_rolling,
     day_weather,
+    hour_weather,
+    pressure_msl_series,
     build_scoring_context,
     format_day_label,
     format_hour_label,
@@ -201,6 +203,7 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
             "sunset": sun["sunset"][i][11:16],
             "source": source[i] if i < len(source) else "",
         }
+    pressures = pressure_msl_series(fc["hourly"], fc.get("elevation"))
     days = {}
     for idx, tstr in enumerate(times):
         day = tstr[:10]
@@ -209,8 +212,11 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
                               **sun_by_day.get(day, {"sunrise_h": 6.5, "sunset_h": 19, "sunrise": "", "sunset": "", "source": ""}),
                               "hours": []})
         dt = datetime.fromisoformat(tstr)
+        sun = days[day]
         days[day]["hours"].append({"index": idx, "hour": dt.hour,
-                                   "label": format_hour_label(dt)})
+                                   "label": format_hour_label(dt),
+                                   # the shelf's hourly forecast cards
+                                   "wx": hour_weather(fc["hourly"], idx, sun["sunrise_h"], sun["sunset_h"], pressures)})
     settings = get_settings()
     for dd in days.values():   # the day strip's weather icon, and the sit windows (local hours, inclusive)
         dd["wx"] = day_weather(fc["hourly"], [hr["index"] for hr in dd["hours"]], dd["sunrise_h"], dd["sunset_h"])

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save,
-         Sun, CloudSun, Cloud, CloudDrizzle, CloudRain, CloudSnow } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -15,6 +14,8 @@ import LayerChip from "../components/ui/LayerChip.jsx";
 import BottomSheet from "../components/ui/BottomSheet.jsx";
 import LocationEdgeIndicator from "../components/LocationEdgeIndicator.jsx";
 import HuntMap from "../components/HuntMap.jsx";
+import HourlyForecast from "../components/HourlyForecast.jsx";
+import { WX_ICONS } from "../utils/wxIcons.js";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
@@ -28,7 +29,6 @@ const clock12 = (hhmm) => {
   return `${h % 12 || 12}:${String(m).padStart(2, "0")}`;
 };
 
-const WX_ICONS = { sun: Sun, partly: CloudSun, cloud: Cloud, drizzle: CloudDrizzle, rain: CloudRain, snow: CloudSnow };
 
 /* The time panel's day picker: one chip per forecast day with its weekday, date, weather icon and deer
    movement score (colored like the Outlook). The bottom-sheet tab is the one place the chosen date and
@@ -227,7 +227,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [hoursSettled, setHoursSettled] = useState(false);
   const [firstSlotDone, setFirstSlotDone] = useState(false);
   const foregroundTick = useForegroundRefresh();
-  const [timeOpen, setTimeOpen] = useState(true);   // bottom time shelf: open by default (closed still shows the date/time)
+  // bottom time shelf: "open" by default; "expanded" (pulled up) adds the hourly forecast, "closed" still shows the date/time
+  const [timeStop, setTimeStop] = useState("open");
   const [ratings, setRatings] = useState(null);      // day -> deer movement rating, for the day strip
   const huntMapRef = useRef(null);
   const [showOfflinePanel, setShowOfflinePanel] = useState(false);
@@ -812,7 +813,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           dragged up (or tapped); the sheet is absolutely positioned over the map, so it takes no
           layout space. ── */}
       {days.length > 0 && (
-        <BottomSheet open={timeOpen} onOpenChange={setTimeOpen} label="time controls"
+        <BottomSheet stop={timeStop} onStopChange={setTimeStop} label="time controls"
+          extra={<HourlyForecast day={curDay} selectedIndex={curHour?.index}
+                   onPick={(i) => { setPlaying(false); setHourPos(i * 4); }} />}
           header={(() => {
             const h = curHour?.hour ?? 0, ampm = h >= 12 ? "PM" : "AM";
             const time = curHour ? `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}` : "";

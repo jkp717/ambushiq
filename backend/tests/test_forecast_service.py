@@ -249,3 +249,45 @@ def test_day_weather_text_is_imperial():
 def test_day_weather_without_data_has_no_icon():
     wx = _wx_day()
     assert wx["icon"] is None and wx["text"] == "" and wx["rain_in"] is None
+
+
+# ---------- hour_weather: the map shelf's hourly cards ----------
+
+def _wx_hour(i=12, sr=7.0, ss=18.5, pressures=None, **series):
+    times = [f"2026-10-14T{h:02d}:00" for h in range(24)]
+    hourly = {"time": times}
+    for name, v in series.items():
+        hourly[name] = v if isinstance(v, list) else [v] * 24
+    return service.hour_weather(hourly, i, sr, ss, pressures or [None] * 24)
+
+
+def test_hour_weather_icons_match_the_day_thresholds_and_go_dark_at_night():
+    assert _wx_hour(cloud_cover=10, precipitation=0.0, temperature_2m=15)["icon"] == "sun"
+    assert _wx_hour(cloud_cover=40, precipitation=0.0, temperature_2m=15)["icon"] == "partly"
+    assert _wx_hour(cloud_cover=90, precipitation=0.5, temperature_2m=15)["icon"] == "drizzle"   # 0.02 in
+    assert _wx_hour(cloud_cover=90, precipitation=3.0, temperature_2m=15)["icon"] == "rain"      # 0.12 in
+    assert _wx_hour(cloud_cover=90, precipitation=0.5, temperature_2m=-1)["icon"] == "snow"
+    assert _wx_hour(i=22, cloud_cover=10, precipitation=0.0)["icon"] == "night"
+    assert _wx_hour(i=5, cloud_cover=40, precipitation=0.0)["icon"] == "night-partly"
+    assert _wx_hour(i=22, cloud_cover=90, precipitation=0.0)["icon"] == "cloud"
+
+
+def test_hour_weather_values_are_imperial():
+    wx = _wx_hour(temperature_2m=10.0, wind_speed_10m=6.6, wind_direction_10m=212.4, wind_gusts_10m=14.2,
+                  precipitation=1.27, cloud_cover=50)
+    assert (wx["temp_f"], wx["wind_mph"], wx["wind_dir"], wx["gust_mph"], wx["rain_in"]) == (50, 7, 212, 14, 0.05)
+
+
+def test_hour_weather_pressure_trend_over_three_hours():
+    rising = [1010.0 + h * 0.5 for h in range(24)]          # +1.5 hPa / 3 h ≈ +0.044 inHg
+    falling = [1020.0 - h * 0.5 for h in range(24)]
+    steady = [1015.0 + (h % 2) * 0.2 for h in range(24)]
+    assert _wx_hour(pressures=rising)["pressure_trend"] == "rising"
+    assert _wx_hour(pressures=falling)["pressure_trend"] == "falling"
+    assert _wx_hour(pressures=steady)["pressure_trend"] == "steady"
+    assert _wx_hour(pressures=rising)["pressure_inhg"] == round(1016.0 * service.HPA_TO_INHG, 2)
+
+
+def test_hour_weather_without_data_is_all_none():
+    wx = _wx_hour()
+    assert all(v is None for v in wx.values())
