@@ -640,7 +640,21 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 /* multi-select mode on: solid (no transparency), same amber as selected map items */
 .layer-toggle-btn.on, .layer-toggle-btn.on:hover { background: #F5A300; color: #1a1a1a; backdrop-filter: none; }
 /* device-location button: on = solid Google blue (matches the blue dot); blinks until the first GPS fix */
-.layer-toggle-btn.on.loc, .layer-toggle-btn.on.loc:hover { background: #1A73E8; color: #fff; }
+.layer-toggle-btn.on.loc, .layer-toggle-btn.on.loc:hover,
+.layer-toggle-btn.on.ruler, .layer-toggle-btn.on.ruler:hover { background: #1A73E8; color: #fff; }
+.layer-toggle-btn:disabled { opacity: .45; cursor: default; }
+/* ruler mode's distance label (HuntMap.jsx): a dark pill on the line's midpoint, readable on any base map */
+.leaflet-tooltip.map-ruler-label {
+  background: rgba(20, 20, 20, .85); color: #fff; border: none; border-radius: 10px;
+  padding: 2px 8px; font-size: 12.5px; font-weight: 700; box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.leaflet-tooltip.map-ruler-label::before { display: none; }
+/* a ruler point: a 12 px dot in a larger, invisible touch target that can be dragged */
+.map-ruler-pt { display: flex; align-items: center; justify-content: center; cursor: grab; }
+.map-ruler-pt:active { cursor: grabbing; }
+.map-ruler-pt span { width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%;
+                     background: #1a1a1a; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
 .layer-toggle-btn.locating svg { animation: loc-blink 1s ease-in-out infinite; }
 @keyframes loc-blink { 50% { opacity: .35; } }
 

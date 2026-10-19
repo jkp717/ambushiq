@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save } from "lucide-react";
+import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -183,6 +183,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   // "Edit on map": { kind, id, name, record, geom, orig, rev } (see editGeom). `rev` changes only when the
   // geometry is set from outside the edit layer (entering, a map tap), so drags don't rebuild it mid-gesture.
   const [mapEdit, setMapEdit] = useState(null);
+  // Ruler mode (drawMode "ruler"): { a: {lat, lon}, b: {lat, lon} | null }. Never saved; gone when the mode ends.
+  const [ruler, setRuler] = useState(null);
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
@@ -566,6 +568,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       setDrawMode(null);
     } else if (drawMode === "scout" && !scoutDraft) {
       setScoutDraft({ lat: pt.lat, lon: pt.lon, radius_m: scoutSettings.scout_radius_default_m });
+    } else if (drawMode === "ruler") {
+      // the first tap (or the next tap after a finished measurement) starts one; the second finishes it
+      setRuler((r) => (!r || r.b ? { a: pt, b: null } : { ...r, b: pt }));
     } else if (drawMode === "edit" && mapEdit) {
       // a tap moves a point (or a zone's center) there, or adds a point to the end of a corridor
       setMapEdit((e) => ({ ...e, rev: e.rev + 1, geom: e.kind === "corridor"
@@ -700,6 +705,13 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const canDeactivate = selectedFeatures.some((f) => f.active);
 
   const exitSelect = useCallback(() => { setSelectMode(false); setBoxTool(false); setSelectedKeys(new Set()); }, []);
+  useEffect(() => { if (drawMode !== "ruler") setRuler(null); }, [drawMode]);
+  const rulerYd = ruler?.b ? fmtYd(distanceM(ruler.a.lat, ruler.a.lon, ruler.b.lat, ruler.b.lon)) : null;
+  function toggleRuler() {
+    if (drawMode === "ruler") { setDrawMode(null); return; }
+    if (selectMode) exitSelect();
+    setDrawMode("ruler");
+  }
   function toggleSelectMode() { if (selectMode) exitSelect(); else { cancelDraw(); setSelectMode(true); } }
   const toggleSelected = useCallback((key) => setSelectedKeys((prev) => {
     const next = new Set(prev);
@@ -1010,6 +1022,15 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           {drawMode === "scout" && !scoutDraft && "Click the map to drop the scouting-analysis area."}
           {drawMode === "scout" && scoutDraft && `Drag the circle's edge to resize (${fmtDist(scoutDraft.radius_m)}).`}
           {drawMode === "scout" && scoutDraft && <button className="btn" style={{ marginLeft: 8 }} onClick={confirmScoutArea} disabled={scoutAnalyzing}>Scout this area</button>}
+          {drawMode === "ruler" && (!ruler ? "Tap two points to measure."
+            : !ruler.b ? "Tap the second point, or drag one out from the first."
+            : <span><strong>{rulerYd}</strong> · drag an end to adjust, or tap to start a new measurement.</span>)}
+          {drawMode === "ruler" && locationOn && geo.status === "active" && userLocation && (
+            <button className="btn" style={{ marginLeft: 8 }}
+                    onClick={() => setRuler({ a: { lat: userLocation.lat, lon: userLocation.lon }, b: null })}>
+              <Navigation2 size={13} /> From me
+            </button>
+          )}
           {drawMode === "edit" && mapEdit && editHint(mapEdit)}
           {drawMode === "edit" && mapEdit && <button className="btn btn-primary" style={{ marginLeft: 8 }} onClick={saveMapEdit} disabled={!mapEditDirty}><Save size={13} /> Save</button>}
           <button className="btn" style={{ marginLeft: 8 }} onClick={cancelDraw}>Cancel</button>
@@ -1039,7 +1060,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign}
             suggestions={suggestions} conditions={conditions} drainage={drainage}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
-            mapEdit={mapEdit} onMapEditChange={onMapEditChange}
+            mapEdit={mapEdit} onMapEditChange={onMapEditChange} ruler={ruler} onRulerChange={setRuler}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
             onDismissSuggestion={onDismissSuggestion} onSuggestionColor={onSuggestionColor}
@@ -1143,6 +1164,11 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
             aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
             <BoxSelect size={16} />
+          </button>
+          <button className={"layer-toggle-btn ruler" + (drawMode === "ruler" ? " on" : "")} onClick={toggleRuler}
+            disabled={!!drawMode && drawMode !== "ruler"} aria-pressed={drawMode === "ruler"}
+            title={drawMode === "ruler" ? "Stop measuring" : "Measure distance"}>
+            <Ruler size={16} />
           </button>
           <button className={"layer-toggle-btn loc" + (locationOn ? " on" : "") + (locationOn && geo.status === "locating" ? " locating" : "")}
             onClick={toggleLocation} aria-pressed={locationOn}

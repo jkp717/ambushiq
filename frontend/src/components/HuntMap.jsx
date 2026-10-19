@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { RefreshCw, ZoomIn } from "lucide-react";
 import { TILE_SOURCES, MAP_MAX_ZOOM, RENAMED_BASES, resolveUrl } from "../utils/tileSources.js";
-import { clamp } from "../utils/geo.js";
+import { clamp, distanceM } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
 import { standColor, pinFg, standGlyph } from "../utils/standStyle.js";
 import { api } from "../services/api.js";
@@ -566,7 +566,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
 
 const HuntMap = forwardRef(function HuntMap({
   stands, zones, corridors, sign, suggestions, conditions, drainage = null,
-  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange,
+  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange, ruler = null, onRulerChange,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion,
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
@@ -663,7 +663,7 @@ const HuntMap = forwardRef(function HuntMap({
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers; "lee" shading sits below both
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "ruler", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       // Open straight onto the property when its features are already known, instead of loading a
@@ -1548,6 +1548,8 @@ const HuntMap = forwardRef(function HuntMap({
       }
     });
 
+    // In a draw mode (placing a feature, the ruler, editing on the map) a tap on a stand goes to the map.
+    const passThrough = (m) => { const el = m.getElement(); if (el) el.style.pointerEvents = drawMode ? "none" : ""; };
     stands.forEach((s) => {
       if (isEditing(["stand"], s.id)) {   // drawn by the edit layer; recreated here when editing ends
         if (standsMarkers.current[s.id]) { g.removeLayer(standsMarkers.current[s.id]); delete standsMarkers.current[s.id]; }
@@ -1584,16 +1586,19 @@ const HuntMap = forwardRef(function HuntMap({
         const m = standsMarkers.current[s.id];
         m.setIcon(icon);
         // removed the !m.isPopupOpen() check here so it always updates the stored HTML
-        if (selectMode) {
-          m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection instead
-        } else if (!drawMode) {
+        if (selectMode || drawMode) {
+          m.closePopup(); m.unbindPopup();   // select mode: a tap toggles selection; draw modes: it reaches the map
+        } else {
           bindFeaturePopup(m, {
             title: s.name, note, position: { lat: s.lat, lon: s.lon }, kind: "stand", id: s.id, onEdit: onEditFeature, onDelete: onDeleteFeature, sl, onToggleStandLayer, standActions,
             rows, pinColor: standColor(s)
           });
         }
+        passThrough(m);
       } else {
-        const m = L.marker([s.lat, s.lon], { icon, interactive: !drawMode });
+        // always interactive (a marker's interactivity is fixed when it's made); passThrough lets taps
+        // reach the map instead while a draw mode is on
+        const m = L.marker([s.lat, s.lon], { icon });
         // Markers are reused across renders, so the toggle handler is registered once and reads
         // the live select-mode state from a ref.
         m.on("click", (e) => {
@@ -1610,6 +1615,7 @@ const HuntMap = forwardRef(function HuntMap({
           });
         }
         m.addTo(g);
+        passThrough(m);
         standsMarkers.current[s.id] = m;
       }
     });
@@ -1640,6 +1646,66 @@ const HuntMap = forwardRef(function HuntMap({
       L.polyline(draftPoints.map((p) => [p.lat, p.lon]), { color: COLORS.deer, weight: 2, dashArray: "4 4" }).addTo(g);
     }
   }, [draftPoints, ready]);
+
+  // Ruler mode: the measured points, a dotted line between them and its length in yards. Nothing is saved.
+  // The points can be dragged (a finger or the mouse): before there's a second point, dragging the first
+  // pulls a line out of it to wherever it's let go (the end point); once both are down, dragging either end
+  // moves it. The line and label follow the drag live, written straight into Leaflet so it doesn't
+  // re-render; the new points go back through onRulerChange when the drag ends. After the first point a
+  // mouse (not touch) also gets a live line to the pointer.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const g = layerGroups.current.ruler; g.clearLayers();
+    if (!ruler?.a) return undefined;
+    const ll = (p) => [p.lat, p.lon];
+    const toPt = (latlng) => ({ lat: latlng.lat, lon: latlng.lng });
+    // a 28 px touch target around the visible 12 px dot
+    const dotIcon = L.divIcon({ className: "map-ruler-pt", iconSize: [28, 28], iconAnchor: [14, 14], html: "<span></span>" });
+    const handle = (p) => L.marker(ll(p), { icon: dotIcon, draggable: true, keyboard: false, zIndexOffset: 1000 }).addTo(g);
+    const fixedDot = (p) => L.circleMarker(ll(p), { radius: 5, color: "#fff", weight: 2, fillColor: "#1a1a1a", fillOpacity: 1, interactive: false }).addTo(g);
+    let line = null;
+    const draw = (from, to) => {
+      const pts = [ll(from), ll(to)];
+      const mid = [(from.lat + to.lat) / 2, (from.lon + to.lon) / 2];
+      const text = fmtYd(distanceM(from.lat, from.lon, to.lat, to.lon));
+      if (line) {
+        line.casing.setLatLngs(pts); line.dots.setLatLngs(pts); line.label.setLatLng(mid).setContent(text);
+        return;
+      }
+      line = {
+        casing: L.polyline(pts, { color: "#fff", weight: 5, opacity: 0.75, interactive: false }).addTo(g),
+        dots: L.polyline(pts, { color: "#1a1a1a", weight: 3, dashArray: "2 8", lineCap: "round", interactive: false }).addTo(g),
+        label: L.tooltip({ permanent: true, direction: "center", className: "map-ruler-label", interactive: false })
+          .setLatLng(mid).setContent(text),
+      };
+      g.addLayer(line.label);
+    };
+    const done = (next) => onRulerChange && onRulerChange(next);
+
+    if (ruler.b) {
+      const a = handle(ruler.a), b = handle(ruler.b);
+      draw(ruler.a, ruler.b);
+      const live = () => draw(toPt(a.getLatLng()), toPt(b.getLatLng()));
+      [a, b].forEach((m) => { m.on("drag", live); m.on("dragend", () => done({ a: toPt(a.getLatLng()), b: toPt(b.getLatLng()) })); });
+      return undefined;
+    }
+
+    // one point: dragging it pulls out the measurement, the point itself stays put
+    fixedDot(ruler.a);
+    const pull = handle(ruler.a);
+    let dragging = false;
+    pull.on("dragstart", () => { dragging = true; });
+    pull.on("drag", () => draw(ruler.a, toPt(pull.getLatLng())));
+    pull.on("dragend", () => done({ a: ruler.a, b: toPt(pull.getLatLng()) }));
+    const el = map.getContainer();
+    const onMove = (e) => {
+      if (e.pointerType !== "mouse" || dragging) return;
+      draw(ruler.a, toPt(map.mouseEventToLatLng(e)));
+    };
+    el.addEventListener("pointermove", onMove);
+    return () => el.removeEventListener("pointermove", onMove);
+  }, [ready, ruler, onRulerChange]);
 
   // render the property-wide cold-air drainage layer (flow accumulation over the region's terrain grid,
   // drawn over every stand plus the "drainage map margin" setting; levels 1-9, log-scaled)
