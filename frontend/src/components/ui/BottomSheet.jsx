@@ -2,12 +2,19 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 const TAP_SLOP_PX = 5;      // movement below this is a tap, not a drag
 const FLICK_PX_PER_MS = 0.4; // release speed that overrides the halfway rule
+// Rubber band past either stop: the first pixels follow the finger almost 1:1, then it stiffens and never
+// stretches further than RUBBER_MAX_PX (the curve iOS uses). Let go and it springs back with a small bounce.
+const RUBBER_MAX_PX = 60;
+const rubber = (x) => RUBBER_MAX_PX * (1 - 1 / ((x * 0.55) / RUBBER_MAX_PX + 1));
+const SPRING_BACK = "transform .38s cubic-bezier(.3, 1.35, .5, 1)";
+const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /*
   Bottom shelf: a full-width sheet with a grab handle and a one-line header (`header`) on top of its
   panel (`children`). Dragging the header down closes it: the sheet slides down until only the header
   is left showing, and it can never be dragged further than that, so the header (on the map: the chosen
-  date and time) is always on screen. Dragging it up or tapping the header opens it again. Touch and
+  date and time) is always on screen. Dragging it up or tapping the header opens it again. Past either
+  stop it gives a little with growing resistance (a rubber band) and springs back on release. Touch and
   mouse share the same pointer events; only the header drags, so swipes and sliders in the panel keep
   working.
 
@@ -24,6 +31,7 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
   const panelRef = useRef(null);
   const safeRef = useRef(null);
   const drag = useRef(null);
+  const spring = useRef(null);   // ends a spring-back still running (a new drag cancels it)
 
   // Where the sheet rests, as a downward offset from fully open. Closed leaves the header showing, held
   // above the bottom safe area (--sheet-closed-gap: a phone's home indicator). A later "expanded" stop (an
@@ -63,9 +71,25 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
     if (parent) { parent.style.removeProperty("--sheet-lift"); parent.classList.remove("sheet-dragging"); }
   }, []);
 
-  const endDrag = (settleOpen) => {
+  // `stretched`: let go while rubber-banding past a stop, so it springs back with a bounce
+  const endDrag = (settleOpen, stretched = false) => {
     const sheet = sheetRef.current;
-    sheet.style.transition = "";
+    if (stretched && !reducedMotion()) {
+      sheet.style.transition = SPRING_BACK;
+      let timer = 0;
+      const clear = (e) => {
+        if (e && e.type === "transitionend" && (e.target !== sheet || e.propertyName !== "transform")) return;
+        clearTimeout(timer);
+        sheet.removeEventListener("transitionend", clear);
+        spring.current = null;
+        sheet.style.transition = "";
+      };
+      sheet.addEventListener("transitionend", clear);
+      timer = setTimeout(clear, 500);   // in case transitionend never fires
+      spring.current = clear;
+    } else {
+      sheet.style.transition = "";
+    }
     sheet.style.transform = "";
     if (panelRef.current) panelRef.current.style.opacity = "";   // back to the open/closed CSS (which fades)
     sheet.classList.remove("dragging");
@@ -93,13 +117,18 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
     if (!d.moved) {
       if (Math.abs(dy) < TAP_SLOP_PX) return;
       d.moved = true;
+      spring.current?.();
       const sheet = sheetRef.current;
       sheet.style.transition = "none";
       sheet.classList.add("dragging");
       sheet.parentElement?.classList.add("sheet-dragging");
     }
-    d.t = Math.max(0, Math.min(d.closed, d.startT + dy));   // never past open, never below the header
-    sheetRef.current.style.transform = `translateY(${d.t}px)`;
+    const raw = d.startT + dy;
+    d.t = Math.max(0, Math.min(d.closed, raw));   // where it counts as being: never past open, never below the header
+    // where it's drawn: past either stop it stretches a little with resistance
+    const vis = raw < 0 ? -rubber(-raw) : raw > d.closed ? d.closed + rubber(raw - d.closed) : raw;
+    d.over = vis !== d.t;
+    sheetRef.current.style.transform = `translateY(${vis}px)`;
     // the panel fades in as it comes up (and out as it goes down) instead of popping in
     if (panelRef.current) panelRef.current.style.opacity = String(d.closed > 0 ? 1 - d.t / d.closed : 1);
     setLift(d.height - d.t);
@@ -115,13 +144,13 @@ function BottomSheet({ open, onOpenChange, header, label = "controls", children 
     drag.current = null;
     if (!d.moved) { onOpenChange(!open); return; }                     // a tap
     const settleOpen = Math.abs(d.velocity) > FLICK_PX_PER_MS ? d.velocity < 0 : d.t < d.closed / 2;
-    endDrag(settleOpen);
+    endDrag(settleOpen, d.over);
   };
 
   const onPointerCancel = () => {
     const d = drag.current;
     drag.current = null;
-    if (d && d.moved) endDrag(open);
+    if (d && d.moved) endDrag(open, d.over);
   };
 
   // Keyboard activation only: a pointer tap is already handled in onPointerUp (click.detail is 0

@@ -347,6 +347,10 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
    (BottomSheet.jsx reads the gap from its probe element and mirrors this distance; it writes
    --sheet-header-h). */
 .bottom-sheet { --sheet-closed-gap: env(safe-area-inset-bottom, 0px); }
+/* Rubber-banding up past fully open lifts the sheet's bottom edge: this fill below it keeps the map from
+   showing through the gap (it sits off-screen at rest). */
+.bottom-sheet::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 80px;
+                       background: var(--bg); pointer-events: none; }
 .bottom-sheet.is-closed {
   transform: translateY(calc(100% - var(--sheet-header-h, 40px) - var(--sheet-closed-gap)));
 }
