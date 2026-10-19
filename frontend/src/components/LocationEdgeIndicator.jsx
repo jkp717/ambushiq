@@ -6,7 +6,7 @@ import { placeEdgeArrow } from "../utils/edgeIndicator.js";
 // or close are respected). The bottom time shelf is handled separately: its visible height (--sheet-lift,
 // which includes its always-showing header) is taken off the bottom of the map.
 const OBSTACLES = [
-  ".layer-overlay", ".map-weather-card", ".map-scout-progress", ".map-add-btn",
+  ".layer-overlay", ".map-right-stack", ".map-scout-progress", ".map-add-btn",
   ".leaflet-control-zoom", ".leaflet-control-layers",
 ].join(",");
 

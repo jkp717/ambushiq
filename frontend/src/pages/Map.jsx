@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler } from "lucide-react";
+import { Wind, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -1076,9 +1076,30 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             height="100%" />
         </div>
         <div className="layer-overlay">
-          <button className="layer-toggle-btn" onClick={() => setLayersOpen(o => !o)} title="Map layers">
-            <Plus size={16} />
+          <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
+            <Download size={16} />
           </button>
+          <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
+            aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
+            <BoxSelect size={16} />
+          </button>
+          <button className={"layer-toggle-btn ruler" + (drawMode === "ruler" ? " on" : "")} onClick={toggleRuler}
+            disabled={!!drawMode && drawMode !== "ruler"} aria-pressed={drawMode === "ruler"}
+            title={drawMode === "ruler" ? "Stop measuring" : "Measure distance"}>
+            <Ruler size={16} />
+          </button>
+          <button className={"layer-toggle-btn loc" + (locationOn ? " on" : "") + (locationOn && geo.status === "locating" ? " locating" : "")}
+            onClick={toggleLocation} aria-pressed={locationOn}
+            title={locationOn ? "Hide my location" : "Show my location"}>
+            <Navigation2 size={16} fill={locationOn ? "currentColor" : "none"} />
+          </button>
+        </div>
+        <LocationEdgeIndicator getMap={() => huntMapRef.current?.getMap?.() ?? null} location={userLocation} />
+        <div className="map-add-btn">
+          <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
+        </div>
+        {/* bottom right: the map layers button (its panel opens upward from it) right above the weather card */}
+        <div className="map-right-stack">
           {layersOpen && (
             <div className="layer-chips-panel">
               <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
@@ -1158,37 +1179,20 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               )}
             </div>
           )}
-          <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
-            <Download size={16} />
+          <button className={"layer-toggle-btn" + (layersOpen ? " open" : "")} onClick={() => setLayersOpen(o => !o)}
+            aria-expanded={layersOpen} title="Map layers">
+            <List size={16} />
           </button>
-          <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
-            aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
-            <BoxSelect size={16} />
-          </button>
-          <button className={"layer-toggle-btn ruler" + (drawMode === "ruler" ? " on" : "")} onClick={toggleRuler}
-            disabled={!!drawMode && drawMode !== "ruler"} aria-pressed={drawMode === "ruler"}
-            title={drawMode === "ruler" ? "Stop measuring" : "Measure distance"}>
-            <Ruler size={16} />
-          </button>
-          <button className={"layer-toggle-btn loc" + (locationOn ? " on" : "") + (locationOn && geo.status === "locating" ? " locating" : "")}
-            onClick={toggleLocation} aria-pressed={locationOn}
-            title={locationOn ? "Hide my location" : "Show my location"}>
-            <Navigation2 size={16} fill={locationOn ? "currentColor" : "none"} />
-          </button>
+          {conditions && (
+            <div className="map-weather-card">
+              <span className="map-wpill">☁ {conditions.time.cloud}%</span>
+              <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
+              {conditions.time.wind_speed != null && (
+                <span className="map-wpill"><Wind size={11} /> {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
+              )}
+            </div>
+          )}
         </div>
-        <LocationEdgeIndicator getMap={() => huntMapRef.current?.getMap?.() ?? null} location={userLocation} />
-        <div className="map-add-btn">
-          <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
-        </div>
-        {conditions && (
-          <div className="map-weather-card">
-            <span className="map-wpill">☁ {conditions.time.cloud}%</span>
-            <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
-            {conditions.time.wind_speed != null && (
-              <span className="map-wpill"><Wind size={11} /> {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
-            )}
-          </div>
-        )}
         {scoutAnalyzing && (
           <div className="map-scout-progress">
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--sub)", marginBottom: 4 }}>
