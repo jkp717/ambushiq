@@ -45,6 +45,14 @@ def test_only_morning_and_evening_are_checked():
     assert hunt.day_conditions(_hourly(dirs), DAY, 6.75, 17.08, [], {}, SETTINGS) == {}
 
 
+def test_sit_window_settings_decide_which_hours_are_checked():
+    dirs = [200.0] * 24
+    dirs[12], dirs[13] = 20.0, 200.0   # swings at midday by default...
+    long_morning = {**SETTINGS, "sit_morning_after_sunrise_h": 7.0}   # ...inside a morning running to 13:59
+    out = hunt.day_conditions(_hourly(dirs), DAY, 6.75, 17.08, [], {}, long_morning)
+    assert out["morning"]["swirl"]["swings"] >= 2
+
+
 def test_morning_swirl_is_flagged_with_its_directions():
     dirs = [200.0] * 24
     dirs[6], dirs[7], dirs[8] = 315.0, 135.0, 270.0   # morning window is 5-9 for a 6:45 sunrise

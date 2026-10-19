@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch, Gauge } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch, Gauge, Sunrise } from "lucide-react";
 import { api } from "../services/api.js";
 import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -10,6 +10,7 @@ import InfoTip from "../components/ui/InfoTip.jsx";
 import JobsPanel from "../components/JobsPanel.jsx";
 import BuckModelSection from "../components/cameras/BuckModelSection.jsx";
 import { mToYd, ydToM, fmtYd, fmtDist } from "../utils/units.js";
+import { SIT_DEFAULTS, sitWindows } from "../utils/periods.js";
 
 // The page's sections, in order — the nav menu lists these and each header carries the matching id.
 const SECTIONS = [
@@ -17,6 +18,7 @@ const SECTIONS = [
   { id: "map-layers", label: "Map layers", icon: MapIcon },
   { id: "proximity", label: "Proximity weights", icon: Target },
   { id: "daily-rating", label: "Daily rating", icon: Gauge },
+  { id: "sit-windows", label: "Sit windows", icon: Sunrise },
   { id: "thermal", label: "Thermal model", icon: Thermometer },
   { id: "cameras", label: "Trail cameras", icon: Camera },
   { id: "model", label: "Model training", icon: ScanSearch },
@@ -25,6 +27,22 @@ const SECTIONS = [
   { id: "install", label: "Install app", icon: Download },
 ];
 const sectionEl = (id) => document.getElementById(`settings-${id}`);
+
+// Sit windows: the four offsets (hours) and the sample day the preview line works them out for.
+const SIT_SLIDERS = [
+  { key: "sit_morning_before_sunrise_h", label: "Morning starts", side: "before sunrise" },
+  { key: "sit_morning_after_sunrise_h",  label: "Morning ends",   side: "after sunrise" },
+  { key: "sit_evening_before_sunset_h",  label: "Evening starts", side: "before sunset" },
+  { key: "sit_evening_after_sunset_h",   label: "Evening ends",   side: "after sunset" },
+];
+const SAMPLE_SUNRISE_H = 7, SAMPLE_SUNSET_H = 17.5;
+const fmtHrs = (h) => {
+  const m = Math.round(h * 60), hr = Math.floor(m / 60), min = m % 60;
+  return [hr && `${hr} hr`, (min || !hr) && `${min} min`].filter(Boolean).join(" ");
+};
+const clock = (h, m = 0) => `${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 || h === 24 ? "AM" : "PM"}`;
+// "6:00 AM – 10:59 AM" for the inclusive whole hours lo..hi, or "none" when the window is empty
+const sitRange = ([lo, hi]) => (lo > hi ? "none" : `${clock(lo)} – ${clock(hi, 59)}`);
 
 function SectionTitle({ id, icon: Icon, children }) {
   return (
@@ -84,6 +102,7 @@ function SettingsPage({ reloadStands }) {
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80, scent_gate_floor: 0.4, rut_weight_strength: 1.0 }); }
   function resetRating() { setS({ ...s, rate_rut_impact: 0.65, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
+  function resetSits() { setS({ ...s, ...SIT_DEFAULTS }); }
   function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3, drainage_margin_m: 457.2 }); }
   function resetScouting() {
     setS({ ...s,
@@ -280,6 +299,36 @@ function SettingsPage({ reloadStands }) {
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
         <button className="btn" onClick={resetRating}>Reset rating weights</button>
+      </div>
+
+      {/* ── Sit windows ── */}
+      <SectionTitle id="sit-windows" icon={Sunrise}>Sit windows</SectionTitle>
+      <p className="settings-desc">
+        When the morning and evening sits run, in hours either side of each day's sunrise and sunset, so they
+        follow the season. Midday is whatever lies between. These windows decide which hours the hunt-condition
+        flags check, which stand wins the day's morning, midday and evening, and which trail-camera photos count
+        toward each.
+      </p>
+      <div className="settings-section">
+        {SIT_SLIDERS.map(({ key, label, side }) => (
+          <SliderRow key={key} label={label} min={0} max={4} step={0.25}
+            value={s[key] ?? SIT_DEFAULTS[key]}
+            display={`${fmtHrs(s[key] ?? SIT_DEFAULTS[key])} ${side}`}
+            onChange={(v) => setS({ ...s, [key]: v })} />
+        ))}
+        {(() => {
+          const w = sitWindows(SAMPLE_SUNRISE_H, SAMPLE_SUNSET_H, s);
+          return (
+            <p className="settings-desc" style={{ margin: "4px 0 0" }}>
+              With a {clock(7)} sunrise and {clock(17, 30)} sunset: morning {sitRange(w.morning)}, midday {sitRange(w.midday)},
+              evening {sitRange(w.evening)}. Sits are whole hours: a window that reaches into an hour includes all of it.
+            </p>
+          );
+        })()}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+        <button className="btn" onClick={resetSits}>Reset sit windows</button>
       </div>
 
       {/* ── Thermal model ── */}

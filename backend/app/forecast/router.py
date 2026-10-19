@@ -135,7 +135,7 @@ def _hour_conditions(ctx, fc: dict, temp_swing: list, stands: list[dict], i: int
     h = fc["hourly"]
     sr_h, ss_h = _sun_hours(fc, h["time"][i][:10])
     hour = _hour_at(h, i, sr_h, ss_h, temp_swing, minute)
-    windows = scoring.period_windows(sr_h, ss_h)
+    windows = scoring.period_windows(sr_h, ss_h, ctx.settings)
     # hunt periods are whole-hour windows: a 15-minute slot belongs to its hour's period
     period = scoring.period_for_hour(int(hour["time_h"]), windows)
 
@@ -211,8 +211,11 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
         dt = datetime.fromisoformat(tstr)
         days[day]["hours"].append({"index": idx, "hour": dt.hour,
                                    "label": format_hour_label(dt)})
-    for dd in days.values():   # the day strip's weather icon
+    settings = get_settings()
+    for dd in days.values():   # the day strip's weather icon, and the sit windows (local hours, inclusive)
         dd["wx"] = day_weather(fc["hourly"], [hr["index"] for hr in dd["hours"]], dd["sunrise_h"], dd["sunset_h"])
+        w = scoring.period_windows(dd["sunrise_h"], dd["sunset_h"], settings)
+        dd["sits"] = {sit: list(w[sit]) for sit in hunt_mod.SITS}
     # Derive the property's local "today" from the forecast's UTC offset so that
     # confidence flags stay correct during the UTC-to-local-midnight gap (up to 8h
     # wide for US timezones) when the server's UTC clock is already "tomorrow".
@@ -230,7 +233,6 @@ async def list_hours(region_id: int = Depends(get_active_region_id), _=Depends(r
         stands = _active_stands(region_id)
         sites = hunt_mod.eddy_sites(region_terrain.load_grid(region_id), stands,
                                     region_terrain.MARGIN_M * region_terrain.COVER_TOLERANCE)
-        settings = get_settings()
         for dd in day_list:
             dd["hunt"] = hunt_mod.day_conditions(fc["hourly"], dd["day"], dd["sunrise_h"], dd["sunset_h"],
                                                  stands, sites, settings)
@@ -348,13 +350,14 @@ async def day_ranked(body: DayRankIn, region_id: int = Depends(get_active_region
     # The period windows are shared with the map and with trail-camera period matching
     # (see scoring.period_windows); midday can be empty on a very short day, in which case
     # score_period() simply returns no result for it.
-    periods = scoring.period_windows(sr_h, ss_h)
+    settings = get_settings()
+    periods = scoring.period_windows(sr_h, ss_h, settings)
     day_idxs = [i for i, t in enumerate(h["time"]) if t[:10] == day]
     if not day_idxs:
         raise HTTPException(400, "no forecast for that day")
 
     ctx = build_scoring_context(
-        region_id, region, get_settings(), int(fc.get("utc_offset_seconds", 0)),
+        region_id, region, settings, int(fc.get("utc_offset_seconds", 0)),
         camera_scoring_on=detection_mod.species_available(),
         toggles={"corridor": body.use_corridor, "food": body.use_food, "bedding": body.use_bedding})
 

@@ -1,4 +1,5 @@
 import { CloudRain, Wind } from "lucide-react";
+import { sitWindows } from "../utils/periods.js";
 
 /* Hunt conditions for a day's morning and evening sit (backend forecast/hunt.py, on each /hours day as
    `hunt`): swirling winds (the wind swinging back and forth, or a lee eddy at a stand), heavy rain and
@@ -34,14 +35,13 @@ export function HuntIcons({ hunt, size = 12 }) {
   );
 }
 
-/** Which sit ("morning" / "evening") an hour of a /hours day falls in, or null. Same windows as the
- *  backend's scoring.period_windows: morning sunrise-1 to sunrise+3, evening sunset-3 to sunset (whole hours). */
+/** Which sit ("morning" / "evening") an hour of a /hours day falls in, or null: the day's sit windows from
+ *  the backend (scoring.period_windows, set in Settings → Sit windows), or the default ones for a copy saved
+ *  before /hours carried them. */
 export function sitAt(day, hour) {
   if (!day || hour == null) return null;
-  const sr = day.sunrise_h ?? 6.5, ss = day.sunset_h ?? 19;
-  if (hour >= Math.trunc(sr - 1) && hour <= Math.trunc(sr + 3)) return "morning";
-  if (hour >= Math.trunc(ss - 3) && hour <= Math.trunc(ss)) return "evening";
-  return null;
+  const w = day.sits || sitWindows(day.sunrise_h ?? 6.5, day.sunset_h ?? 19);
+  return ["morning", "evening"].find((sit) => hour >= w[sit][0] && hour <= w[sit][1]) || null;
 }
 
 /** One sit's conditions as short coloured parts for the map's time panel chips:

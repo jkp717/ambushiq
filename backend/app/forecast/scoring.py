@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import datetime as _dt  # module-level import (was incorrectly inside camera_boost)
 
+from app.core.config import DEFAULT_SETTINGS
+
 from app.forecast import eddy as eddy_mod
 
 DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
@@ -277,18 +279,26 @@ def score_stand_hour(stand: dict, hour: dict, thermal_params: dict | None = None
 
 
 # ─────────────────────────── v2.15: camera boost + breakdowns ───────────────────────────
-def period_windows(sunrise_h: float, sunset_h: float) -> dict[str, tuple[int, int]]:
+SIT_WINDOW_KEYS = ("sit_morning_before_sunrise_h", "sit_morning_after_sunrise_h",
+                   "sit_evening_before_sunset_h", "sit_evening_after_sunset_h")
+
+
+def period_windows(sunrise_h: float, sunset_h: float, settings: dict | None = None) -> dict[str, tuple[int, int]]:
     """Inclusive local-hour windows for the three hunt periods, anchored to the day's
-    sunrise/sunset. Midday spans whatever is left between morning and evening so no
-    hour is stranded outside all three; on a very short day its range can be empty
-    (lo > hi), which is correct. One definition shared by the day ranking, the map,
-    and trail-camera period matching so they can never disagree."""
-    morning_end = int(sunrise_h + 3)
-    evening_start = int(sunset_h - 3)
+    sunrise/sunset by the sit-window settings (hours before/after each; the defaults are
+    morning sunrise-1 to sunrise+3, evening sunset-3 to sunset). Midday spans whatever is
+    left between morning and evening so no hour is stranded outside all three; evening
+    never starts before morning ends, so on a very short day (or with wide windows)
+    midday's or evening's range can be empty (lo > hi), which is correct. One definition
+    shared by the day ranking, the map, the hunt conditions and trail-camera period
+    matching so they can never disagree."""
+    m_before, m_after, e_before, e_after = (float((settings or {}).get(k, DEFAULT_SETTINGS[k])) for k in SIT_WINDOW_KEYS)
+    morning_end = int(sunrise_h + m_after)
+    evening_start = max(int(sunset_h - e_before), morning_end + 1)
     return {
-        "morning": (int(sunrise_h - 1), morning_end),
+        "morning": (int(sunrise_h - m_before), morning_end),
         "midday": (morning_end + 1, evening_start - 1),
-        "evening": (evening_start, int(sunset_h)),
+        "evening": (evening_start, int(sunset_h + e_after)),
     }
 
 

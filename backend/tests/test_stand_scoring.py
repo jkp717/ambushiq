@@ -88,6 +88,24 @@ def test_period_windows_match_previous_day_ranking_math_and_are_shared():
     assert scoring.period_windows(6.5, 19.0) == scoring.DEFAULT_PERIOD_WINDOWS
 
 
+def test_period_windows_follow_the_sit_window_settings():
+    sits = {"sit_morning_before_sunrise_h": 0.5, "sit_morning_after_sunrise_h": 2.0,
+            "sit_evening_before_sunset_h": 2.0, "sit_evening_after_sunset_h": 0.5}
+    w = scoring.period_windows(7.3, 17.1, sits)
+    assert w == {"morning": (6, 9), "midday": (10, 14), "evening": (15, 17)}
+    # unrelated settings (or none of these keys) give the default windows
+    assert scoring.period_windows(7.3, 17.1, {"hunt_rain_mm": 2.5}) == scoring.period_windows(7.3, 17.1)
+
+
+def test_wide_sit_windows_never_overlap():
+    sits = {"sit_morning_before_sunrise_h": 1.0, "sit_morning_after_sunrise_h": 5.0,
+            "sit_evening_before_sunset_h": 5.0, "sit_evening_after_sunset_h": 1.0}
+    w = scoring.period_windows(7.5, 16.5, sits)   # morning to 12, evening would start at 11
+    assert w["morning"] == (6, 12) and w["evening"] == (13, 17)
+    assert w["midday"][0] > w["midday"][1]        # nothing left for midday
+    assert all(scoring.period_for_hour(h, w) in ("morning", "evening") for h in range(6, 18))
+
+
 def _ctx(sightings):
     return service.ScoringContext(
         settings=SETTINGS, thermal_params={}, zones=[], corridors=[], sign=[],

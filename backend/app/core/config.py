@@ -104,4 +104,11 @@ DEFAULT_SETTINGS = {
     "hunt_rain_mm": 2.5,                   # 0.1 in per hour
     "hunt_wind_mph": 18.0,
     "hunt_gust_mph": 30.0,
+    # sit windows (forecast.scoring.period_windows), in hours either side of the day's sunrise and sunset;
+    # midday is whatever lies between. They follow the season, and drive the hunt conditions, the day's
+    # best morning / midday / evening and which camera photos count toward a period.
+    "sit_morning_before_sunrise_h": 1.0,
+    "sit_morning_after_sunrise_h": 3.0,
+    "sit_evening_before_sunset_h": 3.0,
+    "sit_evening_after_sunset_h": 0.0,
 }

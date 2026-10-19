@@ -93,7 +93,7 @@ def eddy_sites(grid, stands: list[dict], min_inset_m: float) -> dict:
 def day_conditions(hourly: dict, day: str, sr_h: float, ss_h: float, stands: list[dict], sites: dict,
                    settings: dict) -> dict:
     """{"morning": {...}, "evening": {...}} for one day, leaving out sits with nothing flagged."""
-    windows = scoring.period_windows(sr_h, ss_h)
+    windows = scoring.period_windows(sr_h, ss_h, settings)
     out = {}
     for sit in SITS:
         lo, hi = windows[sit]
