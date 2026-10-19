@@ -1082,13 +1082,6 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             height="100%" />
         </div>
         <div className="layer-overlay">
-          <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
-            <Download size={16} />
-          </button>
-          <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
-            aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
-            <BoxSelect size={16} />
-          </button>
           <button className={"layer-toggle-btn ruler" + (drawMode === "ruler" ? " on" : "")} onClick={toggleRuler}
             disabled={!!drawMode && drawMode !== "ruler"} aria-pressed={drawMode === "ruler"}
             title={drawMode === "ruler" ? "Stop measuring" : "Measure distance"}>
@@ -1098,6 +1091,13 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             onClick={toggleLocation} aria-pressed={locationOn}
             title={locationOn ? "Hide my location" : "Show my location"}>
             <Navigation2 size={16} fill={locationOn ? "currentColor" : "none"} />
+          </button>
+          <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
+            aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
+            <BoxSelect size={16} />
+          </button>
+          <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
+            <Download size={16} />
           </button>
         </div>
         <LocationEdgeIndicator getMap={() => huntMapRef.current?.getMap?.() ?? null} location={userLocation} />
