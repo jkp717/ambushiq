@@ -18,6 +18,12 @@ def list_alerts(region_id: int = Depends(get_active_region_id), _=Depends(requir
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
+@router.get("/types")
+def alert_types(_=Depends(require_token)):
+    """Every alert type, grouped as in the bell: Settings lists them so each can be turned off."""
+    return {"groups": service.ALERT_GROUPS, "types": service.ALERT_TYPES}
+
+
 @router.post("/dismiss")
 def dismiss_alert(body: DismissIn, region_id: int = Depends(get_active_region_id), _=Depends(require_token)):
     service.dismiss(region_id, body.key)

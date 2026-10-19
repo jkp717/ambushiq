@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import app.main  # noqa: F401  (imports every model so create_all sees all tables)
 from app import scheduler as sch
+from app.alerts import router as alerts_router
 from app.alerts import service
 from app.alerts.models import AlertDismissal
 from app.cameras.models import Camera, CameraSighting, DeerDetection
@@ -17,6 +18,7 @@ from app.deer_sign.models import DeerSign
 from app.forecast import service as fc_service
 from app.jobs.models import JobRun
 from app.regions.models import Region
+from app.settings.models import Setting
 from app.stands.models import Stand
 
 NOW = datetime.now(timezone.utc)
@@ -244,3 +246,63 @@ def test_a_failing_check_doesnt_hide_the_others(db, monkeypatch):
     add(cam(battery_pct=5))
     monkeypatch.setattr(service, "_job_alerts", lambda *a: 1 / 0)
     assert "cam_battery" in keys()
+
+
+# ---------- alert types: grouped, and each can be turned off in Settings ----------
+
+def _turn_off(*types):
+    with Session(engine) as s:
+        row = s.get(Setting, "alerts_off")
+        if row:
+            row.value = ",".join(types)
+        else:
+            s.add(Setting(key="alerts_off", value=",".join(types)))
+        s.commit()
+
+
+def test_alert_types_are_unique_and_grouped():
+    ids = [t["id"] for t in service.ALERT_TYPES]
+    groups = {g["id"] for g in service.ALERT_GROUPS}
+    assert len(ids) == len(set(ids)) and {t["group"] for t in service.ALERT_TYPES} == groups
+    assert all(t["label"] and t["description"] for t in service.ALERT_TYPES)
+    out = alerts_router.alert_types(_=None)
+    assert out["groups"] == service.ALERT_GROUPS and out["types"] == service.ALERT_TYPES
+
+
+def test_every_alert_has_a_registered_type_in_its_group(db, monkeypatch):
+    monkeypatch.setattr(sch, "_scheduler", None)
+    monkeypatch.setattr(service.region_terrain, "needs_refresh", lambda rid: True)
+    monkeypatch.setattr(service.region_terrain, "load_grid", lambda rid: None)
+    with Session(engine) as s:
+        st = s.get(Stand, 1)
+        st.deer_approach_deg = None
+        s.commit()
+    add(cam(id=5, battery_pct=5, signal_pct=10, stand_id=None))
+    add(CameraSighting(id=1, stand_id=1, camera_id=5, timestamp=iso(NOW - timedelta(hours=3)), species="white-tailed deer"))
+    add(DeerDetection(id=10, sighting_id=1, box_json="[0,0,1,1]", label="buck"))
+    group_of = {t["id"]: t["group"] for t in service.ALERT_TYPES}
+    alerts = service.current_alerts(1)
+    assert len(alerts) >= 5
+    for a in alerts:
+        assert a["category"] == group_of[service.alert_type(a["key"])], a["key"]
+    assert any(a["category"] == "deer" for a in alerts) and any(a["category"] == "setup" for a in alerts)
+
+
+def test_turned_off_types_are_left_out(db):
+    add(cam(id=5, battery_pct=15, signal_pct=10))
+    assert {"cam_battery", "cam_signal"} <= keys()
+    _turn_off("cam_battery", "deer_spike")
+    assert "cam_battery" not in keys() and "cam_signal" in keys()
+    _turn_off()
+    assert "cam_battery" in keys()
+
+
+def test_turning_a_type_off_and_on_keeps_its_dismissals(db):
+    add(cam(id=5, battery_pct=15))
+    service.dismiss(1, "cam_battery:5")
+    _turn_off("cam_battery")
+    assert "cam_battery" not in keys()
+    with Session(engine) as s:
+        assert len(s.scalars(select(AlertDismissal)).all()) == 1   # still there while the type is off
+    _turn_off()
+    assert "cam_battery" not in keys()                             # still dismissed

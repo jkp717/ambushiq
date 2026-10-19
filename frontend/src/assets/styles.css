@@ -1035,6 +1035,11 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   .settings-nav button.on { background: var(--surf); color: var(--navy); font-weight: 600; }
   .settings-section-title { scroll-margin-top: calc(var(--top-bar-h) + var(--tab-bar-h) + 16px); }
 }
+/* Settings → Alerts: one checkbox row per alert type, its description under the name */
+.alert-type-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: 13px; cursor: pointer; }
+.alert-type-row + .alert-type-row { border-top: 1px solid var(--bord); }
+.alert-type-row input { margin-top: 2px; flex-shrink: 0; }
+.alert-type-row .alert-type-desc { display: block; margin: 2px 0 0; }
 .settings-desc {
   font-size: 13px; color: var(--sub);
   margin: 0 0 12px; line-height: 1.55;

@@ -55,6 +55,7 @@ class SettingsIn(BaseModel):
     scout_weight_proximity: float | None = None
     scout_weight_camera: float | None = None
     scout_weight_unexplored: float | None = None
+    alerts_off: str | None = Field(default=None, max_length=1000)   # alert type ids turned off, comma-separated
     # sit windows: hours either side of sunrise / sunset (forecast.scoring.period_windows)
     sit_morning_before_sunrise_h: float | None = Field(default=None, ge=0, le=6)
     sit_morning_after_sunrise_h: float | None = Field(default=None, ge=0, le=6)

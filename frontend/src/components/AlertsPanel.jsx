@@ -8,9 +8,12 @@ import StandLinks from "./StandLinks.jsx";
    conditions aren't here: they belong to a day, so the day views show them. Each alert can be dismissed
    (it comes back if its condition clears and then returns) and links straight to where it's dealt with. */
 
+// the bell's sections, matching the backend's alert groups (alerts.service.ALERT_GROUPS) and Settings → Alerts
 const GROUPS = [
-  { key: "camera", label: "Cameras" },
-  { key: "system", label: "System & setup" },
+  { key: "camera", label: "Camera" },
+  { key: "deer",   label: "Deer activity" },
+  { key: "system", label: "System" },
+  { key: "setup",  label: "Setup" },
 ];
 
 // icon by the alert's kind (the part of its key before the first ":")

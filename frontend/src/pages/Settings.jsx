@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch, Gauge, Sunrise } from "lucide-react";
+import { Save, Footprints, Wheat, Trees, Target, Thermometer, Camera, HardDrive, CloudSun, Binoculars, Download, Share2, ListChecks, Map as MapIcon, ScanSearch, Gauge, Sunrise, Bell } from "lucide-react";
 import { api } from "../services/api.js";
 import { useInstallPrompt } from "../hooks/useInstallPrompt.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -21,6 +21,7 @@ const SECTIONS = [
   { id: "sit-windows", label: "Sit windows", icon: Sunrise },
   { id: "thermal", label: "Thermal model", icon: Thermometer },
   { id: "cameras", label: "Trail cameras", icon: Camera },
+  { id: "alerts", label: "Alerts", icon: Bell },
   { id: "model", label: "Model training", icon: ScanSearch },
   { id: "scouting", label: "Scouting suggestions", icon: Binoculars },
   { id: "jobs", label: "Jobs", icon: ListChecks },
@@ -84,6 +85,8 @@ function SettingsPage({ reloadStands }) {
   const [showIOSHelp, setShowIOSHelp] = useState(false);
   useEffect(() => { api("/settings").then(setS).catch(() => setErr("Couldn't load settings.")); }, []);
   useEffect(() => { api("/weather-providers").then((r) => setWeatherProviders(r.providers || [])).catch(() => {}); }, []);
+  const [alertTypes, setAlertTypes] = useState(null);   // { groups, types }: every alert type, for the on/off list
+  useEffect(() => { api("/alerts/types").then(setAlertTypes).catch(() => {}); }, []);
 
   async function save() {
     try {
@@ -102,6 +105,13 @@ function SettingsPage({ reloadStands }) {
   }
   function reset() { setS({ ...s, weight_corridor: 0.15, falloff_corridor: 150, weight_food: 0.15, falloff_food: 200, weight_bedding: 0.10, falloff_bedding: 250, weight_scrape: 0.12, falloff_scrape: 100, weight_rub: 0.10, falloff_rub: 80, scent_gate_floor: 0.4, rut_weight_strength: 1.0 }); }
   function resetRating() { setS({ ...s, rate_rut_impact: 0.65, rate_w_pressure: 0.32, rate_w_wind: 0.20, rate_w_rain: 0.28, rate_w_temp: 0.20 }); }
+  // alert types turned off: stored as their ids, comma-separated, so types added later start out on
+  const alertsOff = new Set(String(s?.alerts_off || "").split(",").map((x) => x.trim()).filter(Boolean));
+  function setAlertOn(id, on) {
+    const next = new Set(alertsOff);
+    if (on) next.delete(id); else next.add(id);
+    setS({ ...s, alerts_off: [...next].sort().join(",") });
+  }
   function resetSits() { setS({ ...s, ...SIT_DEFAULTS }); }
   function resetThermal() { setS({ ...s, thermal_wind_half_scale: 7.0, thermal_wind_exponent: 1.8, thermal_midday_discount: 0.3, drainage_margin_m: 457.2 }); }
   function resetScouting() {
@@ -418,6 +428,29 @@ function SettingsPage({ reloadStands }) {
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+      </div>
+
+      {/* ── Alerts: which alert types the bell shows ── */}
+      <SectionTitle id="alerts" icon={Bell}>Alerts</SectionTitle>
+      <p className="settings-desc">Choose which alerts the bell shows. Turned-off alerts aren't shown or counted; turn one back on and it shows again (ones you dismissed stay dismissed).</p>
+      {!alertTypes && <Empty>Loading alert types…</Empty>}
+      {alertTypes && alertTypes.groups.map((g) => (
+        <div key={g.id} className="settings-section">
+          <div className="settings-section-hd"><strong>{g.label}</strong></div>
+          {alertTypes.types.filter((t) => t.group === g.id).map((t) => (
+            <label key={t.id} className="alert-type-row">
+              <input type="checkbox" checked={!alertsOff.has(t.id)} onChange={(e) => setAlertOn(t.id, e.target.checked)} />
+              <span>
+                <strong>{t.label}</strong>
+                <span className="settings-desc alert-type-desc">{t.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>
+        <button className="btn" onClick={() => setS({ ...s, alerts_off: "" })} disabled={!alertsOff.size}>Turn all on</button>
       </div>
 
       {/* ── Model training (buck model) ── */}

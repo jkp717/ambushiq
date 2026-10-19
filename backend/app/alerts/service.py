@@ -4,11 +4,14 @@ Hunt conditions (swirling winds, rain, high wind) are not alerts: they belong to
 so they're shown in the day views instead (forecast.hunt). Every alert here is worked out on request from
 data the app already keeps; nothing is stored except dismissals.
 
-An alert is {key, category: "camera"|"system", severity: "critical"|"warning"|"info", title, detail,
+An alert is {key, category: "camera"|"deer"|"system"|"setup", severity: "critical"|"warning"|"info", title, detail,
 at (ISO, or None), quiet, stand_id?, camera_id?}. `key` identifies the condition: dismissing hides that
 key, and once the condition clears (the key stops appearing) the dismissal is dropped, so the alert shows
 again if the condition comes back. Keys that name a specific event (a job run, the latest buck photo)
-show again for each new event. `quiet` alerts (a camera not on a stand) don't add to the bell's count."""
+show again for each new event. `quiet` alerts (a camera not on a stand) don't add to the bell's count.
+
+A key starts with its alert type (`cam_battery:12`, `scheduler_down`; see ALERT_TYPES), and each type can be
+turned off in Settings (the `alerts_off` setting: turned-off type ids, comma-separated)."""
 from __future__ import annotations
 
 import json
@@ -43,6 +46,58 @@ SPIKE_BASELINE_DAYS = 28    # the deer-spike comparison period, before the recen
 SPIKE_MIN = 3               # at least this many daylight deer photos in the recent window...
 SPIKE_FACTOR = 2.0          # ...and at least this many times the usual count for 48 h
 STALE_SIGN = 0.25           # scrape/rub freshness at or below this barely counts toward scores
+
+
+# Every alert type, by the bell's groups: the Settings checkboxes (GET /api/alerts/types) and the bell's
+# sections both come from here. `id` is the type's key prefix.
+ALERT_GROUPS = [
+    {"id": "camera", "label": "Camera"},
+    {"id": "deer", "label": "Deer activity"},
+    {"id": "system", "label": "System"},
+    {"id": "setup", "label": "Setup"},
+]
+ALERT_TYPES = [
+    {"id": "cam_offline", "group": "camera", "label": "Camera offline",
+     "description": "A camera hasn't checked in for longer than the camera health limit."},
+    {"id": "cam_battery", "group": "camera", "label": "Low battery",
+     "description": "A camera's battery is at or below your alert level, or the camera reports it low."},
+    {"id": "cam_signal", "group": "camera", "label": "Weak signal",
+     "description": "A camera's cell signal is at or below your alert level, so photos may arrive late."},
+    {"id": "cam_sd", "group": "camera", "label": "SD card filling up",
+     "description": "A camera's SD card is at least as full as your alert level."},
+    {"id": "cam_quota", "group": "camera", "label": "Photo plan nearly used",
+     "description": "A camera has used 90% or more of its plan's photos this cycle."},
+    {"id": "cam_sync", "group": "camera", "label": "Sync failed",
+     "description": "A camera failed in the latest camera sync."},
+    {"id": "cam_unassigned", "group": "camera", "label": "Camera not on a stand",
+     "description": "A camera isn't assigned to a stand, so its photos don't count toward any stand's score."},
+    {"id": "buck", "group": "deer", "label": "Buck spotted",
+     "description": "A camera photographed a buck in the last 48 hours."},
+    {"id": "deer_spike", "group": "deer", "label": "More deer than usual",
+     "description": "A stand's cameras caught at least twice their usual daylight deer photos in the last 48 hours."},
+    {"id": "job", "group": "system", "label": "Job failed",
+     "description": "A background job (camera sync, forecast refresh, photo cleanup and so on) failed or partly failed."},
+    {"id": "job_late", "group": "system", "label": "Job overdue",
+     "description": "A scheduled job hasn't run for well over its usual interval."},
+    {"id": "scheduler_down", "group": "system", "label": "Background jobs stopped",
+     "description": "The scheduler isn't running, so camera syncs and forecast refreshes have stopped."},
+    {"id": "weather_provider", "group": "system", "label": "Weather service down",
+     "description": "The weather service isn't responding, so the map shows the last saved forecast."},
+    {"id": "buck_model", "group": "system", "label": "Buck model off",
+     "description": "The buck model's accuracy is below your minimum, so it isn't marking bucks."},
+    {"id": "stand_terrain", "group": "setup", "label": "Stand missing terrain",
+     "description": "A stand has no terrain analysis, so thermals are ignored for it."},
+    {"id": "stand_approach", "group": "setup", "label": "Stand missing deer approach",
+     "description": "A stand has no deer approach direction, so scent direction isn't scored."},
+    {"id": "property_terrain", "group": "setup", "label": "Property terrain missing",
+     "description": "The property terrain hasn't been analyzed or is out of date (lee eddies, drainage)."},
+    {"id": "stale_sign", "group": "setup", "label": "Scrapes and rubs getting stale",
+     "description": "Logged scrapes or rubs are old enough that they barely count toward stand scores."},
+]
+
+
+def alert_type(key: str) -> str:
+    return key.split(":", 1)[0]
 
 
 def _alert(key, category, severity, title, detail="", at=None, quiet=False, **extra) -> dict:
@@ -167,7 +222,7 @@ def _buck_alerts(s: Session, region: Region, cams: list[Camera], now: datetime) 
     for cam_id, g in per_cam.items():
         c = by_id[cam_id]
         n = len(g["photos"])
-        out.append(_alert(f"buck:{cam_id}:{g['det']}", "camera", "info", f"Buck on {c.name}",
+        out.append(_alert(f"buck:{cam_id}:{g['det']}", "deer", "info", f"Buck on {c.name}",
                           f"{n} buck photo{'' if n == 1 else 's'} in the last 48 h, latest {_when(g['latest'], tz)}",
                           g["latest"].isoformat(), camera_id=cam_id, stand_id=c.stand_id))
     return out
@@ -210,7 +265,7 @@ def _deer_spikes(s: Session, region: Region, now: datetime) -> list[dict]:
         if recent >= SPIKE_MIN and recent >= SPIKE_FACTOR * usual:
             usual_txt = f"usually about {usual:.1f}" if usual >= 0.1 else "usually none"
             out.append(_alert(f"deer_spike:{stand_id}:{now.astimezone(_tz(region)).date().isoformat()}",
-                              "camera", "info", f"More deer at {stands[stand_id].name}",
+                              "deer", "info", f"More deer at {stands[stand_id].name}",
                               f"{recent} daylight deer photos in the last 48 h ({usual_txt})",
                               now.isoformat(), stand_id=stand_id))
     return out
@@ -280,17 +335,17 @@ def _setup_alerts(s: Session, region: Region, now: datetime) -> list[dict]:
     stands = drainage_mod.with_property_terrain(region.id, [r.to_dict() for r in rows])
     for st in stands:
         if not st.get("terrain") and st.get("downhill_deg") is None:
-            out.append(_alert(f"stand_terrain:{st['id']}", "system", "info", f"{st['name']} has no terrain analysis",
+            out.append(_alert(f"stand_terrain:{st['id']}", "setup", "info", f"{st['name']} has no terrain analysis",
                               "Thermals are ignored for this stand. Run Analyze terrain from the stand editor.",
                               stand_id=st["id"]))
         if st.get("deer_approach_deg") is None:
-            out.append(_alert(f"stand_approach:{st['id']}", "system", "info",
+            out.append(_alert(f"stand_approach:{st['id']}", "setup", "info",
                               f"{st['name']} has no deer approach",
                               "Scent direction isn't scored. Set the direction deer come from in the stand editor.",
                               stand_id=st["id"]))
     if stands and region_terrain.needs_refresh(region.id):
         none_yet = region_terrain.load_grid(region.id) is None
-        out.append(_alert("property_terrain", "system", "info",
+        out.append(_alert("property_terrain", "setup", "info",
                           "Property terrain hasn't been analyzed" if none_yet else "Property terrain is out of date",
                           "Run Analyze property terrain in Settings → Jobs so lee eddies and drainage cover every stand.",
                           link="settings"))
@@ -302,7 +357,7 @@ def _setup_alerts(s: Session, region: Region, now: datetime) -> list[dict]:
         n_rub = len(stale) - n_scrape
         what = " and ".join(p for p in (f"{n_scrape} scrape{'' if n_scrape == 1 else 's'}" if n_scrape else "",
                                          f"{n_rub} rub{'' if n_rub == 1 else 's'}" if n_rub else "") if p)
-        out.append(_alert(f"stale_sign:{len(stale)}:{max(g['id'] for g in stale)}", "system", "info",
+        out.append(_alert(f"stale_sign:{len(stale)}:{max(g['id'] for g in stale)}", "setup", "info",
                           f"{what} getting stale",
                           "Logged long enough ago that they barely count toward stand scores. Re-check them, "
                           "or switch them off in Zones."))
@@ -343,10 +398,17 @@ def _sort_key(a: dict):
     return (SEVERITY_ORDER.get(a["severity"], 9), a["quiet"], -(t.timestamp() if t else 0))
 
 
+def turned_off(settings: dict) -> set[str]:
+    """The alert types switched off in Settings."""
+    return {t.strip() for t in str(settings.get("alerts_off") or "").split(",") if t.strip()}
+
+
 def current_alerts(region_id: int) -> list[dict]:
-    """The region's alerts that aren't dismissed, most severe and newest first. Dismissals whose alert
-    has cleared are dropped here, so a condition that comes back shows again."""
+    """The region's alerts that aren't dismissed or of a type turned off in Settings, most severe and newest
+    first. Dismissals whose alert has cleared are dropped here, so a condition that comes back shows again.
+    That check counts turned-off alerts too, so switching a type off and on again keeps its dismissals."""
     alerts = _evaluate(region_id)
+    off = turned_off(get_settings())
     active = {a["key"] for a in alerts}
     with Session(engine) as s:
         dismissed = set(s.scalars(select(AlertDismissal.key).where(AlertDismissal.region_id == region_id)).all())
@@ -355,7 +417,8 @@ def current_alerts(region_id: int) -> list[dict]:
             s.execute(delete(AlertDismissal).where(AlertDismissal.region_id == region_id,
                                                    AlertDismissal.key.in_(cleared)))
             s.commit()
-    return sorted((a for a in alerts if a["key"] not in dismissed), key=_sort_key)
+    return sorted((a for a in alerts if a["key"] not in dismissed and alert_type(a["key"]) not in off),
+                  key=_sort_key)
 
 
 def dismiss(region_id: int, key: str) -> None:
