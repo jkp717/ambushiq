@@ -38,14 +38,19 @@ def env(monkeypatch):
     service._inflight.clear()
     monkeypatch.setattr(service.asyncio, "sleep", lambda *_a, **_k: _instant())
     state = {"requests": [], "features": [feature(1)], "status": 200, "pages": None,
-             "agfc": [], "agfc_requests": [], "agfc_status": 200}
+             "agfc": [], "agfc_requests": [], "agfc_status": 200,
+             "il": [], "il_requests": [], "il_status": 200, "iphar": [], "iphar_requests": [], "iphar_status": 200}
+    agencies = {"gis.arkansas.gov": "agfc",                     # the Arkansas Game & Fish WMA layer
+                "services5.arcgis.com": "il",                   # I-View's IDNR land polygons
+                "geoservices3.dnr.illinois.gov": "iphar"}       # IDNR's public hunting area points
 
     def handler(request):
-        if request.url.host == "gis.arkansas.gov":            # the Arkansas Game & Fish WMA layer
-            state["agfc_requests"].append(dict(request.url.params))
-            if state["agfc_status"] != 200:
-                return httpx.Response(state["agfc_status"], json={})
-            return httpx.Response(200, json={"type": "FeatureCollection", "features": state["agfc"]})
+        src = agencies.get(request.url.host)
+        if src:
+            state[f"{src}_requests"].append(dict(request.url.params))
+            if state[f"{src}_status"] != 200:
+                return httpx.Response(state[f"{src}_status"], json={})
+            return httpx.Response(200, json={"type": "FeatureCollection", "features": state[src]})
         state["requests"].append(dict(request.url.params))
         if state["status"] != 200:
             return httpx.Response(state["status"], json={})
@@ -274,6 +279,94 @@ def test_pad_us_outage_still_shows_the_agfc_wmas(env):
     env["agfc"] = [agfc_feature()]
     out = run(**BOX)
     assert [f["id"] for f in out["features"]] == ["agfc-81"] and out["partial"] is True
+
+
+# ---------- Illinois DNR public hunting areas ----------
+
+ILLINOIS = dict(south=40.99, west=-89.41, north=41.01, east=-89.39, zoom=13)   # Marshall County SFWA
+
+
+def il_polygon(fid, name, x=-89.40, y=41.00, size=0.01):
+    return {"type": "Feature", "id": fid, "properties": {"OBJECTID": fid, "Site_Name": name, "Owner_Type": "Fee Simple"},
+            "geometry": {"type": "Polygon", "coordinates": square(x, y, size)}}
+
+
+def iphar_point(name, x, y, classification="SFWA", **game):
+    props = {"SITENAME": name, "CLASSIFICA": classification, **{k: "Yes" for k in game}}
+    return {"type": "Feature", "properties": props, "geometry": {"type": "Point", "coordinates": [x, y]}}
+
+
+def test_site_names_from_both_sources_compare_equal():
+    assert (service.site_key("Marshall County State Fish and Wildlife Area")
+            == service.site_key("Marshall State Fish and Wildlife Area") == "marshall")
+    assert service.site_key("Helmbold Slough ") == "helmbold slough"
+    assert service.site_key(None) == ""
+
+
+def test_illinois_sources_are_only_asked_about_cells_in_illinois(env):
+    run(**BOX)
+    assert env["il_requests"] == [] and env["iphar_requests"] == []
+    run(**ILLINOIS)
+    assert env["il_requests"] and "Illinois Department of Natural Resources" in env["il_requests"][0]["where"]
+    assert "Easement" in env["il_requests"][0]["where"] and len(env["iphar_requests"]) == 1
+
+
+def test_idnr_land_is_kept_only_where_it_is_a_public_hunting_area(env):
+    env["il"] = [
+        il_polygon(1, "Marshall County State Fish and Wildlife Area"),                 # holds the IPHAR point
+        il_polygon(2, "Marshall County State Fish and Wildlife Area", x=-89.385),     # another part, matched by name
+        il_polygon(3, "Springfield IDNR Service Building", x=-89.37),                 # not a hunting area
+        il_polygon(4, "Sangchris Lake State Park", x=-89.36),
+    ]
+    env["iphar"] = [iphar_point("Marshall State Fish and Wildlife Area", -89.395, 41.005,
+                                Deer="Yes", Turkey="Yes", Waterfowl="Yes"),
+                    iphar_point("Sangchris Lake State Park", -89.355, 41.005, "SP", Waterfowl="Yes")]
+    out = run(**ILLINOIS)
+    il = {f["id"]: f["properties"] for f in out["features"] if f["properties"]["source"] == "IDNR"}
+    assert set(il) == {"il-1", "il-2", "il-4"}
+    assert il["il-1"] == {"name": "Marshall State Fish and Wildlife Area",
+                          "manager": "Illinois Department of Natural Resources",
+                          "designation": "State Fish & Wildlife Area", "access": "restricted", "kind": "wildlife",
+                          "source": "IDNR", "game": ["Deer", "Turkey", "Waterfowl"], "deer": True}
+    assert il["il-4"]["designation"] == "State Park" and il["il-4"]["deer"] is False
+    assert "Illinois DNR" in out["attribution"] and "Illinois DNR" not in run(**BOX)["attribution"]
+
+
+def test_a_polygon_holding_several_hunting_areas_is_labelled_sensibly():
+    sites = [service.iphar_site(p) for p in (
+        iphar_point("Pyramid - Captain Unit - State Recreational Area", -89.398, 41.002, "SRA", Deer="Yes"),
+        iphar_point("Pyramid - Galum Unit - State Recreational Area", -89.395, 41.005, "SRA", Waterfowl="Yes"),
+        iphar_point("Siloam Springs State Park", -89.392, 41.008, "SP", Turkey="Yes"))]
+    geom = {"type": "Polygon", "coordinates": square(-89.40, 41.00, 0.01)}
+    units = service.match_site(geom, "Pyramid State Park", sites)
+    assert units["name"] == "Pyramid State Park" and units["game"] == ["Deer", "Turkey", "Waterfowl"]
+    assert service.match_site(geom, "Siloam Springs State Park", sites)["game"] == ["Turkey"]   # named like the polygon
+
+
+def test_the_hunting_area_list_is_fetched_once_for_all_cells(env):
+    env["iphar"] = [iphar_point("Marshall State Fish and Wildlife Area", -89.395, 41.005, Deer="Yes")]
+    run(**{**ILLINOIS, "west": -89.50, "east": -89.30})
+    assert len(env["il_requests"]) > 1 and len(env["iphar_requests"]) == 1
+
+
+def test_pad_us_state_land_covered_by_an_idnr_hunting_area_is_not_drawn_twice(env):
+    park = feature(20, "Pyramid State Park", "SDNR", "STAT", "SP", "OA",
+                   {"type": "Polygon", "coordinates": square(-89.398, 41.002, 0.004)})
+    other = feature(21, "Some State Land", "SDNR", "STAT", "SP", "OA",
+                    {"type": "Polygon", "coordinates": square(-89.36, 41.002, 0.004)})
+    env["features"] = [park, other]
+    env["il"] = [il_polygon(1, "Pyramid State Park")]
+    env["iphar"] = [iphar_point("Pyramid State Park", -89.395, 41.005, "SP", Deer="Yes")]
+    ids = {f["id"] for f in run(**ILLINOIS)["features"]}
+    assert ids == {21, "il-1"}
+
+
+def test_hunting_area_list_outage_leaves_pad_us_intact_and_flags_partial(env):
+    env["iphar_status"] = 503
+    env["il"] = [il_polygon(1, "Marshall County State Fish and Wildlife Area")]
+    out = run(**ILLINOIS)
+    assert [f["id"] for f in out["features"]] == [1] and out["partial"] is True
+    assert env["il_requests"] == []                     # no point fetching boundaries it can't label
 
 
 def test_point_in_polygon_respects_holes():

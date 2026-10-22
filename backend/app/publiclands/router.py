@@ -11,7 +11,8 @@ router = APIRouter(tags=["publiclands"])
 
 @router.get("/api/public-lands")
 async def public_lands(south: float, west: float, north: float, east: float, zoom: int, _=Depends(require_token)):
-    """Public land boundaries (USGS PAD-US) inside a map bounding box, for zoom >= 11."""
+    """Public land boundaries (USGS PAD-US, plus Arkansas WMAs and Illinois public hunting areas from the state
+    agencies) inside a map bounding box, for zoom >= 11."""
     try:
         return await service.public_lands(south, west, north, east, zoom)
     except service.BadBounds as e:

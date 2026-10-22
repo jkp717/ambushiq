@@ -73,18 +73,34 @@ function landStyle(p, interactive) {
   };
 }
 
+// Official state-agency boundaries (no "likely"): popup kind label, source line and caveat per source.
+const AGENCY_LAND = {
+  AGFC: {
+    kind: "Wildlife management area", source: "Arkansas Game & Fish Commission",
+    note: "Boundary published by the Arkansas Game & Fish Commission (via the Arkansas GIS Office) for reference purposes only. WMAs usually need a hunting license and follow their own rules. Verify seasons, permits and boundaries with the AGFC.",
+  },
+  IDNR: {
+    kind: "Public hunting area", source: "Illinois DNR hunting area report; boundary from I-View",
+    note: "Listed by the Illinois DNR as a public hunting area. Many sites need a free site permit, a drawing or a daily check-in, and some areas inside the boundary are closed to hunting. Verify seasons, permits and boundaries with the IDNR site.",
+  },
+};
+
 function landPopup(p) {
-  const agfc = p.source === "AGFC";   // official Arkansas Game & Fish boundary, so no "likely"
-  const kind = agfc ? "Wildlife management area" : LAND_KIND_LABEL[p.kind] || LAND_KIND_LABEL.other;
-  const note = agfc
-    ? "Boundary published by the Arkansas Game & Fish Commission (via the Arkansas GIS Office) for reference purposes only. WMAs usually need a hunting license and follow their own rules. Verify seasons, permits and boundaries with the AGFC."
+  const agency = AGENCY_LAND[p.source];
+  const kind = agency ? agency.kind : LAND_KIND_LABEL[p.kind] || LAND_KIND_LABEL.other;
+  const note = agency
+    ? agency.note
     : `Shows who manages the land and its general public access, not hunting rules. ${p.kind === "wildlife" ? "Wildlife areas usually need a hunting license and follow their own rules. " : ""}Verify seasons, permits and boundaries with the managing agency.`;
+  const game = Array.isArray(p.game)
+    ? `<div class="land-row"><b>Hunting (IDNR):</b> ${escHtml(p.game.length ? p.game.join(", ") : "Not listed")}${p.deer ? "" : " · deer not listed"}</div>`
+    : "";
   return `<div class="feat-popup">
     <div class="feat-popup-title">${escHtml(p.name)}</div>
     <div class="feat-popup-sub">${escHtml(kind)} · ${escHtml(p.designation)}</div>
     <div class="land-row"><b>Manager:</b> ${escHtml(p.manager)}</div>
     <div class="land-row"><b>Public access:</b> ${escHtml(LAND_ACCESS_LABEL[p.access] || LAND_ACCESS_LABEL.unknown)}</div>
-    <div class="land-row"><b>Source:</b> ${escHtml(agfc ? "Arkansas Game & Fish Commission" : "USGS PAD-US")}</div>
+    ${game}
+    <div class="land-row"><b>Source:</b> ${escHtml(agency ? agency.source : "USGS PAD-US")}</div>
     <div class="land-note">${note}</div>
   </div>`;
 }
