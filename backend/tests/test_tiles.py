@@ -1,4 +1,5 @@
 """Terrain overlay tiles: tile math, recoloring, the disk cache and the route's error handling (no network)."""
+import asyncio
 import io
 import math
 import os
@@ -78,7 +79,7 @@ def test_recolor_landcover_keeps_woods_and_water_only():
 def test_get_tile_fetches_once_then_serves_cache(cache_dir, monkeypatch, client):
     calls = []
 
-    async def fake_fetch(layer, z, x, y):
+    async def fake_fetch(layer, z, x, y, still_wanted=None):
         calls.append((layer, z, x, y))
         return _png(Image.new("L", (256, 256), 200))
 
@@ -93,7 +94,7 @@ def test_get_tile_fetches_once_then_serves_cache(cache_dir, monkeypatch, client)
 
 
 def test_upstream_failure_returns_blank_uncached(cache_dir, monkeypatch, client):
-    async def failing_fetch(layer, z, x, y):
+    async def failing_fetch(layer, z, x, y, still_wanted=None):
         raise service.UpstreamError("down")
 
     monkeypatch.setattr(service, "_fetch", failing_fetch)
@@ -101,6 +102,45 @@ def test_upstream_failure_returns_blank_uncached(cache_dir, monkeypatch, client)
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     assert _open(r.content).getextrema()[3] == (0, 0)
     assert not any(cache_dir.rglob("*.png"))
+
+
+def _fake_upstream(monkeypatch, calls):
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "image/png"}
+        content = _png(Image.new("L", (256, 256), 180))
+
+    class FakeClient:
+        async def get(self, url, params=None):
+            calls.append(params)
+            return FakeResponse()
+
+    monkeypatch.setattr(service, "_client", FakeClient())
+    monkeypatch.setattr(service, "_sem", None)
+
+
+def _answer(value):
+    async def check():
+        return value
+    return check
+
+
+def test_abandoned_tile_skips_upstream_and_cache(cache_dir, monkeypatch):
+    calls = []
+    _fake_upstream(monkeypatch, calls)
+    with pytest.raises(service.TileAbandoned):
+        asyncio.run(service.get_tile("hillshade", 12, 1000, 1500, _answer(False)))
+    assert calls == []
+    assert not any(cache_dir.rglob("*.png"))
+
+
+def test_cached_tile_served_even_if_abandoned(cache_dir, monkeypatch):
+    calls = []
+    _fake_upstream(monkeypatch, calls)
+    first = asyncio.run(service.get_tile("contours", 15, 100, 100, _answer(True)))
+    again = asyncio.run(service.get_tile("contours", 15, 100, 100, _answer(False)))
+    assert first == again and len(calls) == 1
+    assert os.path.isfile(cache_dir / "contours" / "15" / "100" / "100.png")
 
 
 def test_out_of_range_is_404(client):

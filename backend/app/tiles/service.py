@@ -17,7 +17,7 @@ import logging
 import math
 import os
 import time
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import httpx
 from PIL import Image, ImageFilter
@@ -63,6 +63,14 @@ class UpstreamError(Exception):
     """The upstream image service failed or returned something that isn't an image."""
 
 
+class TileAbandoned(Exception):
+    """The browser stopped waiting for this tile (panned/zoomed away) before its upstream fetch started."""
+
+
+# Async "does anyone still want this tile?" check, e.g. the request's not-disconnected test.
+StillWanted = Callable[[], Awaitable[bool]]
+
+
 def tile_in_range(layer: str, z: int, x: int, y: int) -> bool:
     if layer not in LAYERS:
         return False
@@ -95,7 +103,7 @@ def _upstream_request(layer: str, z: int, x: int, y: int) -> tuple[str, dict]:
     }
 
 
-async def _fetch(layer: str, z: int, x: int, y: int) -> bytes:
+async def _fetch(layer: str, z: int, x: int, y: int, still_wanted: Optional[StillWanted] = None) -> bytes:
     global _sem, _client
     if _sem is None:
         _sem = asyncio.Semaphore(6)       # don't flood USGS when a whole screen of tiles misses at once
@@ -103,6 +111,11 @@ async def _fetch(layer: str, z: int, x: int, y: int) -> bytes:
         _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
     url, params = _upstream_request(layer, z, x, y)
     async with _sem:
+        # Quick panning queues many tiles behind the semaphore; ones the map already dropped are skipped
+        # here so the tiles on screen now don't wait behind them. A fetch that has started runs to the
+        # end and gets cached, since that work is already paid for.
+        if still_wanted is not None and not await still_wanted():
+            raise TileAbandoned()
         try:
             r = await _client.get(url, params=params)
         except httpx.HTTPError as e:
@@ -202,13 +215,14 @@ def _write_cached(path: str, data: bytes) -> None:
         log.warning("tile cache write failed for %s", path, exc_info=True)
 
 
-async def get_tile(layer: str, z: int, x: int, y: int) -> bytes:
-    """The overlay tile, from the disk cache or freshly fetched + recolored. Raises UpstreamError."""
+async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[StillWanted] = None) -> bytes:
+    """The overlay tile, from the disk cache or freshly fetched + recolored. Raises UpstreamError, or
+    TileAbandoned when `still_wanted` says the caller gave up while the fetch was waiting its turn."""
     path = _cache_path(layer, z, x, y)
     cached = await asyncio.to_thread(_read_cached, path)
     if cached is not None:
         return cached
-    raw = await _fetch(layer, z, x, y)
+    raw = await _fetch(layer, z, x, y, still_wanted)
     try:
         data = await asyncio.to_thread(_RECOLOR[layer], raw)
     except Exception as e:  # Pillow couldn't read what came back

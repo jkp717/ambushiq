@@ -712,6 +712,9 @@ const HuntMap = forwardRef(function HuntMap({
       const layer = L.tileLayer.offline(resolveUrl(src, maptilerKey), {
         maxZoom: MAP_MAX_ZOOM, maxNativeZoom: src.nativeMaxZoom, minZoom: src.minZoom ?? 0,
         attribution: src.attribution, opacity, zIndex,
+        // The /api/tiles overlays take seconds per new tile, so they only ask once a pan/zoom settles
+        // instead of for every in-between view (the fast CDN base maps keep updating mid-gesture).
+        ...(src.loadingLabel ? { updateWhenIdle: true, updateWhenZooming: false } : {}),
       });
       if (blend) layer.on("add", () => { layer.getContainer().style.mixBlendMode = blend; });
       if (src.loadingLabel) {
