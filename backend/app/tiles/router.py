@@ -1,14 +1,10 @@
 """Route handlers for /api/tiles (terrain overlay tiles)."""
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from app.tiles import service
-
-log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["tiles"])
 
@@ -30,10 +26,8 @@ async def overlay_tile(layer: str, z: int, x: int, y: int, request: Request):
 
     try:
         data = await service.get_tile(layer, z, x, y, still_wanted)
-    except service.TileAbandoned:
-        # the browser already dropped this tile, so nobody reads this answer
-        return Response(status_code=503, headers=_FAILED_HEADERS)
-    except service.UpstreamError as e:
-        log.warning("tile %s/%s/%s/%s failed: %s", layer, z, x, y, e)
+    except (service.TileAbandoned, service.UpstreamError):
+        # Abandoned: the browser already dropped this tile, so nobody reads this answer.
+        # Upstream failures are logged by the service, once per block rather than once per waiting request.
         return Response(status_code=503, headers=_FAILED_HEADERS)
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=2592000"})

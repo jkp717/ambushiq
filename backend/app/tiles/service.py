@@ -1,10 +1,14 @@
 """Terrain overlay tiles — hillshade, contour lines and a woods/water tint — for stacking on the base maps.
 
 None of these exist as ready-made map tiles at the detail we want: USGS 3DEP renders hillshade and contours
-on request for any bounding box (sharp to zoom ~18 where lidar exists, but ~2 s per image, and contours come
-as plain dark lines), and NLCD land cover is a WMS. So each z/x/y tile is fetched once from upstream,
-recolored here into a transparent overlay, and kept on disk; after that it is a plain file read. Because the
-result is an ordinary {z}/{x}/{y} URL, Leaflet and the offline download treat it like any other tile layer.
+on request for any bounding box (sharp to zoom ~18 where lidar exists, and contours come as plain dark lines),
+and NLCD land cover is a WMS. So tiles are fetched once from upstream, recolored here into a transparent
+overlay, and kept on disk; after that each is a plain file read. Because the result is an ordinary
+{z}/{x}/{y} URL, Leaflet and the offline download treat it like any other tile layer.
+
+3DEP takes about as long for a 1024 px image as for a 256 px one (~7-15 s cold, and it answers 504 when
+busy), so tiles are fetched as aligned META x META blocks: one upstream request is cut into 16 tiles, all
+cached, so neighbours arrive with the first one and far fewer slow requests hit USGS.
 
 A tile's file mtime is its last use (refreshed on a hit at most once a day), so prune_cache can drop tiles
 nobody has looked at for months."""
@@ -26,6 +30,7 @@ log = logging.getLogger(__name__)
 
 TILE_CACHE_DIR = os.environ.get("TILE_CACHE_DIR", "/app/data/tiles")
 TILE_PX = 256
+META = 4                       # tiles per side of one upstream request (a META*TILE_PX image)
 REQUEST_TIMEOUT_S = 45.0       # 3DEP takes 5-30 s for a dense 10 ft contour tile
 RETRY_DELAY_S = 1.5            # one more try after a gateway error/timeout (USGS 502/504s are intermittent)
 RETRY_STATUS = {500, 502, 503, 504}
@@ -90,12 +95,26 @@ def tile_bbox_3857(z: int, x: int, y: int) -> tuple[float, float, float, float]:
     return (-half + x * size, half - (y + 1) * size, -half + (x + 1) * size, half - y * size)
 
 
-def _upstream_request(layer: str, z: int, x: int, y: int) -> tuple[str, dict]:
-    bbox = ",".join(f"{v:.3f}" for v in tile_bbox_3857(z, x, y))
+def block_of(x: int, y: int) -> tuple[int, int]:
+    """Top-left tile (x0, y0) of the META x META block holding tile x/y."""
+    return x - x % META, y - y % META
+
+
+def block_bbox_3857(z: int, x0: int, y0: int) -> tuple[float, float, float, float]:
+    """(minx, miny, maxx, maxy) of the META x META block of tiles whose top-left tile is x0/y0."""
+    minx, _, _, maxy = tile_bbox_3857(z, x0, y0)
+    _, miny, maxx, _ = tile_bbox_3857(z, x0 + META - 1, y0 + META - 1)
+    return minx, miny, maxx, maxy
+
+
+def _upstream_request(layer: str, z: int, x0: int, y0: int) -> tuple[str, dict]:
+    """The upstream request for the block whose top-left tile is x0/y0."""
+    bbox = ",".join(f"{v:.3f}" for v in block_bbox_3857(z, x0, y0))
+    px = META * TILE_PX
     if layer == "landcover":
         return _NLCD, {
             "service": "WMS", "version": "1.1.1", "request": "GetMap", "layers": "NLCD_2021_Land_Cover_L48",
-            "styles": "", "srs": "EPSG:3857", "bbox": bbox, "width": TILE_PX, "height": TILE_PX,
+            "styles": "", "srs": "EPSG:3857", "bbox": bbox, "width": px, "height": px,
             "format": "image/png", "transparent": "true",
         }
     if layer == "hillshade":
@@ -103,18 +122,19 @@ def _upstream_request(layer: str, z: int, x: int, y: int) -> tuple[str, dict]:
     else:  # contours: 10 ft lines turn solid when zoomed out, so use the coarser preset there
         fn = "Preset 10ft Contour Interval" if z >= 15 else "Contour 25"
     return _3DEP, {
-        "bbox": bbox, "bboxSR": 3857, "imageSR": 3857, "size": f"{TILE_PX},{TILE_PX}", "format": "png",
+        "bbox": bbox, "bboxSR": 3857, "imageSR": 3857, "size": f"{px},{px}", "format": "png",
         "renderingRule": json.dumps({"rasterFunction": fn}), "f": "image",
     }
 
 
-async def _fetch(layer: str, z: int, x: int, y: int, still_wanted: Optional[StillWanted] = None) -> bytes:
+async def _fetch(layer: str, z: int, x0: int, y0: int, still_wanted: Optional[StillWanted] = None) -> bytes:
+    """The upstream image for the block whose top-left tile is x0/y0."""
     global _sem, _client
     if _sem is None:
         _sem = asyncio.Semaphore(6)       # don't flood USGS when a whole screen of tiles misses at once
     if _client is None:
         _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
-    url, params = _upstream_request(layer, z, x, y)
+    url, params = _upstream_request(layer, z, x0, y0)
     for attempt in (1, 2):
         if attempt == 2:
             await asyncio.sleep(RETRY_DELAY_S)   # outside the semaphore, so other tiles keep moving
@@ -145,13 +165,17 @@ def _png(im: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def _luma_alpha(raw: bytes) -> tuple[Image.Image, Image.Image]:
+def _rgba(src: Image.Image | bytes) -> Image.Image:
+    return (src if isinstance(src, Image.Image) else Image.open(io.BytesIO(src))).convert("RGBA")
+
+
+def _luma_alpha(raw: Image.Image | bytes) -> tuple[Image.Image, Image.Image]:
     """Grayscale + alpha of an upstream image (alpha from its own transparency, if it has any)."""
-    rgba = Image.open(io.BytesIO(raw)).convert("RGBA")
+    rgba = _rgba(raw)
     return rgba.convert("L"), rgba.getchannel("A")
 
 
-def recolor_contours(raw: bytes) -> bytes:
+def recolor_contours(raw: Image.Image | bytes) -> bytes:
     """Dark lines on a light (or transparent) background -> CONTOUR_RGB lines on a transparent background."""
     gray, src_alpha = _luma_alpha(raw)
     darkness = gray.point(lambda v: max(0, min(255, (230 - v) * 255 // 150)))
@@ -161,7 +185,7 @@ def recolor_contours(raw: bytes) -> bytes:
     return _png(out)
 
 
-def recolor_hillshade(raw: bytes) -> bytes:
+def recolor_hillshade(raw: Image.Image | bytes) -> bytes:
     """Grayscale shading as-is (the map multiplies it over the base); transparent where there's no data."""
     gray, alpha = _luma_alpha(raw)
     out = Image.merge("LA", (gray, alpha))
@@ -177,9 +201,9 @@ def _nearest_tint(rgb: tuple[int, int, int]) -> Optional[tuple[int, int, int]]:
     return best
 
 
-def recolor_landcover(raw: bytes) -> bytes:
+def recolor_landcover(raw: Image.Image | bytes) -> bytes:
     """NLCD classes -> woods/water tints (everything else transparent), softened so 30 m cells don't look blocky."""
-    im = Image.open(io.BytesIO(raw)).convert("RGBA")
+    im = _rgba(raw)
     clear = (0, 0, 0, 0)
     lookup: dict[tuple, tuple] = {}
 
@@ -236,7 +260,8 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
     cached = await asyncio.to_thread(_read_cached, path)
     if cached is not None:
         return cached
-    key = (layer, z, x, y)
+    x0, y0 = block_of(x, y)
+    key = (layer, z, x0, y0)          # requests for any tile of a block share its one upstream fetch
     entry = _inflight.get(key)
     if entry is None:
         wanters: list = []
@@ -247,26 +272,46 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
                     return True
             return False
 
-        task = asyncio.create_task(_fetch_and_store(layer, z, x, y, path, anyone_wants))
+        task = asyncio.create_task(_fetch_block(layer, z, x0, y0, anyone_wants))
         entry = _inflight[key] = (task, wanters)
         task.add_done_callback(lambda t: _inflight.pop(key) if _inflight.get(key, (None,))[0] is t else None)
     task, wanters = entry
     wanters.append(still_wanted)
     try:
         # shielded: one request giving up mustn't cancel the fetch others are waiting on
-        return await asyncio.shield(task)
+        return (await asyncio.shield(task))[(x, y)]
     finally:
         wanters.remove(still_wanted)
 
 
-async def _fetch_and_store(layer: str, z: int, x: int, y: int, path: str, still_wanted: StillWanted) -> bytes:
-    raw = await _fetch(layer, z, x, y, still_wanted)
+async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: StillWanted) -> dict:
+    """Fetch one block upstream, cut it into tiles, recolor and cache each: {(x, y): png bytes}.
+    A failure is logged here, once per block, however many requests were waiting on it."""
     try:
-        data = await asyncio.to_thread(_RECOLOR[layer], raw)
-    except Exception as e:  # Pillow couldn't read what came back
-        raise UpstreamError(f"bad image: {e}") from e
-    await asyncio.to_thread(_write_cached, path, data)
-    return data
+        raw = await _fetch(layer, z, x0, y0, still_wanted)
+        try:
+            return await asyncio.to_thread(_split_and_store, layer, z, x0, y0, raw)
+        except Exception as e:  # Pillow couldn't read what came back
+            raise UpstreamError(f"bad image: {e}") from e
+    except UpstreamError as e:
+        log.warning("tiles %s/%s/%s-%s/%s-%s failed: %s", layer, z, x0, x0 + META - 1, y0, y0 + META - 1, e)
+        raise
+
+
+def _split_and_store(layer: str, z: int, x0: int, y0: int, raw: bytes) -> dict:
+    im = Image.open(io.BytesIO(raw))
+    im.load()
+    side = META * TILE_PX
+    if im.size != (side, side):          # not expected, but cut the right grid regardless
+        im = im.resize((side, side))
+    out = {}
+    for dy in range(META):
+        for dx in range(META):
+            crop = im.crop((dx * TILE_PX, dy * TILE_PX, (dx + 1) * TILE_PX, (dy + 1) * TILE_PX))
+            data = _RECOLOR[layer](crop)
+            _write_cached(_cache_path(layer, z, x0 + dx, y0 + dy), data)
+            out[(x0 + dx, y0 + dy)] = data
+    return out
 
 
 def prune_cache(max_age_s: float = PRUNE_AFTER_S) -> int:

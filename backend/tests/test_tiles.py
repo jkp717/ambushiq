@@ -14,6 +14,9 @@ from app.tiles import router as tiles_router
 from app.tiles import service
 
 
+BLOCK_PX = service.META * service.TILE_PX   # one upstream image: META x META tiles
+
+
 def _png(im: Image.Image) -> bytes:
     buf = io.BytesIO()
     im.save(buf, format="PNG")
@@ -81,7 +84,7 @@ def test_get_tile_fetches_once_then_serves_cache(cache_dir, monkeypatch, client)
 
     async def fake_fetch(layer, z, x, y, still_wanted=None):
         calls.append((layer, z, x, y))
-        return _png(Image.new("L", (256, 256), 200))
+        return _png(Image.new("L", (BLOCK_PX, BLOCK_PX), 200))
 
     monkeypatch.setattr(service, "_fetch", fake_fetch)
     first = client.get("/api/tiles/hillshade/10/200/300.png")
@@ -109,7 +112,7 @@ class _Resp:
     def __init__(self, status=200):
         self.status_code = status
         self.headers = {"content-type": "image/png" if status == 200 else "text/html"}
-        self.content = _png(Image.new("L", (256, 256), 180)) if status == 200 else b"<html>"
+        self.content = _png(Image.new("L", (BLOCK_PX, BLOCK_PX), 180)) if status == 200 else b"<html>"
 
 
 def _fake_upstream(monkeypatch, calls, statuses=(), delay=0.0):
@@ -205,6 +208,54 @@ def test_shared_fetch_goes_ahead_if_any_waiter_still_wants_it(cache_dir, monkeyp
 
     a, b = asyncio.run(both())
     assert a == b and len(calls) == 1
+
+
+def test_block_bbox_spans_its_tiles():
+    x0, y0 = service.block_of(16630, 25407)
+    assert (x0, y0) == (16628, 25404)
+    minx, miny, maxx, maxy = service.block_bbox_3857(16, x0, y0)
+    tl = service.tile_bbox_3857(16, x0, y0)
+    br = service.tile_bbox_3857(16, x0 + service.META - 1, y0 + service.META - 1)
+    assert (minx, maxy) == (tl[0], tl[3]) and (miny, maxx) == (br[1], br[2])
+
+
+def test_one_upstream_request_fills_the_whole_block(cache_dir, monkeypatch):
+    calls = []
+    _fake_upstream(monkeypatch, calls)
+    asyncio.run(service.get_tile("contours", 16, 16630, 25407))
+    assert len(calls) == 1 and calls[0]["size"] == f"{BLOCK_PX},{BLOCK_PX}"
+    tiles = sorted(cache_dir.rglob("*.png"))
+    assert len(tiles) == service.META ** 2
+    assert all(_open(p.read_bytes()).size == (service.TILE_PX, service.TILE_PX) for p in tiles)
+    # a neighbour in the same block is now a cache hit
+    asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 1
+
+
+def test_block_is_cut_in_the_right_places(cache_dir, monkeypatch):
+    # an upstream image whose left half is dark and right half light: only the left tiles get contour ink
+    im = Image.new("L", (BLOCK_PX, BLOCK_PX), 253)
+    im.paste(0, (0, 0, BLOCK_PX // 2, BLOCK_PX))
+
+    async def fake_fetch(layer, z, x, y, still_wanted=None):
+        return _png(im)
+
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    left = _open(asyncio.run(service.get_tile("contours", 16, 16628, 25404)))
+    right = _open(asyncio.run(service.get_tile("contours", 16, 16631, 25404)))
+    assert left.getpixel((10, 10))[3] == 255 and right.getpixel((10, 10))[3] == 0
+
+
+def test_requests_for_different_tiles_of_one_block_share_a_fetch(cache_dir, monkeypatch):
+    calls = []
+    _fake_upstream(monkeypatch, calls, delay=0.05)
+
+    async def both():
+        return await asyncio.gather(service.get_tile("hillshade", 12, 1000, 1500),
+                                    service.get_tile("hillshade", 12, 1003, 1503))
+
+    a, b = asyncio.run(both())
+    assert a and b and len(calls) == 1
 
 
 def test_out_of_range_is_404(client):
