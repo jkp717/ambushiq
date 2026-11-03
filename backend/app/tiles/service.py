@@ -26,7 +26,9 @@ log = logging.getLogger(__name__)
 
 TILE_CACHE_DIR = os.environ.get("TILE_CACHE_DIR", "/app/data/tiles")
 TILE_PX = 256
-REQUEST_TIMEOUT_S = 30.0
+REQUEST_TIMEOUT_S = 45.0       # 3DEP takes 5-30 s for a dense 10 ft contour tile
+RETRY_DELAY_S = 1.5            # one more try after a gateway error/timeout (USGS 502/504s are intermittent)
+RETRY_STATUS = {500, 502, 503, 504}
 PRUNE_AFTER_S = 180 * 86400
 TOUCH_AFTER_S = 86400
 
@@ -57,6 +59,9 @@ _MATCH_DIST2 = 3 * 30 ** 2   # only accept a near-exact palette match
 
 _sem: Optional[asyncio.Semaphore] = None
 _client: Optional[httpx.AsyncClient] = None
+# Tiles being fetched right now -> (task, the waiting requests' still_wanted checks). A browser retry, or two
+# layers wanting the same tile, joins the running fetch instead of queuing a second upstream call.
+_inflight: dict[tuple, tuple[asyncio.Task, list]] = {}
 
 
 class UpstreamError(Exception):
@@ -110,19 +115,28 @@ async def _fetch(layer: str, z: int, x: int, y: int, still_wanted: Optional[Stil
     if _client is None:
         _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
     url, params = _upstream_request(layer, z, x, y)
-    async with _sem:
-        # Quick panning queues many tiles behind the semaphore; ones the map already dropped are skipped
-        # here so the tiles on screen now don't wait behind them. A fetch that has started runs to the
-        # end and gets cached, since that work is already paid for.
-        if still_wanted is not None and not await still_wanted():
-            raise TileAbandoned()
-        try:
-            r = await _client.get(url, params=params)
-        except httpx.HTTPError as e:
-            raise UpstreamError(f"{type(e).__name__}: {e}") from e
-    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
-        raise UpstreamError(f"HTTP {r.status_code} {r.headers.get('content-type', '')}")
-    return r.content
+    for attempt in (1, 2):
+        if attempt == 2:
+            await asyncio.sleep(RETRY_DELAY_S)   # outside the semaphore, so other tiles keep moving
+        async with _sem:
+            # Quick panning queues many tiles behind the semaphore; ones the map already dropped are skipped
+            # here so the tiles on screen now don't wait behind them. A fetch that has started runs to the
+            # end and gets cached, since that work is already paid for.
+            if still_wanted is not None and not await still_wanted():
+                raise TileAbandoned()
+            try:
+                r = await _client.get(url, params=params)
+            except httpx.HTTPError as e:     # timeout / connection trouble: worth one more try
+                err = UpstreamError(f"{type(e).__name__}: {e}")
+                err.__cause__ = e
+                continue
+        if r.status_code in RETRY_STATUS:
+            err = UpstreamError(f"HTTP {r.status_code}")
+            continue
+        if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+            raise UpstreamError(f"HTTP {r.status_code} {r.headers.get('content-type', '')}")
+        return r.content
+    raise err
 
 
 def _png(im: Image.Image) -> bytes:
@@ -222,6 +236,30 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
     cached = await asyncio.to_thread(_read_cached, path)
     if cached is not None:
         return cached
+    key = (layer, z, x, y)
+    entry = _inflight.get(key)
+    if entry is None:
+        wanters: list = []
+
+        async def anyone_wants() -> bool:
+            for check in list(wanters):
+                if check is None or await check():
+                    return True
+            return False
+
+        task = asyncio.create_task(_fetch_and_store(layer, z, x, y, path, anyone_wants))
+        entry = _inflight[key] = (task, wanters)
+        task.add_done_callback(lambda t: _inflight.pop(key) if _inflight.get(key, (None,))[0] is t else None)
+    task, wanters = entry
+    wanters.append(still_wanted)
+    try:
+        # shielded: one request giving up mustn't cancel the fetch others are waiting on
+        return await asyncio.shield(task)
+    finally:
+        wanters.remove(still_wanted)
+
+
+async def _fetch_and_store(layer: str, z: int, x: int, y: int, path: str, still_wanted: StillWanted) -> bytes:
     raw = await _fetch(layer, z, x, y, still_wanted)
     try:
         data = await asyncio.to_thread(_RECOLOR[layer], raw)
@@ -229,10 +267,6 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
         raise UpstreamError(f"bad image: {e}") from e
     await asyncio.to_thread(_write_cached, path, data)
     return data
-
-
-def empty_tile() -> bytes:
-    return _png(Image.new("RGBA", (TILE_PX, TILE_PX), (0, 0, 0, 0)))
 
 
 def prune_cache(max_age_s: float = PRUNE_AFTER_S) -> int:

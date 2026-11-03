@@ -68,6 +68,8 @@ async function downloadArea({ map, layer, bounds, zoomLevels, concurrency = 6, o
       try {
         if (!(await hasTile(tile.key))) {
           const blob = await downloadTile(tile.url);
+          // a failed tile (e.g. the terrain server's 503) isn't an image: leave the gap for a re-run to fill
+          if (!blob.type.startsWith("image/")) throw new Error(`not a tile: ${blob.type}`);
           await saveTile(tile, blob);
           bytes += blob.size;
           measured += 1;

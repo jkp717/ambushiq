@@ -26,6 +26,9 @@ function statusFlag(counts, setLabels, label) {
   };
 }
 
+// Waits before re-asking for a terrain overlay tile that failed (the server answers 503 when USGS does).
+const TILE_RETRY_DELAYS_MS = [4000, 10000, 25000, 60000];
+
 const BASE_LAYER_KEY = "sa_base_layer";   // localStorage: id of the last base layer picked
 const OVERLAYS_KEY = "sa_overlays";       // localStorage: ids of the on/off overlays that are on
 const DEFAULT_BASE = "topo";
@@ -726,8 +729,29 @@ const HuntMap = forwardRef(function HuntMap({
         // "loading" fires when the layer starts fetching tiles, "load" once every visible tile is in
         // (failed tiles included); removing the layer mid-load must clear it too.
         const setBusy = statusFlag(tileLoads, setTilesLoading, src.loadingLabel);
+        // A tile the server couldn't get from USGS (slow 10 ft contours, gateway errors) comes back as a 503;
+        // ask for it again a few times, backing off, while it's still on the map. The pill stays up while
+        // any retry is pending, so "done" really means done. `?r=` keeps the browser from reusing its failure.
+        const retries = new Set();
+        const tooFar = () => !!src.minZoom && map.getZoom() < src.minZoom;
+        const refresh = () => setBusy(!tooFar() && (retries.size > 0 || layer.isLoading()));
+        layer.on("tileerror", ({ tile, coords }) => {
+          const attempt = tile._retries || 0;
+          if (attempt >= TILE_RETRY_DELAYS_MS.length) return;
+          const timer = setTimeout(() => {
+            retries.delete(timer);
+            if (tile.isConnected && map.hasLayer(layer)) {
+              tile._retries = attempt + 1;
+              tile.src = `${layer.getTileUrl(coords)}?r=${attempt + 1}`;
+            }
+            refresh();
+          }, TILE_RETRY_DELAYS_MS[attempt]);
+          retries.add(timer);
+          setBusy(true);
+        });
         layer.on("loading", () => setBusy(true));
-        layer.on("load remove", () => setBusy(false));
+        layer.on("load", refresh);
+        layer.on("remove", () => { retries.forEach(clearTimeout); retries.clear(); setBusy(false); });
         if (src.minZoom) {
           // Below its minZoom the layer requests nothing and, if it was mid-load, never fires "load" (Leaflet
           // just drops the pending tiles), so clear the spinner and say why it's blank instead.

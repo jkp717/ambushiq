@@ -1,19 +1,20 @@
 """Route handlers for /api/tiles (terrain overlay tiles)."""
 from __future__ import annotations
 
-from functools import lru_cache
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from app.tiles import service
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(tags=["tiles"])
 
-
-@lru_cache(maxsize=1)
-def _empty() -> bytes:
-    return service.empty_tile()
+# A failed tile is a 503, not a blank image: a blank looks like "no contours here" to the map, which then never
+# asks again. The 503 lets the map retry it (HuntMap's tileerror handler) and is never cached anywhere.
+_FAILED_HEADERS = {"Cache-Control": "no-store", "Retry-After": "5"}
 
 
 # Deliberately no require_token: these are public USGS/MRLC images from fixed upstream services, map
@@ -29,8 +30,10 @@ async def overlay_tile(layer: str, z: int, x: int, y: int, request: Request):
 
     try:
         data = await service.get_tile(layer, z, x, y, still_wanted)
-    except (service.UpstreamError, service.TileAbandoned):
-        # An abandoned tile's request is already gone, so this blank goes nowhere; it just mustn't be cached.
-        # Blank and uncached, so the next view tries upstream again instead of keeping a hole.
-        return Response(_empty(), media_type="image/png", headers={"Cache-Control": "no-store"})
+    except service.TileAbandoned:
+        # the browser already dropped this tile, so nobody reads this answer
+        return Response(status_code=503, headers=_FAILED_HEADERS)
+    except service.UpstreamError as e:
+        log.warning("tile %s/%s/%s/%s failed: %s", layer, z, x, y, e)
+        return Response(status_code=503, headers=_FAILED_HEADERS)
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=2592000"})
