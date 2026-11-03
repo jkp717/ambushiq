@@ -736,6 +736,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .land-hint { color: var(--amber); font-weight: 600; }
 .land-legend-row { display: flex; align-items: center; gap: 6px; }
 .land-swatch { width: 14px; height: 10px; border: 2px solid; border-radius: 2px; flex-shrink: 0; box-sizing: border-box; }
+.recsite-legend-pin { width: 14px; display: flex; justify-content: center; flex-shrink: 0; }
 .feat-popup .land-row { font-size: 12px; margin-top: 3px; }
 .feat-popup .land-note { font-size: 11px; color: var(--sub); margin-top: 8px; line-height: 1.35; }
 /* while the time sheet is being dragged, the corner controls follow it instantly */

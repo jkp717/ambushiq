@@ -21,6 +21,7 @@ import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
 import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 import SelectionBar from "../components/SelectionBar.jsx";
+import { RECSITE_KINDS, recSitePinSvg } from "../utils/recSiteStyle.js";
 import { HuntIcons, sitAt, sitParts, sitDetail } from "../components/HuntFlags.jsx";
 
 // "06:58" (the /hours sunrise/sunset strings) -> "6:58"
@@ -106,9 +107,6 @@ const RECSITES_HINTS = {
   error: "Recreation sites are unavailable right now",
   partial: "Showing saved recreation site data",
 };
-const RECSITES_LEGEND = [
-  ["#8D6E00", "Trailhead"], ["#2E7D32", "Campground"], ["#EF6C00", "Picnic site"], ["#1565C0", "Day-use area"],
-];
 
 const THUMB_PX = 18;   // the time slider's thumb width (input[type="range"] in styles.css)
 
@@ -1176,9 +1174,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               {legendOpen.recSites && (
                 <div className="land-legend">
                   {RECSITES_HINTS[recSitesStatus] && <div className="land-hint">{RECSITES_HINTS[recSitesStatus]}</div>}
-                  {RECSITES_LEGEND.map(([color, label]) => (
-                    <div key={label} className="land-legend-row">
-                      <span className="land-swatch" style={{ borderColor: color, background: color + "33" }} />{label}
+                  {RECSITE_KINDS.map(({ key, label }) => (
+                    <div key={key} className="land-legend-row">
+                      <span className="recsite-legend-pin" dangerouslySetInnerHTML={{ __html: recSitePinSvg(key, 18) }} />{label}
                     </div>
                   ))}
                 </div>

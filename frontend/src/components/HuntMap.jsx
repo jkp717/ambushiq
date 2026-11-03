@@ -4,6 +4,7 @@ import { TILE_SOURCES, MAP_MAX_ZOOM, RENAMED_BASES, resolveUrl } from "../utils/
 import { clamp, distanceM } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
 import { standColor, pinFg, standGlyph } from "../utils/standStyle.js";
+import { recSiteKind, recSitePinSvg, RECSITE_PIN_W, RECSITE_PIN_H } from "../utils/recSiteStyle.js";
 import { api } from "../services/api.js";
 
 /* global L */
@@ -194,18 +195,22 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, interacti
 
 // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas) via /api/recreation-sites.
 const RECSITES_MIN_ZOOM = 11;
-const RECSITE_COLORS = { trailhead: "#8D6E00", campground: "#2E7D32", picnic: "#EF6C00", day_use: "#1565C0" };
-const RECSITE_KIND_LABEL = { trailhead: "Trailhead", campground: "Campground", picnic: "Picnic site", day_use: "Day-use area" };
 
-function recSiteStyle(p, interactive) {
-  const color = RECSITE_COLORS[p.kind] || RECSITE_COLORS.trailhead;
-  return { radius: 6, color, fillColor: color, fillOpacity: 0.85, weight: 2, interactive };
+// One teardrop divIcon per kind (colored + type icon, see utils/recSiteStyle.js), tip on the site.
+const recSiteIcons = {};
+function recSiteIcon(kind) {
+  const key = recSiteKind(kind).key;
+  return recSiteIcons[key] ||= L.divIcon({
+    html: recSitePinSvg(key), className: "recsite-div-icon",
+    iconSize: [RECSITE_PIN_W, RECSITE_PIN_H], iconAnchor: [RECSITE_PIN_W / 2, RECSITE_PIN_H - 1],
+    popupAnchor: [0, -RECSITE_PIN_H + 4],
+  });
 }
 
 function recSitePopup(p) {
   return `<div class="feat-popup">
     <div class="feat-popup-title">${escHtml(p.name)}</div>
-    <div class="feat-popup-sub">${escHtml(RECSITE_KIND_LABEL[p.kind] || "Recreation site")}${p.recarea ? " · " + escHtml(p.recarea) : ""}</div>
+    <div class="feat-popup-sub">${escHtml(p.kind ? recSiteKind(p.kind).label : "Recreation site")}${p.recarea ? " · " + escHtml(p.recarea) : ""}</div>
     ${p.directions ? `<div class="land-row"><b>Directions:</b> ${escHtml(p.directions)}</div>` : ""}
     ${p.season ? `<div class="land-row"><b>Season:</b> ${escHtml(p.season)}</div>` : ""}
     ${p.fee ? `<div class="land-row"><b>Fee:</b> ${escHtml(p.fee)}</div>` : ""}
@@ -1334,7 +1339,7 @@ const HuntMap = forwardRef(function HuntMap({
   }, [ready, layers.roads]);
 
   // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas): same fetch/draw pattern,
-  // rendered as circle markers via pointToLayer instead of line/polygon styling.
+  // rendered as teardrop pins via pointToLayer instead of line/polygon styling.
   const recSiteData = useRef({ key: "", features: [] });
   const recSitesStatusCb = useRef(onRecSitesStatus);
   recSitesStatusCb.current = onRecSitesStatus;
@@ -1347,7 +1352,8 @@ const HuntMap = forwardRef(function HuntMap({
     if (!features.length) return;
     const interactive = !drawMode && !selectMode;
     L.geoJSON({ type: "FeatureCollection", features }, {
-      pointToLayer: (f, latlng) => L.circleMarker(latlng, recSiteStyle(f.properties, interactive)),
+      // below the stand pins (same marker pane) where they overlap
+      pointToLayer: (f, latlng) => L.marker(latlng, { icon: recSiteIcon(f.properties.kind), interactive, zIndexOffset: -1000 }),
       onEachFeature: (f, layer) => { if (interactive) layer.bindPopup(recSitePopup(f.properties), { minWidth: 200 }); },
     }).addTo(g);
   };
