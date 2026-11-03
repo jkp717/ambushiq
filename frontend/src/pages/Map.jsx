@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler } from "lucide-react";
+import { Wind, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -1093,6 +1093,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
             aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
             <BoxSelect size={16} />
+          </button>
+          <button className="layer-toggle-btn" onClick={() => huntMapRef.current?.goHome?.()} title="Back to the property">
+            <House size={16} />
           </button>
           <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
             <Download size={16} />

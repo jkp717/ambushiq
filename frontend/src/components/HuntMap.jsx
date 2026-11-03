@@ -662,6 +662,15 @@ const HuntMap = forwardRef(function HuntMap({
       const src = TILE_SOURCES.find((t) => t.id === activeBase.current);
       return src ? (src.parts ? src.parts.map((p) => p.id) : [src.id]) : [];
     },
+    // The Home button: back to the opening view — fitted to the property's stands, zones and corridors,
+    // or the region's own location when it has none yet.
+    goHome: () => {
+      const pts = featurePoints(stands, zones, corridors);
+      if (pts.length) frame({ kind: "fit", pts });
+      else if (center && center.lat != null) frame({ kind: "point", latlng: [center.lat, center.lon], zoom: DEFAULT_ZOOM });
+      else return;
+      fitted.current = true;   // the open-on-the-property fit mustn't redo it a moment later
+    },
   }));
 
   // init map once (waits for the Leaflet global if the CDN script is slow)
