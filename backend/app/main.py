@@ -24,6 +24,7 @@ from app.core.security import safe_join
 from app.corridors.router import router as corridors_router
 from app.deer_ratings.router import router as deer_ratings_router
 from app.deer_sign.router import router as deer_sign_router
+from app.elevation.router import router as elevation_router
 from app.dependencies import require_token
 from app.forecast.router import router as forecast_router
 from app.forecast.service import ForecastUnavailable
@@ -95,6 +96,7 @@ app.include_router(stands_router)
 app.include_router(zones_router)
 app.include_router(corridors_router)
 app.include_router(deer_sign_router)
+app.include_router(elevation_router)
 app.include_router(forecast_router)
 app.include_router(deer_ratings_router)
 app.include_router(settings_router)

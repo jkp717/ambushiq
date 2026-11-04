@@ -7,6 +7,7 @@ import useGeolocation from "../hooks/useGeolocation.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx, ratingScore5, ratingTone } from "../utils/formatters.js";
 import { fmtDist, fmtYd } from "../utils/units.js";
+import { rulerKey, elevText } from "../utils/rulerElev.js";
 import { degToCompass } from "../utils/compass.js";
 import { SCOUT_RADIUS_DEFAULT_M, SCOUT_RADIUS_MIN_M, SCOUT_RADIUS_MAX_M, distanceM } from "../utils/geo.js";
 import Banner from "../components/ui/Banner.jsx";
@@ -715,6 +716,22 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const exitSelect = useCallback(() => { setSelectMode(false); setBoxTool(false); setSelectedKeys(new Set()); }, []);
   useEffect(() => { if (drawMode !== "ruler") setRuler(null); }, [drawMode]);
   const rulerYd = ruler?.b ? fmtYd(distanceM(ruler.a.lat, ruler.a.lon, ruler.b.lat, ruler.b.lon)) : null;
+  // Elevation along a finished measurement (USGS, ~1-13 s): asked once both ends are placed or a drag ends,
+  // never mid-drag; a newer measurement cancels the older request. { key, loading | failed | ...profile }.
+  const [rulerElev, setRulerElev] = useState(null);
+  useEffect(() => {
+    if (!ruler?.b) { setRulerElev(null); return undefined; }
+    const key = rulerKey(ruler.a, ruler.b);
+    const ctl = new AbortController();
+    setRulerElev({ key, loading: true });
+    const q = new URLSearchParams({ a_lat: ruler.a.lat, a_lon: ruler.a.lon, b_lat: ruler.b.lat, b_lon: ruler.b.lon });
+    api(`/elevation/profile?${q}`, { signal: ctl.signal })
+      .then((j) => setRulerElev({ key, ...j }))
+      .catch(() => { if (!ctl.signal.aborted) setRulerElev({ key, failed: true }); });
+    return () => ctl.abort();
+  }, [ruler]);
+  const rulerElevText = ruler?.b && rulerElev?.key === rulerKey(ruler.a, ruler.b) && !rulerElev.failed
+    ? (rulerElev.loading ? "elevation…" : elevText(rulerElev)) : null;
   function toggleRuler() {
     if (drawMode === "ruler") { setDrawMode(null); return; }
     if (selectMode) exitSelect();
@@ -1061,7 +1078,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           {drawMode === "scout" && scoutDraft && <button className="btn" style={{ marginLeft: 8 }} onClick={confirmScoutArea} disabled={scoutAnalyzing}>Scout this area</button>}
           {drawMode === "ruler" && (!ruler ? "Tap two points to measure."
             : !ruler.b ? "Tap the second point, or drag one out from the first."
-            : <span><strong>{rulerYd}</strong> · drag an end to adjust, or tap to start a new measurement.</span>)}
+            : <span><strong>{rulerYd}</strong>{rulerElevText && <> · <strong>{rulerElevText}</strong></>} · drag an end to adjust, or tap to start a new measurement.</span>)}
           {drawMode === "ruler" && locationOn && geo.status === "active" && userLocation && (
             <button className="btn" style={{ marginLeft: 8 }}
                     onClick={() => setRuler({ a: { lat: userLocation.lat, lon: userLocation.lon }, b: null })}>
@@ -1097,7 +1114,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign}
             suggestions={suggestions} conditions={conditions} drainage={drainage}
             drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
-            mapEdit={mapEdit} onMapEditChange={onMapEditChange} ruler={ruler} onRulerChange={setRuler}
+            mapEdit={mapEdit} onMapEditChange={onMapEditChange} ruler={ruler} onRulerChange={setRuler} rulerElev={rulerElev}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
             onDismissSuggestion={onDismissSuggestion} onSuggestionColor={onSuggestionColor}

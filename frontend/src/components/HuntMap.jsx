@@ -3,6 +3,7 @@ import { RefreshCw, ZoomIn } from "lucide-react";
 import { TILE_SOURCES, MAP_MAX_ZOOM, RENAMED_BASES, resolveUrl } from "../utils/tileSources.js";
 import { clamp, distanceM } from "../utils/geo.js";
 import { fmtYd } from "../utils/units.js";
+import { rulerKey, elevText } from "../utils/rulerElev.js";
 import { standColor, pinFg, standGlyph } from "../utils/standStyle.js";
 import { recSiteKind, recSitePinSvg, RECSITE_PIN_W, RECSITE_PIN_H } from "../utils/recSiteStyle.js";
 import { api } from "../services/api.js";
@@ -590,7 +591,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
 
 const HuntMap = forwardRef(function HuntMap({
   stands, zones, corridors, sign, suggestions, conditions, drainage = null,
-  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange, ruler = null, onRulerChange,
+  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange, ruler = null, onRulerChange, rulerElev = null,
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion,
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
@@ -614,6 +615,10 @@ const HuntMap = forwardRef(function HuntMap({
   selectRef.current = { selectMode, onToggleSelect };
 
   const mapRef = useRef(null);
+  // the ruler's fetched elevation (read by its label) and a redraw of the current label, see the ruler effect
+  const rulerElevRef = useRef(rulerElev);
+  rulerElevRef.current = rulerElev;
+  const rulerRedraw = useRef(null);
   const mapEl = useRef(null);
   const layerGroups = useRef({});
   const offlineLayers = useRef({});
@@ -1715,6 +1720,7 @@ const HuntMap = forwardRef(function HuntMap({
     const map = mapRef.current;
     if (!ready || !map) return undefined;
     const g = layerGroups.current.ruler; g.clearLayers();
+    rulerRedraw.current = null;
     if (!ruler?.a) return undefined;
     const ll = (p) => [p.lat, p.lon];
     const toPt = (latlng) => ({ lat: latlng.lat, lon: latlng.lng });
@@ -1726,7 +1732,13 @@ const HuntMap = forwardRef(function HuntMap({
     const draw = (from, to) => {
       const pts = [ll(from), ll(to)];
       const mid = [(from.lat + to.lat) / 2, (from.lon + to.lon) / 2];
-      const text = fmtYd(distanceM(from.lat, from.lon, to.lat, to.lon));
+      // distance, plus the elevation line once it has been fetched for exactly these two points (so while
+      // dragging, or before it arrives, only the distance shows)
+      const e = rulerElevRef.current;
+      const elev = e && e.key === rulerKey(from, to) && !e.failed ? (e.loading ? "…" : elevText(e)) : null;
+      const text = fmtYd(distanceM(from.lat, from.lon, to.lat, to.lon))
+        + (elev ? `<br><span class="map-ruler-elev">${elev}</span>` : "");
+      rulerRedraw.current = () => draw(from, to);
       if (line) {
         line.casing.setLatLngs(pts); line.dots.setLatLngs(pts); line.label.setLatLng(mid).setContent(text);
         return;
@@ -1764,6 +1776,8 @@ const HuntMap = forwardRef(function HuntMap({
     el.addEventListener("pointermove", onMove);
     return () => el.removeEventListener("pointermove", onMove);
   }, [ready, ruler, onRulerChange]);
+  // The elevation arriving only rewrites the label (the handles aren't rebuilt, so a drag in progress isn't cut off).
+  useEffect(() => { if (rulerRedraw.current) rulerRedraw.current(); }, [rulerElev]);
 
   // render the property-wide cold-air drainage layer (flow accumulation over the region's terrain grid,
   // drawn over every stand plus the "drainage map margin" setting; levels 1-9, log-scaled)
