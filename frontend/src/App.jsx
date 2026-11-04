@@ -72,8 +72,12 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
   const [photosRequest, setPhotosRequest] = useState(null); // Cameras: { cameraIds }
 
   // apiSaved: with no signal, the map still gets the stands and features saved on the phone last time.
+  // How many stands the last successful load found; null when it failed (so an error never counts as "none").
+  const loadedStandCount = useRef(null);
   const loadStands    = useCallback(async () => {
-    try { setStands(await apiSaved("/stands")); } catch {} finally { setStandsReady(true); }
+    try { const list = await apiSaved("/stands"); setStands(list); loadedStandCount.current = list.length; }
+    catch { loadedStandCount.current = null; }
+    finally { setStandsReady(true); }
   }, []);
   const loadZones     = useCallback(async () => { try { setZones(await apiSaved("/zones")); } catch {} }, []);
   const loadCorridors = useCallback(async () => { try { setCorridors(await apiSaved("/corridors")); } catch {} }, []);
@@ -100,7 +104,10 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
     try { await api("/alerts/dismiss", { method: "POST", body: JSON.stringify({ key }) }); }
     catch { loadAlerts(); }
   }, [loadAlerts]);
-  const loadAll = useCallback(async () => { await Promise.all([loadStands(), loadZones(), loadCorridors(), loadSign(), loadSuggestions(), loadCameras(), loadAlerts()]); }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions, loadCameras, loadAlerts]);
+  // `afterStands` runs as soon as the stands are in, without waiting on the slower loads (cameras, alerts).
+  const loadAll = useCallback(async (afterStands) => {
+    await Promise.all([loadStands().then(afterStands), loadZones(), loadCorridors(), loadSign(), loadSuggestions(), loadCameras(), loadAlerts()]);
+  }, [loadStands, loadZones, loadCorridors, loadSign, loadSuggestions, loadCameras, loadAlerts]);
   // refresh the alerts when the app comes back to the foreground, and every 10 minutes while it's open
   const foregroundTick = useForegroundRefresh();
   useEffect(() => { if (foregroundTick) loadAlerts(); }, [foregroundTick, loadAlerts]);
@@ -188,7 +195,15 @@ function Shell({ onLogout, version, regions, activeRegion, onSwitchRegion, onReg
     setStands([]); setZones([]); setCorridors([]); setSign([]); setSuggestions([]); setCameras([]); setAlerts([]);
     setFocusRequest(null); setScoreRequest(null); setPhotosRequest(null);
     setStandsReady(false);
-    loadAll();
+    loadedStandCount.current = null;
+    // A property with no stands has nothing to rank on the Outlook, so it opens on the map instead: checked
+    // once this region's features have loaded (sign-in, reload, switching property), and only while still on
+    // the Outlook, so it never pulls you off a page you picked.
+    let cancel = false;
+    loadAll(() => {
+      if (!cancel && loadedStandCount.current === 0) setView((v) => (v === "today" ? "map" : v));
+    });
+    return () => { cancel = true; };
   }, [loadAll, activeRegion?.id]);
 
   const editFeature = useCallback((kind, id) => {
