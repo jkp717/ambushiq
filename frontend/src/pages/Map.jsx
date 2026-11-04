@@ -35,6 +35,12 @@ const clock12 = (hhmm) => {
    movement score (colored like the Outlook). The bottom-sheet tab is the one place the chosen date and
    time are spelled out; this strip is just for moving between days. Swipes sideways; the chosen day is
    kept centred in view. */
+// 1 -> "1st", 2 -> "2nd", 11 -> "11th", 22 -> "22nd"
+function ordinal(n) {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  return `${n}${teen ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th")}`;
+}
+
 function DayStrip({ days, dayIdx, ratings, utcOffset, onPick }) {
   const stripRef = useRef(null);
   useEffect(() => {
@@ -52,12 +58,17 @@ function DayStrip({ days, dayIdx, ratings, utcOffset, onPick }) {
         const rating = ratings?.get(d.day);
         const Icon = WX_ICONS[d.wx?.icon];
         const score = rating ? ratingScore5(rating) : null;
+        const low = d.wx?.low_f, high = d.wx?.high_f;
+        const hasTemp = low != null || high != null;
         return (
           <button key={d.day} type="button" role="tab" aria-selected={i === dayIdx}
             className={"map-day-chip" + (i === dayIdx ? " on" : "")} onClick={() => onPick(i)}
-            title={[d.label, d.wx?.text, score && `${score}/5 movement`].filter(Boolean).join(" · ")}>
-            <span className="map-day-chip-dow">{d.day === today ? "Today" : date.toLocaleDateString("en-US", { weekday: "short" })}</span>
-            <span className="map-day-chip-date">{date.getDate()}</span>
+            title={[d.label, d.wx?.text, hasTemp && `low ${low ?? "–"}°F, high ${high ?? "–"}°F`,
+                    score && `${score}/5 movement`].filter(Boolean).join(" · ")}>
+            <span className="map-day-chip-day">
+              {d.day === today ? "Today" : date.toLocaleDateString("en-US", { weekday: "short" })} {ordinal(date.getDate())}
+            </span>
+            {hasTemp && <span className="map-day-chip-temp">{low ?? "–"}° / {high ?? "–"}°</span>}
             <span className="map-day-chip-wx" role="img" aria-label={d.wx?.text || "No weather summary"}>
               {Icon && <Icon size={18} />}
             </span>

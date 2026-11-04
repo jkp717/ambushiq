@@ -499,21 +499,22 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .map-day-chip:first-child { margin-left: auto; }
 .map-day-chip:last-child { margin-right: auto; }
 .map-day-chip {
-  flex: 0 0 auto; min-width: 52px; scroll-snap-align: center;
+  flex: 0 0 auto; min-width: 64px; scroll-snap-align: center;
   display: flex; flex-direction: column; align-items: center; gap: 1px;
   padding: 5px 6px 6px; border: 1px solid var(--bord); border-radius: 10px;
   background: var(--bg); color: var(--txt); cursor: pointer; font: inherit;
 }
 .map-day-chip:hover { background: var(--surf); }
-.map-day-chip-dow { font-size: 11px; color: var(--sub); }
-.map-day-chip-date { font-size: 15px; font-weight: 700; line-height: 1.2; }
+/* "Thu 5th": weekday and date in one font, then the day's low / high */
+.map-day-chip-day { font-size: 12.5px; font-weight: 700; line-height: 1.25; white-space: nowrap; }
+.map-day-chip-temp { font-size: 11px; color: var(--sub); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .map-day-chip-wx { height: 20px; display: flex; align-items: center; color: var(--sub); }
 .map-day-chip-score {
   font-size: 12px; font-weight: 700; color: var(--tone, var(--sub));
   padding: 0 5px; border-radius: 6px; font-variant-numeric: tabular-nums;
 }
 .map-day-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
-.map-day-chip.on .map-day-chip-dow,
+.map-day-chip.on .map-day-chip-temp,
 .map-day-chip.on .map-day-chip-wx { color: rgba(255, 255, 255, .85); }
 /* on the navy chip the score is white on a pill tinted with its rating color */
 .map-day-chip.on .map-day-chip-score {
