@@ -15,7 +15,7 @@ import BottomSheet from "../components/ui/BottomSheet.jsx";
 import LocationEdgeIndicator from "../components/LocationEdgeIndicator.jsx";
 import HuntMap from "../components/HuntMap.jsx";
 import HourlyForecast from "../components/HourlyForecast.jsx";
-import { WX_ICONS } from "../utils/wxIcons.js";
+import { WX_ICONS, WX_TEXT } from "../utils/wxIcons.js";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
@@ -23,12 +23,6 @@ import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 import SelectionBar from "../components/SelectionBar.jsx";
 import { RECSITE_KINDS, recSitePinSvg } from "../utils/recSiteStyle.js";
 import { HuntIcons, sitAt, sitParts, sitDetail } from "../components/HuntFlags.jsx";
-
-// "06:58" (the /hours sunrise/sunset strings) -> "6:58"
-const clock12 = (hhmm) => {
-  const [h, m] = String(hhmm).split(":").map(Number);
-  return `${h % 12 || 12}:${String(m).padStart(2, "0")}`;
-};
 
 
 /* The time panel's day picker: one chip per forecast day with its weekday, date, weather icon and deer
@@ -178,7 +172,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                    openStandEditor, onEditFeature, onDeleteFeature, standNav, focusRequest, clearFocusRequest }) {
   const [days, setDays] = useState([]);
   const daysRef = useRef(days);
-  const shownHunt = useRef(null);   // the last day's hunt chips shown, kept while that row eases closed
+  const shownHunt = useRef(null);   // the last hunt chip shown in the shelf header, kept while it eases closed
   daysRef.current = days;
   const [dayIdx, setDayIdx] = useState(0);
   const [hourPos, setHourPos] = useState(0);
@@ -842,16 +836,24 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           header={(() => {
             const h = curHour?.hour ?? 0, ampm = h >= 12 ? "PM" : "AM";
             const time = curHour ? `${h % 12 || 12}:${curMinute.toString().padStart(2, "0")} ${ampm}` : "";
-            // The selected day's hunt conditions, one chip per flagged sit. Keyed by the DAY, not the time,
-            // so scrubbing never makes them appear or disappear (nothing above the slider moves mid-drag);
-            // the sit the selected time is in is only outlined. They ease in/out (the last chips stay
-            // rendered while closing, so they fade instead of blanking).
-            const sits = ["morning", "evening"].filter((s) => curDay?.hunt?.[s]);
-            if (sits.length) shownHunt.current = { day: curDay, sits };
+            // The selected hour's weather in words: "Partly cloudy · 54°F · Wind SW 8 mph".
+            const wx = curHour?.wx;
+            const wxLine = wx ? [
+              WX_TEXT[wx.icon],
+              wx.temp_f != null && `${wx.temp_f}°F`,
+              (wx.wind_dir != null || wx.wind_mph != null) &&
+                ["Wind", wx.wind_dir != null && degToCompass(wx.wind_dir), wx.wind_mph != null && `${wx.wind_mph} mph`]
+                  .filter(Boolean).join(" "),
+            ].filter(Boolean).join(" · ") : "";
+            // Hunt conditions for the selected hour: the chip of the sit (morning / evening) the time is in, when
+            // that sit is flagged; none at midday or night. It eases in/out as the slider crosses a sit window
+            // (the last chip stays rendered while closing, so it fades instead of blanking).
+            const sit = sitAt(curDay, curHour?.hour);
+            const hunt = sit && curDay?.hunt?.[sit];
+            if (hunt) shownHunt.current = { sit, hunt };
             const shown = shownHunt.current;
-            const activeSit = sitAt(curDay, curHour?.hour);
-            // The shelf's always-visible header: date + time, the day's weather in words beside it (wraps under
-            // it on a narrow phone), then the hunt chips beside that on desktop / centred below on phones.
+            // The shelf's always-visible header: date + time, the hour's weather beside it (wraps under it on a
+            // narrow phone), then the hunt chip beside that on desktop / centred below on phones.
             return (
               <span className="sheet-hd">
                 <span className="sheet-hd-line">
@@ -860,28 +862,15 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                     <span>{curDay?.label || (!time && "Time")}{curDay?.label && time && " ·"}</span>
                     {time && <span className="map-time-fixed">{time}</span>}
                   </span>
-                  {(curDay?.wx?.text || (curDay?.sunrise && curDay?.sunset)) && (
-                    <span className="sheet-hd-wx">
-                      {curDay.wx?.text}
-                      {curDay.sunrise && curDay.sunset && (
-                        <span className="sheet-hd-sun" title="Sunrise · sunset">↑ {clock12(curDay.sunrise)} · ↓ {clock12(curDay.sunset)}</span>
-                      )}
-                    </span>
-                  )}
+                  {wxLine && <span className="sheet-hd-wx">{wxLine}</span>}
                 </span>
                 {shown && (
-                  <span className={"map-day-alerts" + (sits.length ? " open" : "")} aria-hidden={!sits.length}>
+                  <span className={"map-day-alerts" + (hunt ? " open" : "")} aria-hidden={!hunt}>
                     <span className="map-day-alerts-inner"><span className="map-day-alerts-row">
-                      {shown.sits.map((s) => {
-                        const c = shown.day.hunt[s];
-                        return (
-                          <span key={s} title={sitDetail(c)}
-                            className={"map-hunt-sit" + (sits.length && shown.day === curDay && s === activeSit ? " active" : "")}>
-                            <span className="map-hunt-sit-name">{s === "morning" ? "☀ Morning" : "☾ Evening"}</span>
-                            {sitParts(c).map((p) => <span key={p.kind} className={`hunt-part ${p.kind}`}>{p.text}</span>)}
-                          </span>
-                        );
-                      })}
+                      <span title={sitDetail(shown.hunt)} className="map-hunt-sit">
+                        <span className="map-hunt-sit-name">{shown.sit === "morning" ? "☀ Morning" : "☾ Evening"}</span>
+                        {sitParts(shown.hunt).map((p) => <span key={p.kind} className={`hunt-part ${p.kind}`}>{p.text}</span>)}
+                      </span>
                     </span></span>
                   </span>
                 )}

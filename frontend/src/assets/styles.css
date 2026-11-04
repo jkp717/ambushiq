@@ -450,7 +450,6 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .sheet-hd-when { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .sheet-hd-wx { font-size: 12.5px; font-weight: 500; color: var(--sub); white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; max-width: 100%; }
-.sheet-hd-sun { margin-left: 10px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 /* Hunt chips: ease open/closed (height via the 0fr/1fr grid-row trick, plus opacity) instead of popping
    in. They change only with the day, never while scrubbing, so nothing moves under a dragging finger. */
 .map-day-alerts {
@@ -480,7 +479,6 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   padding: 3px 10px; border-radius: 8px; font-size: 12px; line-height: 18px;
   background: var(--surf); border: 1.5px solid transparent; transition: border-color .15s ease;
 }
-.map-hunt-sit.active { border-color: var(--bord2); }
 .map-hunt-sit-name { font-weight: 600; color: var(--txt); }
 .hunt-part { font-weight: 600; white-space: nowrap; }
 .hunt-part.swirl { color: #0E7C8A; }
