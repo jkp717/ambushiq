@@ -66,7 +66,7 @@ function DayStrip({ days, dayIdx, ratings, utcOffset, onPick }) {
             title={[d.label, d.wx?.text, hasTemp && `low ${low ?? "–"}°F, high ${high ?? "–"}°F`,
                     score && `${score}/5 movement`].filter(Boolean).join(" · ")}>
             <span className="map-day-chip-day">
-              {d.day === today ? "Today" : date.toLocaleDateString("en-US", { weekday: "short" })} {ordinal(date.getDate())}
+              {d.day === today ? "Today" : `${date.toLocaleDateString("en-US", { weekday: "short" })} ${ordinal(date.getDate())}`}
             </span>
             {hasTemp && <span className="map-day-chip-temp">{low ?? "–"}° / {high ?? "–"}°</span>}
             <span className="map-day-chip-wx" role="img" aria-label={d.wx?.text || "No weather summary"}>
