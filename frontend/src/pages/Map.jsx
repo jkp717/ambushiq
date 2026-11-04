@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset } from "lucide-react";
+import { Eye, EyeOff, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -82,9 +82,11 @@ const LAND_HINTS = {
   error: "Public land is unavailable right now",
   partial: "Showing saved public land data",
 };
+// [key, color, label, dashed]: the key is what that row's eye hides (a land kind, or "closed" land)
 const LAND_LEGEND = [
-  ["#D81B60", "State wildlife area (WMA)"], ["#2E8B57", "National forest"], ["#1976D2", "Wildlife refuge"],
-  ["#B8860B", "Other federal"], ["#5C6BC0", "State land"], ["#C62828", "Closed to public", true],
+  ["wildlife", "#D81B60", "State wildlife area (WMA)"], ["forest", "#2E8B57", "National forest"],
+  ["refuge", "#1976D2", "Wildlife refuge"], ["federal", "#B8860B", "Other federal"], ["state", "#5C6BC0", "State land"],
+  ["closed", "#C62828", "Closed to public", true],
 ];
 
 const TRAILS_HINTS = {
@@ -94,7 +96,7 @@ const TRAILS_HINTS = {
   partial: "Showing saved trail data",
 };
 const TRAILS_LEGEND = [
-  ["#8D6E00", "OHV/ATV/motorcycle trail"], ["#6D4C1E", "Designated forest road", true],
+  ["trail", "#8D6E00", "OHV/ATV/motorcycle trail"], ["road", "#6D4C1E", "Designated forest road", true],
 ];
 
 const ROADS_HINTS = {
@@ -104,8 +106,27 @@ const ROADS_HINTS = {
   partial: "Showing saved road data",
 };
 const ROADS_LEGEND = [
-  ["#B71C1C", "Highway"], ["#D84315", "Secondary highway"], ["#616161", "Connecting road"], ["#9E9E9E", "Local road"],
+  ["highway", "#B71C1C", "Highway"], ["secondary", "#D84315", "Secondary highway"],
+  ["connector", "#616161", "Connecting road"], ["local", "#9E9E9E", "Local road"],
 ];
+
+const SCOUTING_LEGEND = [
+  ["rubs", "#8B3A1A", "Rubs", "dot"], ["scrapes", "#E87800", "Scrapes", "dot"], ["suggestions", "#0E8A7D", "Suggestions", "line"],
+];
+
+// One row of a layer dropdown: its swatch and name, and an eye that shows / hides just that item on the map.
+// The header above it stays the on/off switch for the whole group.
+function LegendRow({ on, onClick, swatch, label }) {
+  return (
+    <button type="button" className={"land-legend-row legend-toggle" + (on ? "" : " off")} onClick={onClick}
+      aria-pressed={on} title={`${on ? "Hide" : "Show"} ${label}`}>
+      {swatch}<span className="legend-toggle-label">{label}</span>{on ? <Eye size={11} /> : <EyeOff size={11} />}
+    </button>
+  );
+}
+const lineSwatch = (color, dashed) => (
+  <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />
+);
 
 const RECSITES_HINTS = {
   zoom: "Zoom in to see recreation sites",
@@ -113,9 +134,6 @@ const RECSITES_HINTS = {
   error: "Recreation sites are unavailable right now",
   partial: "Showing saved recreation site data",
 };
-
-// The layers grouped under the layer panel's "Scouting" header.
-const SCOUTING_LAYERS = ["rubs", "scrapes", "suggestions"];
 
 const THUMB_PX = 18;   // the time slider's thumb width (input[type="range"] in styles.css)
 
@@ -195,10 +213,18 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [draftPoints, setDraftPoints] = useState([]);
   
   // Updated global map layers (stand-specific elements removed)
-  const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: true, drainage: false });
+  const [layers, setLayers] = useState({ corridors: true, zones: true, scouting: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: true, drainage: false });
   const [layersOpen, setLayersOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites, scouting } -> bool, default collapsed
   const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
+  // Items hidden inside a dropdown, per group: { publicLand: ["closed"], roads: ["local"], ... }. The group's
+  // header is the parent switch; an item shows when its header is on and it isn't hidden here.
+  const [hiddenKinds, setHiddenKinds] = useState({});
+  const toggleKind = (group, key) => setHiddenKinds((h) => {
+    const cur = h[group] || [];
+    return { ...h, [group]: cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key] };
+  });
+  const kindOn = (group, key) => !(hiddenKinds[group] || []).includes(key);
 
   // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
   // Selected items are "kind:id" keys (stand | zone | corridor | sign | suggestion).
@@ -658,6 +684,11 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     return () => window.removeEventListener("beforeunload", warn);
   }, [mapEditDirty]);
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
+  // What the map draws: rubs, scrapes and suggestions also need their "Scouting" header on.
+  const mapLayers = useMemo(() => ({
+    ...layers, rubs: layers.scouting && layers.rubs, scrapes: layers.scouting && layers.scrapes,
+    suggestions: layers.scouting && layers.suggestions,
+  }), [layers]);
 
   // ── device location ──
   const userLocation = useMemo(() => {
@@ -698,13 +729,13 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
       ...(layers.zones ? zones.map((z) => ({ key: `zone:${z.id}`, kind: "zone", active: active(z) })) : []),
       ...(layers.corridors ? corridors.map((c) => ({ key: `corridor:${c.id}`, kind: "corridor", active: active(c) })) : []),
       ...(sign || [])
-        .filter((sg) => (sg.kind === "scrape" ? layers.scrapes : layers.rubs))
+        .filter((sg) => (sg.kind === "scrape" ? mapLayers.scrapes : mapLayers.rubs))
         .map((sg) => ({ key: `sign:${sg.id}`, kind: "sign", active: active(sg) })),
-      ...(layers.suggestions
+      ...(mapLayers.suggestions
         ? (suggestions || []).map((sg) => ({ key: `suggestion:${sg.id}`, kind: "suggestion", active: sg.status !== "dismissed", score: sg.score }))
         : []),
     ];
-  }, [stands, zones, corridors, sign, suggestions, layers]);
+  }, [stands, zones, corridors, sign, suggestions, layers, mapLayers]);
   const featureByKey = useMemo(() => new Map(features.map((f) => [f.key, f])), [features]);
 
   const selectedFeatures = [...selectedKeys].map((k) => featureByKey.get(k)).filter(Boolean);
@@ -1113,7 +1144,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
         <div className="map-fill">
           <HuntMap ref={huntMapRef} stands={stands} zones={zones} corridors={corridors} sign={sign}
             suggestions={suggestions} conditions={conditions} drainage={drainage}
-            drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={layers}
+            drawMode={drawMode} onMapClick={onMapClick} draftPoints={draftPoints} layers={mapLayers} hiddenKinds={hiddenKinds}
             mapEdit={mapEdit} onMapEditChange={onMapEditChange} ruler={ruler} onRulerChange={setRuler} rulerElev={rulerElev}
             standLayers={standLayers} onToggleStandLayer={toggleStandLayer}
             onEditFeature={onEditFeature} onDeleteFeature={onDeleteFeature}
@@ -1161,24 +1192,21 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             <div className="layer-chips-panel">
               <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
               <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
-              {/* Scouting: rubs, scrapes and scouting suggestions under one header. The header turns all three
-                  off when any is on, else all on; each can still be toggled on its own inside. */}
+              {/* Scouting: rubs, scrapes and scouting suggestions under one header (the parent switch) */}
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={SCOUTING_LAYERS.some((k) => layers[k])} label="Scouting"
-                  onClick={() => setLayers((l) => {
-                    const on = !SCOUTING_LAYERS.some((k) => l[k]);
-                    return { ...l, ...Object.fromEntries(SCOUTING_LAYERS.map((k) => [k, on])) };
-                  })} />
+                <LayerChip on={layers.scouting} onClick={() => toggle("scouting")} label="Scouting" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("scouting")}
                   aria-label={legendOpen.scouting ? "Collapse scouting layers" : "Expand scouting layers"}>
                   {legendOpen.scouting ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                 </button>
               </div>
               {legendOpen.scouting && (
-                <div className="land-legend layer-sub-chips">
-                  <LayerChip on={layers.rubs}        onClick={() => toggle("rubs")}        color="#8B3A1A" dot label="Rubs" />
-                  <LayerChip on={layers.scrapes}     onClick={() => toggle("scrapes")}     color="#E87800" dot label="Scrapes" />
-                  <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Suggestions" />
+                <div className="land-legend">
+                  {SCOUTING_LEGEND.map(([key, color, label, mark]) => (
+                    <LegendRow key={key} on={layers[key]} onClick={() => toggle(key)} label={label}
+                      swatch={mark === "dot" ? <span className="legend-dot" style={{ background: color }} />
+                                             : <span className="legend-line" style={{ borderColor: color }} />} />
+                  ))}
                 </div>
               )}
               <LayerChip on={layers.leeEddies} onClick={() => toggle("leeEddies")} color="#0E7C8A" label="Lee eddies" />
@@ -1193,10 +1221,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               {legendOpen.publicLand && (
                 <div className="land-legend">
                   {LAND_HINTS[landStatus] && <div className="land-hint">{LAND_HINTS[landStatus]}</div>}
-                  {LAND_LEGEND.map(([color, label, dashed]) => (
-                    <div key={label} className="land-legend-row">
-                      <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />{label}
-                    </div>
+                  {LAND_LEGEND.map(([key, color, label, dashed]) => (
+                    <LegendRow key={key} on={kindOn("publicLand", key)} onClick={() => toggleKind("publicLand", key)}
+                      label={label} swatch={lineSwatch(color, dashed)} />
                   ))}
                 </div>
               )}
@@ -1210,10 +1237,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               {legendOpen.trails && (
                 <div className="land-legend">
                   {TRAILS_HINTS[trailsStatus] && <div className="land-hint">{TRAILS_HINTS[trailsStatus]}</div>}
-                  {TRAILS_LEGEND.map(([color, label, dashed]) => (
-                    <div key={label} className="land-legend-row">
-                      <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />{label}
-                    </div>
+                  {TRAILS_LEGEND.map(([key, color, label, dashed]) => (
+                    <LegendRow key={key} on={kindOn("trails", key)} onClick={() => toggleKind("trails", key)}
+                      label={label} swatch={lineSwatch(color, dashed)} />
                   ))}
                 </div>
               )}
@@ -1227,10 +1253,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               {legendOpen.roads && (
                 <div className="land-legend">
                   {ROADS_HINTS[roadsStatus] && <div className="land-hint">{ROADS_HINTS[roadsStatus]}</div>}
-                  {ROADS_LEGEND.map(([color, label]) => (
-                    <div key={label} className="land-legend-row">
-                      <span className="land-swatch" style={{ borderColor: color, background: color + "33" }} />{label}
-                    </div>
+                  {ROADS_LEGEND.map(([key, color, label]) => (
+                    <LegendRow key={key} on={kindOn("roads", key)} onClick={() => toggleKind("roads", key)}
+                      label={label} swatch={lineSwatch(color)} />
                   ))}
                 </div>
               )}
@@ -1245,9 +1270,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                 <div className="land-legend">
                   {RECSITES_HINTS[recSitesStatus] && <div className="land-hint">{RECSITES_HINTS[recSitesStatus]}</div>}
                   {RECSITE_KINDS.map(({ key, label }) => (
-                    <div key={key} className="land-legend-row">
-                      <span className="recsite-legend-pin" dangerouslySetInnerHTML={{ __html: recSitePinSvg(key, 18) }} />{label}
-                    </div>
+                    <LegendRow key={key} on={kindOn("recSites", key)} onClick={() => toggleKind("recSites", key)} label={label}
+                      swatch={<span className="recsite-legend-pin" dangerouslySetInnerHTML={{ __html: recSitePinSvg(key, 18) }} />} />
                   ))}
                 </div>
               )}

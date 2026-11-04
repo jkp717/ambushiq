@@ -591,7 +591,7 @@ function bindFeaturePopup(layer, { title, subtitle, note, kind, id, onEdit, onDe
 
 const HuntMap = forwardRef(function HuntMap({
   stands, zones, corridors, sign, suggestions, conditions, drainage = null,
-  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange, ruler = null, onRulerChange, rulerElev = null,
+  drawMode, onMapClick, draftPoints, mapEdit = null, onMapEditChange, ruler = null, onRulerChange, rulerElev = null, hiddenKinds = {},
   layers, standLayers, onToggleStandLayer, onEditFeature, onDeleteFeature, onDismissSuggestion,
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
@@ -1229,7 +1229,9 @@ const HuntMap = forwardRef(function HuntMap({
     const g = layerGroups.current.publicLand;
     if (!g) return;
     g.clearLayers();
-    const { features } = landData.current;
+    const hide = new Set(hiddenKinds.publicLand || []);
+    const features = landData.current.features.filter((f) =>
+      !hide.has(f.properties.kind) && !(f.properties.access === "closed" && hide.has("closed")));
     if (!features.length) return;
     const interactive = !drawMode && !selectMode;   // clicks must reach the map while drawing or selecting
     L.geoJSON({ type: "FeatureCollection", features }, {
@@ -1283,7 +1285,8 @@ const HuntMap = forwardRef(function HuntMap({
     const g = layerGroups.current.trails;
     if (!g) return;
     g.clearLayers();
-    const { features } = trailData.current;
+    const hide = new Set(hiddenKinds.trails || []);
+    const features = trailData.current.features.filter((f) => !hide.has(f.properties.kind));
     if (!features.length) return;
     addSelectableLines(g, features, {
       pane: "trailsPane", styleFn: trailStyle, popupFn: trailPopup, interactive: !drawMode && !selectMode,
@@ -1334,7 +1337,8 @@ const HuntMap = forwardRef(function HuntMap({
     const g = layerGroups.current.roads;
     if (!g) return;
     g.clearLayers();
-    const { features } = roadData.current;
+    const hide = new Set(hiddenKinds.roads || []);
+    const features = roadData.current.features.filter((f) => !hide.has(f.properties.kind || "local"));
     if (!features.length) return;
     addSelectableLines(g, features, {
       pane: "roadsPane", styleFn: roadStyle, popupFn: roadPopup, interactive: !drawMode && !selectMode,
@@ -1386,7 +1390,8 @@ const HuntMap = forwardRef(function HuntMap({
     const g = layerGroups.current.recSites;
     if (!g) return;
     g.clearLayers();
-    const { features } = recSiteData.current;
+    const hide = new Set(hiddenKinds.recSites || []);
+    const features = recSiteData.current.features.filter((f) => !hide.has(recSiteKind(f.properties.kind).key));
     if (!features.length) return;
     const interactive = !drawMode && !selectMode;
     L.geoJSON({ type: "FeatureCollection", features }, {
@@ -1396,6 +1401,11 @@ const HuntMap = forwardRef(function HuntMap({
     }).addTo(g);
   };
   useEffect(() => { if (ready) drawRecSitesRef.current(); }, [ready, drawMode, selectMode]);
+  // an item shown / hidden in a layer dropdown: redraw from the data already loaded (nothing is refetched)
+  useEffect(() => {
+    if (!ready) return;
+    drawLandRef.current(); drawTrailsRef.current(); drawRoadsRef.current(); drawRecSitesRef.current();
+  }, [hiddenKinds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const map = mapRef.current;
