@@ -113,6 +113,9 @@ const RECSITES_HINTS = {
   partial: "Showing saved recreation site data",
 };
 
+// The layers grouped under the layer panel's "Scouting" header.
+const SCOUTING_LAYERS = ["rubs", "scrapes", "suggestions"];
+
 const THUMB_PX = 18;   // the time slider's thumb width (input[type="range"] in styles.css)
 
 // Add-menu modes that place a single point (vs. drawing a corridor or a scouting area).
@@ -193,7 +196,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   // Updated global map layers (stand-specific elements removed)
   const [layers, setLayers] = useState({ corridors: true, zones: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: true, drainage: false });
   const [layersOpen, setLayersOpen] = useState(false);
-  const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites } -> bool, default collapsed
+  const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites, scouting } -> bool, default collapsed
   const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
 
   // Multi-select: tap features / box-select, then bulk activate, deactivate or delete.
@@ -1141,13 +1144,30 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             <div className="layer-chips-panel">
               <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
               <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
-              <LayerChip on={layers.scrapes}   onClick={() => toggle("scrapes")}   color="#E87800" dot label="Scrapes" />
-              <LayerChip on={layers.rubs}      onClick={() => toggle("rubs")}      color="#8B3A1A" dot label="Rubs" />
-              <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Scouting" />
+              {/* Scouting: rubs, scrapes and scouting suggestions under one header. The header turns all three
+                  off when any is on, else all on; each can still be toggled on its own inside. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <LayerChip on={SCOUTING_LAYERS.some((k) => layers[k])} label="Scouting"
+                  onClick={() => setLayers((l) => {
+                    const on = !SCOUTING_LAYERS.some((k) => l[k]);
+                    return { ...l, ...Object.fromEntries(SCOUTING_LAYERS.map((k) => [k, on])) };
+                  })} />
+                <button className="chip-expand-btn" onClick={() => toggleLegend("scouting")}
+                  aria-label={legendOpen.scouting ? "Collapse scouting layers" : "Expand scouting layers"}>
+                  {legendOpen.scouting ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+              {legendOpen.scouting && (
+                <div className="land-legend layer-sub-chips">
+                  <LayerChip on={layers.rubs}        onClick={() => toggle("rubs")}        color="#8B3A1A" dot label="Rubs" />
+                  <LayerChip on={layers.scrapes}     onClick={() => toggle("scrapes")}     color="#E87800" dot label="Scrapes" />
+                  <LayerChip on={layers.suggestions} onClick={() => toggle("suggestions")} color="#0E8A7D" label="Suggestions" />
+                </div>
+              )}
               <LayerChip on={layers.leeEddies} onClick={() => toggle("leeEddies")} color="#0E7C8A" label="Lee eddies" />
               <LayerChip on={layers.drainage} onClick={() => toggle("drainage")} color="#185FA5" label="Drainage" />
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} color="#D81B60" label="Public land" />
+                <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} label="Public land" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("publicLand")}
                   aria-label={legendOpen.publicLand ? "Collapse legend" : "Expand legend"}>
                   {legendOpen.publicLand ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -1164,7 +1184,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                 </div>
               )}
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.trails} onClick={() => toggle("trails")} color="#8D6E00" label="Trails" />
+                <LayerChip on={layers.trails} onClick={() => toggle("trails")} label="Trails" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("trails")}
                   aria-label={legendOpen.trails ? "Collapse legend" : "Expand legend"}>
                   {legendOpen.trails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -1181,7 +1201,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                 </div>
               )}
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.roads} onClick={() => toggle("roads")} color="#B71C1C" label="Roads" />
+                <LayerChip on={layers.roads} onClick={() => toggle("roads")} label="Roads" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("roads")}
                   aria-label={legendOpen.roads ? "Collapse legend" : "Expand legend"}>
                   {legendOpen.roads ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -1198,7 +1218,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                 </div>
               )}
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} color="#1565C0" dot label="Rec sites" />
+                <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} label="Rec sites" />
                 <button className="chip-expand-btn" onClick={() => toggleLegend("recSites")}
                   aria-label={legendOpen.recSites ? "Collapse legend" : "Expand legend"}>
                   {legendOpen.recSites ? <ChevronUp size={12} /> : <ChevronDown size={12} />}

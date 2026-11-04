@@ -741,6 +741,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .land-legend { display: flex; flex-direction: column; gap: 3px; padding: 4px 6px; border-radius: 8px; background: var(--bg); font-size: 11px; color: var(--sub); }
 .land-hint { color: var(--amber); font-weight: 600; }
 .land-legend-row { display: flex; align-items: center; gap: 6px; }
+/* a header's sub-layers (Scouting): their own on/off chips, stacked in the legend box */
+.layer-sub-chips { align-items: flex-start; gap: 4px; }
 .land-swatch { width: 14px; height: 10px; border: 2px solid; border-radius: 2px; flex-shrink: 0; box-sizing: border-box; }
 .recsite-legend-pin { width: 14px; display: flex; justify-content: center; flex-shrink: 0; }
 .feat-popup .land-row { font-size: 12px; margin-top: 3px; }
