@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Wind, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House } from "lucide-react";
+import { List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -1192,15 +1192,6 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             aria-expanded={layersOpen} title="Map layers">
             <List size={16} />
           </button>
-          {conditions && (
-            <div className="map-weather-card">
-              <span className="map-wpill">☁ {conditions.time.cloud}%</span>
-              <span className="map-wpill">🌡 {Math.round(conditions.time.temp * 9 / 5 + 32)}°F</span>
-              {conditions.time.wind_speed != null && (
-                <span className="map-wpill"><Wind size={11} /> {degToCompass(conditions.time.wind_dir)} {Math.round(conditions.time.wind_speed)} mph</span>
-              )}
-            </div>
-          )}
         </div>
         {scoutAnalyzing && (
           <div className="map-scout-progress">

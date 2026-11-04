@@ -520,12 +520,6 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   background: color-mix(in srgb, var(--tone, transparent) 70%, transparent);
 }
 
-.map-wpill {
-  display: inline-flex; align-items: center; gap: 3px;
-  font-size: 12px; color: #fff;
-  white-space: nowrap;
-}
-
 /* Media-control row: skip-back / scrubber / skip-forward / play-pause.
    display:contents unwraps this row so its 4 children become direct grid
    items of .map-ctrl-panel above, each placed by its own grid-area class
@@ -743,7 +737,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 .map-page.sheet-dragging .map-right-stack,
 .map-page.sheet-dragging .map-scout-progress { transition: none; }
 
-/* ── bottom-right stack: the map layers button (its chip panel opens upward from it) above the weather card.
+/* ── bottom-right stack: the map layers button, its chip panel opening upward from it.
    Rides the time shelf like the left-hand buttons; never grows past the top of the map. ── */
 .map-right-stack {
   position: absolute; bottom: calc(20px + var(--sheet-controls-lift, 0px)); right: 10px; z-index: 500;
@@ -751,14 +745,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   max-height: calc(100% - 20px - var(--sheet-controls-lift, 0px) - 90px);   /* 90px clears the top-right map controls */
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
 }
-.map-right-stack > .layer-toggle-btn, .map-right-stack > .map-weather-card { flex-shrink: 0; }
+.map-right-stack > .layer-toggle-btn { flex-shrink: 0; }
 .layer-toggle-btn.open { background: rgba(0,0,0,.70); }
-/* the floating weather card — mirrors the layer buttons' style */
-.map-weather-card {
-  display: flex; flex-direction: column; align-items: flex-end; gap: 3px;
-  background: rgba(0,0,0,.50); backdrop-filter: blur(4px);
-  border-radius: 10px; padding: 7px 10px;
-}
 
 /* ── floating scouting-analysis progress/error card, bottom-left ── */
 .map-scout-progress {
