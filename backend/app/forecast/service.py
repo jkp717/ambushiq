@@ -12,6 +12,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,19 @@ from app.stands.models import Stand
 from app.zones.models import Zone
 
 log = logging.getLogger(__name__)
+
+
+def forecast_location(region_id: int) -> tuple[float, float]:
+    """Where to fetch weather for a region: its first stand, or - so the map and the daily rating work on a
+    brand-new region - the region's own location. A region still at the 0,0 placeholder has no usable location."""
+    with Session(engine) as s:
+        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
+        if first:
+            return first.lat, first.lon
+        region = s.get(Region, region_id)
+        if region and (region.lat or region.lon):
+            return region.lat, region.lon
+    raise HTTPException(400, "set this region's location or add a stand first")
 
 
 def _camera_status_by_stand(region_id: int) -> dict[int, dict]:

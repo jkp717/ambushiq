@@ -27,6 +27,7 @@ from app.forecast.service import (
     build_scoring_context,
     format_day_label,
     format_hour_label,
+    forecast_location,
     get_forecast,
 )
 from app.forecast import eddy as eddy_mod
@@ -101,17 +102,7 @@ def _score_view(det: dict) -> dict:
     }
 
 
-def _forecast_location(region_id: int) -> tuple[float, float]:
-    """Where to fetch weather for a region: its first stand, or - so the map works on a brand-new region -
-    the region's own location. A region still at the 0,0 placeholder has no usable location."""
-    with Session(engine) as s:
-        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
-        if first:
-            return first.lat, first.lon
-        region = s.get(Region, region_id)
-        if region and (region.lat or region.lon):
-            return region.lat, region.lon
-    raise HTTPException(400, "set this region's location or add a stand first")
+_forecast_location = forecast_location   # first stand, else the region's own location (shared with /api/deer-ratings)
 
 
 def _active_stands(region_id: int) -> list[dict]:

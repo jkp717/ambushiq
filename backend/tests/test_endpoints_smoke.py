@@ -173,6 +173,34 @@ def test_a_region_at_the_placeholder_location_with_no_stands_is_rejected(no_stan
     assert e.value.status_code == 400
 
 
+def test_a_region_with_no_stands_is_rated_at_its_own_location(no_stands, monkeypatch):
+    with Session(engine) as s:
+        region = s.get(Region, 1)
+        region.lat, region.lon = 35.25, -93.5
+        s.commit()
+    asked = []
+
+    async def recording_forecast(lat, lon, *a, **k):
+        asked.append((lat, lon))
+        return _forecast()
+
+    monkeypatch.setattr(deer_router, "get_forecast", recording_forecast)
+    out = run(deer_router.deer_ratings(region_id=1, _=None))
+    assert [r["day"] for r in out["ratings"]] == DAYS
+    assert all(1 <= r["rating"] <= 5 for r in out["ratings"])
+    assert asked == [(35.25, -93.5)]
+
+
+def test_no_stands_and_no_region_location_cannot_be_rated(no_stands):
+    with Session(engine) as s:
+        region = s.get(Region, 1)
+        region.lat = region.lon = 0.0
+        s.commit()
+    with pytest.raises(HTTPException) as e:
+        run(deer_router.deer_ratings(region_id=1, _=None))
+    assert e.value.status_code == 400
+
+
 def test_all_hours_conditions_match_the_single_hour_endpoint(seeded):
     """The offline copy of the forecast (/map/conditions/all) must show exactly what the live map would."""
     allc = run(fc_router.map_conditions_all(region_id=1, _=None))

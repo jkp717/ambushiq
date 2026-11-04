@@ -382,9 +382,11 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   }, [standsReady, hasStands, activeRegion?.id, foregroundTick]);
 
   // Each day's movement rating for the day strip: the same saved copy the Outlook keeps, so it shows offline.
+  // A region with no stands yet is rated at its own location (the rating is weather + rut timing, not per
+  // stand); adding the first stand refetches it for that stand's weather.
   useEffect(() => {
     setRatings(null);
-    if (!standsReady || !hasStands) return undefined;
+    if (!standsReady) return undefined;
     let cancel = false;
     apiSaved("/deer-ratings")
       .then((j) => { if (!cancel) setRatings(new Map((j.ratings || []).map((r) => [r.day, r]))); })

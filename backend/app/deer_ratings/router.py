@@ -4,14 +4,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends
 
-from app.core.database import engine
 from app.deer_ratings import rating as deer_rating
 from app.dependencies import get_active_region_id, require_token
 from app.forecast.service import (
+    forecast_location,
     format_day_label,
     get_forecast,
     get_historical_day_weather,
@@ -21,7 +19,6 @@ from app.forecast.service import (
 )
 from app.regions.service import get_region_dict
 from app.settings.service import get_settings
-from app.stands.models import Stand
 
 router = APIRouter(tags=["deer_ratings"])
 
@@ -32,11 +29,9 @@ async def deer_ratings(region_id: int = Depends(get_active_region_id), _=Depends
     from datetime import date as _date
     # local_today derived from the forecast UTC offset below, after fc is fetched.
     region = get_region_dict(region_id)
-    with Session(engine) as s:
-        first = s.scalars(select(Stand).where(Stand.region_id == region_id).order_by(Stand.name)).first()
-        if not first:
-            raise HTTPException(400, "add a stand first")
-        lat, lon = first.lat, first.lon
+    # The rating is weather + rut timing for the whole region; the location only picks the weather point:
+    # the first stand, or the region's own location when it has none yet (same point as the map's weather).
+    lat, lon = forecast_location(region_id)
     fc = await get_forecast(lat, lon, days=14, tz_name=region["property_timezone"])
     h = fc["hourly"]
     sun = fc["daily"]
