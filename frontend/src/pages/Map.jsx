@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House } from "lucide-react";
+import { List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -939,6 +939,34 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
                   <ChevronLeft size={18} />
                 </button>
                 <div className="map-scrub-track">
+                  {/* Sunrise / sunset: a small labelled pointer above the slider ("☀↑ 7:21am") and a notch
+                      on the track at the same spot */}
+                  {(() => {
+                    const first = curDay.hours[0]?.hour ?? 0;
+                    const at = (t) => ((t - first) * 4 / (numSlots - 1)) * 100;
+                    const short = (t) => {
+                      const mins = Math.round(t * 60), hh = Math.floor(mins / 60) % 24, mm = mins % 60;
+                      return `${hh % 12 || 12}:${String(mm).padStart(2, "0")}${hh >= 12 ? "pm" : "am"}`;
+                    };
+                    const suns = [
+                      curDay.sunrise_h != null && { key: "rise", t: curDay.sunrise_h, Icon: Sunrise, label: "Sunrise" },
+                      curDay.sunset_h != null && { key: "set", t: curDay.sunset_h, Icon: Sunset, label: "Sunset" },
+                    ].filter((s) => s && at(s.t) > 0 && at(s.t) < 100);
+                    if (!suns.length) return null;
+                    return (
+                      <div className="map-sun-row">
+                        {suns.map(({ key, t, Icon, label }) => (
+                          <span key={key} className={`map-sun-label ${key}`} style={{ left: `${at(t).toFixed(2)}%` }}
+                            title={`${label} ${short(t)}`}>
+                            <Icon size={11} strokeWidth={2.4} />{short(t)}
+                          </span>
+                        ))}
+                        {suns.map(({ key, t }) => (
+                          <span key={`n${key}`} className={`map-sun-notch ${key}`} style={{ left: `${at(t).toFixed(2)}%` }} />
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <div style={{ position: "relative" }}>
                     <input type="range" className="map-hour-slider"
                       min={0} max={maxSlot}
