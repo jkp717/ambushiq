@@ -102,6 +102,7 @@ const TRAILS_LEGEND = [
   ["track", "#6B7A3A", "Track (two-track)", true],
 ];
 // The OpenStreetMap part of the Trails layer has its own status (its own request; see /api/osm-trails)
+const DEFAULT_BASE_KEY = "sa_default_base";   // localStorage copy of the default_base_layer setting
 const OSM_TRAILS_HINTS = {
   importing: "Foot/horse trails and tracks are still downloading for this state",
   none: "No foot/horse trails or tracks here yet: add a region in this state to download them",
@@ -293,6 +294,9 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [scoutError, setScoutError] = useState(null);
 
   const [maptilerKey, setMaptilerKey] = useState("");
+  // Base map to open on (Settings → Map layers). A copy is kept on the device so the map opens on it straight away,
+  // before the settings arrive.
+  const [defaultBase, setDefaultBase] = useState(() => { try { return localStorage.getItem(DEFAULT_BASE_KEY); } catch { return null; } });
   // Property-wide cold-air drainage layer (doesn't change with the forecast): fetched — and saved on
   // the phone — even while its chip is off, so it still draws with no signal.
   const [drainage, setDrainage] = useState(null);
@@ -316,6 +320,10 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
         scout_radius_max_m: s.scout_radius_max_m ?? SCOUT_RADIUS_MAX_M,
       });
       setMaptilerKey(s.maptiler_api_key || "");
+      if (s.default_base_layer) {
+        setDefaultBase(s.default_base_layer);
+        try { localStorage.setItem(DEFAULT_BASE_KEY, s.default_base_layer); } catch { /* storage blocked */ }
+      }
     }).catch(() => {});
   }, []);
 
@@ -1166,7 +1174,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
-            userLocation={userLocation} maptilerKey={maptilerKey} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus} onOsmTrailsStatus={setOsmTrailsStatus}
+            userLocation={userLocation} maptilerKey={maptilerKey} defaultBase={defaultBase} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus} onOsmTrailsStatus={setOsmTrailsStatus}
             onRecSitesStatus={setRecSitesStatus} onRoadsStatus={setRoadsStatus}
             standActions={standActions} focusStandId={focusStandId} onFocused={() => setFocusStandId(null)}
             regionId={activeRegion.id}

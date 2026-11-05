@@ -11,6 +11,7 @@ import JobsPanel from "../components/JobsPanel.jsx";
 import BuckModelSection from "../components/cameras/BuckModelSection.jsx";
 import { mToYd, ydToM, fmtYd, fmtDist } from "../utils/units.js";
 import { SIT_DEFAULTS, sitWindows } from "../utils/periods.js";
+import { TILE_SOURCES } from "../utils/tileSources.js";
 
 // The page's sections, in order — the nav menu lists these and each header carries the matching id.
 const SECTIONS = [
@@ -260,6 +261,17 @@ function SettingsPage({ reloadStands }) {
             placeholder="Paste key to enable MapTiler layers" autoComplete="off" spellCheck={false}
             style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 13 }} />
         </Field>
+        {/* The base map the Map page opens on. Switching in the map's layer picker lasts for that visit only.
+            MapTiler maps are offered once a key is entered above. */}
+        <div style={{ marginTop: 10 }}>
+          <Field label="Default base map">
+            <select value={s.default_base_layer || "topo"} onChange={(e) => setS({ ...s, default_base_layer: e.target.value })}>
+              {TILE_SOURCES.filter((t) => !t.overlayOnly && (!t.needsKey || s.maptiler_api_key)).map((t) => (
+                <option key={t.id} value={t.id}>{t.label}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
         <button className="btn btn-primary" onClick={save}><Save size={15} /> {saved ? "Saved ✓" : "Save"}</button>

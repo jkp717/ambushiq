@@ -76,6 +76,8 @@ DEFAULT_SETTINGS = {
     # encrypted — it is sent to the browser in tile URLs anyway; restrict it to this
     # site's origin in the MapTiler dashboard.
     "maptiler_api_key": "",
+    # base map the Map page opens on (a frontend TILE_SOURCES id; one needing a missing MapTiler key falls back to "topo")
+    "default_base_layer": "topo",
     # how far past the outermost stands the map's property-wide Drainage layer is drawn
     # (the flow itself is calculated over the whole property terrain grid)
     "drainage_margin_m": 457.2,            # 500 yd

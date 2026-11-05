@@ -31,9 +31,8 @@ function statusFlag(counts, setLabels, label) {
 // Waits before re-asking for a terrain overlay tile that failed (the server answers 503 when USGS does).
 const TILE_RETRY_DELAYS_MS = [4000, 10000, 25000, 60000];
 
-const BASE_LAYER_KEY = "sa_base_layer";   // localStorage: id of the last base layer picked
 const OVERLAYS_KEY = "sa_overlays";       // localStorage: ids of the on/off overlays that are on
-const DEFAULT_BASE = "topo";
+const DEFAULT_BASE = "topo";   // when the Settings choice (defaultBase) is missing or unavailable
 const MAP_THEME_KEY = "sa_map_theme";     // localStorage: "dark" | "light"; absent = follow the phone's dark mode
 const IMAGERY_BASES = new Set(TILE_SOURCES.filter((t) => t.imagery).map((t) => t.id));
 // Moon / sun for the dark-map button (lucide's "moon" and "sun"), drawn in the Leaflet control's own DOM
@@ -707,7 +706,7 @@ const HuntMap = forwardRef(function HuntMap({
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null, onPublicLandStatus, onTrailsStatus, onOsmTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
+  userLocation = null, defaultBase = null, onPublicLandStatus, onTrailsStatus, onOsmTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
   maptilerKey = "", height = 420, standActions = null, focusStandId = null, onFocused,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -734,6 +733,7 @@ const HuntMap = forwardRef(function HuntMap({
   const layerGroups = useRef({});
   const offlineLayers = useRef({});
   const activeBase = useRef(null);   // TILE_SOURCES id of the base layer currently shown
+  const basePicked = useRef(false);  // switched in the layer picker this visit: a rebuild keeps that choice
   // Terrain overlay status for the map pill, as loadingLabel -> how many layers of it are in that state:
   // still fetching tiles (slow on first view), or switched on but zoomed out past where it draws anything.
   const tileLoads = useRef(new Map());
@@ -922,8 +922,9 @@ const HuntMap = forwardRef(function HuntMap({
     }
     offlineLayers.current = offline;
 
-    let saved = activeBase.current;
-    if (!saved) { try { saved = localStorage.getItem(BASE_LAYER_KEY); } catch { saved = null; } }
+    // The map opens on the base map chosen in Settings (defaultBase). Switching in the layer picker lasts for this
+    // visit only; a rebuild (e.g. the MapTiler key arriving) keeps that switch.
+    let saved = basePicked.current ? activeBase.current : (defaultBase || activeBase.current);
     saved = RENAMED_BASES[saved] || saved;
     const pick = [...idOf.entries()].find(([, id]) => id === saved) || [...idOf.entries()].find(([, id]) => id === DEFAULT_BASE);
     pick[0].addTo(map);
@@ -940,8 +941,8 @@ const HuntMap = forwardRef(function HuntMap({
       const id = idOf.get(e.layer);
       if (!id) return;
       activeBase.current = id;
+      basePicked.current = true;
       setImageryBase(IMAGERY_BASES.has(id));
-      try { localStorage.setItem(BASE_LAYER_KEY, id); } catch { /* storage blocked: just not remembered */ }
     };
     const onOverlay = (e) => {
       const id = overlayIdOf.get(e.layer);
@@ -957,7 +958,7 @@ const HuntMap = forwardRef(function HuntMap({
       control.remove();
       [...Object.values(bases), ...Object.values(overlays)].forEach((l) => map.removeLayer(l));
     };
-  }, [ready, maptilerKey]);
+  }, [ready, maptilerKey, defaultBase]);
 
   // Dark-map button, under the zoom buttons.
   useEffect(() => {
