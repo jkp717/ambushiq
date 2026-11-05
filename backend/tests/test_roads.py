@@ -113,7 +113,8 @@ def test_degenerate_coordinate_lists_are_not_a_line():
 def test_features_are_normalized_per_class(kind):
     out = service.normalize_road_feature(road_feature(7, "Main St"), 0.0001, 34.7, kind)
     assert out["id"] == f"{kind}-7"
-    assert out["properties"] == {"name": "Main St", "kind": kind, "source": "USGS National Map"}
+    assert out["properties"] == {"name": "Main St", "kind": kind, "named": True, "route": None,
+                                 "source": "USGS National Map"}
 
 
 def test_unnamed_roads_get_a_class_specific_fallback_name():
@@ -267,3 +268,31 @@ def test_merge_is_reused_for_the_same_cells_and_redone_after_a_refresh(env, monk
     service._mem.clear()                                                        # cells reloaded (new lists)
     run(**BOX)
     assert len(calls) == 2
+
+
+# ---------- names: USGS name, else Forest Service route number ----------
+
+def test_forest_service_route_number_names_a_road_usgs_leaves_unnamed():
+    raw = {"id": 5, "properties": {"name": "", "federal_lands_route": " 423I "}, "geometry": line()}
+    p = service.normalize_road_feature(raw, 0.00001, 34.7, "local")["properties"]
+    assert p["name"] == "FS Rd 423I" and p["route"] == "423I" and p["named"] is False
+
+
+def test_usgs_name_wins_and_is_marked_named():
+    raw = {"id": 5, "properties": {"name": "Scott Ln", "federal_lands_route": "423I"}, "geometry": line()}
+    p = service.normalize_road_feature(raw, 0.00001, 34.7, "local")["properties"]
+    assert p["name"] == "Scott Ln" and p["named"] is True and p["route"] == "423I"
+
+
+def test_no_name_and_no_route_keeps_the_placeholder():
+    raw = {"id": 5, "properties": {"name": None}, "geometry": line()}
+    p = service.normalize_road_feature(raw, 0.00001, 34.7, "local")["properties"]
+    assert p["name"] == service._UNNAMED["local"] and p["named"] is False and p["route"] is None
+
+
+def test_route_named_segments_merge_through_junctions():
+    a, b, c = [0, 0], [1, 0], [2, 0]
+    u = service._UNNAMED["local"]
+    out = service.merge_road_segments([seg(1, [a, b], name="FS Rd 423I"), seg(2, [b, c], name="FS Rd 423I"),
+                                       seg(3, [b, [1, 1]], name=u)])
+    assert len(out) == 2

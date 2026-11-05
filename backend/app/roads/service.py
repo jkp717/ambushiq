@@ -32,7 +32,7 @@ _BASE_URL = "https://carto.nationalmap.gov/arcgis/rest/services/transportation/M
 _LAYER_IDS = {"highway": 29, "secondary": 30, "connector": 31, "local": 32}
 _UNNAMED = {"highway": "Unnamed highway", "secondary": "Unnamed secondary highway",
             "connector": "Unnamed connecting road", "local": "Unnamed local road"}
-OUT_FIELDS = "name"
+OUT_FIELDS = "name,federal_lands_route"   # federal_lands_route: e.g. a Forest Service road number ("423I")
 ATTRIBUTION = "Roads: USGS National Map"
 
 MIN_ZOOM = 11
@@ -43,7 +43,7 @@ REQUEST_TIMEOUT_S = 25
 CELL_TTL_S = 30 * 24 * 3600
 EMPTY_CELL_TTL_S = 24 * 3600      # an empty answer is re-checked daily: it may be a real gap or a glitch
 PRUNE_AFTER_S = 180 * 24 * 3600   # cells not refreshed in this long are dropped to keep the cache bounded
-CACHE_SCHEMA = "v1"      # bump when the stored feature shape or filters change
+CACHE_SCHEMA = "v2"      # bump when the stored feature shape or filters change
 
 
 # ---------- geometry simplification (open polylines — no ring-closing needed) ----------
@@ -141,14 +141,19 @@ def normalize_road_feature(raw: dict, tol: float, lat: float, kind: str) -> Opti
     geom = simplify_line_geometry(raw.get("geometry"), tol, lat)
     if not geom:
         return None
-    name = (props.get("name") or "").strip() or _UNNAMED.get(kind, "Unnamed road")
+    usgs_name = (props.get("name") or "").strip()
+    route = (props.get("federal_lands_route") or "").strip() or None
+    # USGS name, else the Forest Service route number, else a class-specific placeholder. `named` tells the map
+    # whether to ask for a street name (app.roads.street_name) when the road is hovered or clicked.
+    name = usgs_name or (f"FS Rd {route}" if route else _UNNAMED.get(kind, "Unnamed road"))
     fid = raw.get("id")
     if fid is None:
         p = _first_point(geom)
         fid = f"{name}|{p[0]},{p[1]}"
     return {
         "type": "Feature", "id": f"{kind}-{fid}", "geometry": geom,
-        "properties": {"name": name, "kind": kind, "source": "USGS National Map"},
+        "properties": {"name": name, "kind": kind, "named": bool(usgs_name), "route": route,
+                       "source": "USGS National Map"},
     }
 
 

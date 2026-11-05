@@ -160,15 +160,48 @@ function roadStyle(p, interactive) {
   return { ...s, opacity: 0.9, interactive };
 }
 
+// `nameSource: "esri"` is set by the map once a road USGS doesn't name gets its street name from Esri (see
+// roadNameLookup); `route` is the Forest Service road number, which names the road until then ("FS Rd 423I").
 function roadPopup(p) {
+  const routeRow = p.route && p.name !== `FS Rd ${p.route}`
+    ? `<div class="land-row"><b>Forest Service route:</b> ${escHtml(p.route)}</div>` : "";
+  const note = p.nameSource === "esri"
+    ? "Road line from USGS National Map; name from Esri address data."
+    : "USGS National Map road data.";
   return `<div class="feat-popup">
     <div class="feat-popup-title">${escHtml(p.name)}</div>
     <div class="feat-popup-sub">${escHtml(ROAD_KIND_LABEL[p.kind] || "Road")}</div>
-    <div class="land-note">USGS National Map road data.</div>
+    ${routeRow}
+    <div class="land-note">${note}</div>
   </div>`;
 }
 
 const roadTip = (p) => lineHoverTip(p.kind || "local", (ROAD_STYLES[p.kind] || ROAD_STYLES.local).color, p.name);
+
+// The point on a (Multi)LineString nearest `latlng` (flat-earth projection; fine over a road's length), so the
+// street-name lookup asks about a point on the road itself rather than wherever the pointer sits in the wide hit area.
+function nearestOnLine(geom, latlng) {
+  const k = Math.cos((latlng.lat * Math.PI) / 180);
+  const parts = geom.type === "LineString" ? [geom.coordinates] : geom.coordinates;
+  let best = null, bestD = Infinity;
+  for (const part of parts) {
+    for (let i = 0; i < part.length - 1; i++) {
+      const [ax, ay] = part[i], [bx, by] = part[i + 1];
+      const dx = (bx - ax) * k, dy = by - ay, px = (latlng.lng - ax) * k, py = latlng.lat - ay;
+      const seg = dx * dx + dy * dy;
+      const t = seg ? Math.max(0, Math.min(1, (px * dx + py * dy) / seg)) : 0;
+      const d = (px - t * dx) ** 2 + (py - t * dy) ** 2;
+      if (d < bestD) { bestD = d; best = { lat: ay + t * (by - ay), lng: ax + t * (bx - ax) }; }
+    }
+  }
+  return best || latlng;
+}
+
+// Street name for a road USGS leaves unnamed (GET /api/roads/name: Esri reverse geocode, null when unknown).
+const roadNameLookup = (f, latlng) => {
+  const pt = nearestOnLine(f.geometry, latlng);
+  return api(`/roads/name?lat=${pt.lat.toFixed(6)}&lon=${pt.lng.toFixed(6)}`).then((j) => j.name || null);
+};
 
 // Roads and trails are thin lines, and a line's own stroke is its click target, so a 1px local road is nearly
 // impossible to hit. Each feature is drawn twice: the visible line (not clickable) and, above it in the same
@@ -176,10 +209,15 @@ const roadTip = (p) => lineHoverTip(p.kind || "local", (ROAD_STYLES[p.kind] || R
 // pointer is over it or its popup is open, which also gives touch screens (no hover) feedback on what was picked.
 // With a `tipFn`, a small label (icon + name) follows the pointer while hovering; touch screens have no hover, so
 // they skip it and a tap goes straight to the popup.
+// With a `lookupName`, a feature the source doesn't name (`named === false`) asks for a name once it's been hovered
+// for NAME_LOOKUP_DELAY_MS, or right away when clicked, and the label and popup switch to it when it arrives. Answers
+// (a name or null) are kept for the session in `lookedUpNames`, by feature id, so each road is asked at most once.
+const NAME_LOOKUP_DELAY_MS = 250;
+const lookedUpNames = new Map();   // feature id -> Promise<string | null>
 const COARSE_POINTER = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 const LINE_HIT_WEIGHT = COARSE_POINTER ? 22 : 14;
 
-function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, interactive }) {
+function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, lookupName, interactive }) {
   const fc = { type: "FeatureCollection", features };
   const visible = new Map();
   L.geoJSON(fc, {
@@ -207,9 +245,27 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, in
         });
         hit.on("tooltipopen", () => { if (popupOpen) hit.closeTooltip(); });   // the detailed popup replaces it
       }
-      hit.on("mouseover", on);
-      hit.on("mouseout", off);
-      hit.on("popupopen", () => { popupOpen = true; on(); hit.closeTooltip(); });
+      let ask = () => {};
+      let timer = 0;
+      if (lookupName && f.properties.named === false) {
+        const apply = (name) => {
+          if (!name) return;
+          const p = { ...f.properties, name, nameSource: "esri" };
+          hit.setPopupContent(popupFn(p));
+          if (hit.getTooltip()) hit.setTooltipContent(tipFn(p));
+        };
+        const known = lookedUpNames.get(f.id);
+        if (known) known.then(apply, () => {});
+        ask = (latlng) => {
+          if (lookedUpNames.has(f.id)) return;
+          const req = lookupName(f, latlng);
+          lookedUpNames.set(f.id, req);
+          req.then(apply, () => lookedUpNames.delete(f.id));   // a failed request may be retried later
+        };
+      }
+      hit.on("mouseover", (e) => { on(); clearTimeout(timer); timer = setTimeout(() => ask(e.latlng), NAME_LOOKUP_DELAY_MS); });
+      hit.on("mouseout", () => { clearTimeout(timer); off(); });
+      hit.on("popupopen", (e) => { popupOpen = true; on(); hit.closeTooltip(); ask(e.popup.getLatLng()); });
       hit.on("popupclose", () => { popupOpen = false; off(); });
     },
   }).addTo(group);
@@ -1359,7 +1415,7 @@ const HuntMap = forwardRef(function HuntMap({
     const features = roadData.current.features.filter((f) => !hide.has(f.properties.kind || "local"));
     if (!features.length) return;
     addSelectableLines(g, features, {
-      pane: "roadsPane", styleFn: roadStyle, popupFn: roadPopup, tipFn: roadTip, interactive: !drawMode && !selectMode,
+      pane: "roadsPane", styleFn: roadStyle, popupFn: roadPopup, tipFn: roadTip, lookupName: roadNameLookup, interactive: !drawMode && !selectMode,
     });
   };
   useEffect(() => { if (ready) drawRoadsRef.current(); }, [ready, drawMode, selectMode]);

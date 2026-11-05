@@ -4,9 +4,17 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.dependencies import require_token
-from app.roads import service
+from app.roads import service, street_name
 
 router = APIRouter(tags=["roads"])
+
+
+@router.get("/api/roads/name")
+async def road_name(lat: float, lon: float, _=Depends(require_token)):
+    """Street name for a point on a road USGS doesn't name (Esri reverse geocode); null when unknown or unreachable."""
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(400, "invalid point")
+    return {"name": await street_name.lookup(lat, lon)}
 
 
 @router.get("/api/roads")
