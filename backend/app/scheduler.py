@@ -96,17 +96,22 @@ def prune_roads_job(progress):
 
 def prune_tiles_job(progress):
     """Scheduler job (daily): delete cached terrain overlay tiles nobody has viewed in ~6 months (and, once,
-    tiles cached blank by a bad upstream render, so they're fetched again)."""
+    tiles damaged by a bad upstream render, blank or with a hole, so they're fetched again)."""
     from app.tiles.service import prune_cache, recheck_blank_tiles
     n = prune_cache()
     if n:
         log.info("scheduler: pruned %d stale overlay tile(s)", n)
-    msg = f"pruned {n} tile{'' if n == 1 else 's'}"
-    b = recheck_blank_tiles()
-    if b:
-        log.info("scheduler: removed %d overlay tile(s) cached blank", b)
-        msg += f"; removed {b} blank tile{'' if b == 1 else 's'} to refetch"
-    return msg
+    msg = f"pruned {n:,} old tile{'' if n == 1 else 's'}"
+    r = recheck_blank_tiles()
+    if r is None:
+        return msg + "; damaged-tile repair already done"
+    if r["blank"] or r["holed"]:
+        log.info("scheduler: removed %d blank overlay tile(s) and %d contour block(s) with holes",
+                 r["blank"], r["holed"])
+    plural = lambda k, word: f"{k:,} {word}{'' if k == 1 else 's'}"
+    return (f"{msg}; damaged-tile repair: checked {plural(r['checked'], 'contour block')}, removed "
+            f"{plural(r['holed'], 'block')} with holes and {plural(r['blank'], 'blank tile')} "
+            "(they load fresh when next viewed)")
 
 
 def auto_cleanup_job(progress):

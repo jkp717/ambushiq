@@ -106,7 +106,7 @@ def registry() -> dict[str, dict]:
         "prune_tiles": {
             "label": "Prune terrain tile cache", "icon": "cleanup", "fn": sch.prune_tiles_job,
             "description": "Deletes cached hillshade, contour and woods/water map tiles nobody has viewed in ~6 months "
-                           "(and, once, tiles saved blank by a bad USGS render, so they load again).",
+                           "(and, once, tiles damaged by a bad USGS render, blank or with a hole in the contours, so they load again).",
         },
     }
 

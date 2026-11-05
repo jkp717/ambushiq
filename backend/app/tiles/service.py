@@ -24,6 +24,7 @@ import time
 from typing import Awaitable, Callable, Optional
 
 import httpx
+import numpy as np
 from PIL import Image, ImageFilter
 
 log = logging.getLogger(__name__)
@@ -288,42 +289,58 @@ async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: Still
     """Fetch one block upstream, cut it into tiles, recolor and cache each: {(x, y): png bytes}.
     A failure is logged here, once per block, however many requests were waiting on it.
 
-    3DEP sometimes answers 200 with an image that is blank in part of the block (seen as a tile-aligned hole in the
-    contours at one zoom). Since tiles are cached for good, a block that is partly blank (some tiles empty, others
-    not) is fetched once more and each tile keeps whichever version has content. A wholly blank block is accepted:
-    flat land really has no 10 ft contours, and it shouldn't pay for a second slow request."""
+    3DEP sometimes answers 200 with an image that has a blank rectangle in it (seen as a straight-edged hole in the
+    contours at one zoom). Since tiles are cached for good, a block is checked before it's stored:
+    - contours with a hole (many lines stopping dead along one straight row/column, see hole_score) are fetched up to
+      HOLE_RETRIES more times, keeping the attempt with the lowest score;
+    - a block that is partly blank (some tiles empty, others not) is fetched once more and each tile keeps whichever
+      version has content. A wholly blank block is accepted: flat land really has no 10 ft contours, and it shouldn't
+      pay for a second slow request."""
     try:
         raw = await _fetch(layer, z, x0, y0, still_wanted)
-        tiles = await _split_checked(layer, z, x0, y0, raw)
+        tiles, score = await _split_checked(layer, z, x0, y0, raw)
     except UpstreamError as e:
         log.warning("tiles %s/%s/%s-%s/%s-%s failed: %s", layer, z, x0, x0 + META - 1, y0, y0 + META - 1, e)
         raise
+    for _ in range(HOLE_RETRIES):
+        if score < HOLE_SCORE:
+            break
+        log.info("tiles %s/%s/%s/%s: block has a hole (score %d), fetching it again", layer, z, x0, y0, score)
+        again = await _refetch(layer, z, x0, y0)
+        if again is not None and again[1] < score:
+            tiles, score = again
     blank = {k for k, data in tiles.items() if _is_blank(layer, data)}
     if blank and len(blank) < len(tiles):
         log.info("tiles %s/%s/%s/%s: %d of %d tiles came back blank, fetching the block again",
                  layer, z, x0, y0, len(blank), len(tiles))
-        await asyncio.sleep(RETRY_DELAY_S)
-        try:
-            again = await _split_checked(layer, z, x0, y0, await _fetch(layer, z, x0, y0))
-        except UpstreamError as e:      # keep the first answer: no worse than not checking
-            log.warning("tiles %s/%s/%s/%s: refetch of blank tiles failed: %s", layer, z, x0, y0, e)
-        else:
+        again = await _refetch(layer, z, x0, y0)
+        if again is not None:
             for k in blank:
-                if not _is_blank(layer, again[k]):
-                    tiles[k] = again[k]
+                if not _is_blank(layer, again[0][k]):
+                    tiles[k] = again[0][k]
     await asyncio.to_thread(_store, layer, z, tiles)
     return tiles
 
 
-async def _split_checked(layer: str, z: int, x0: int, y0: int, raw: bytes) -> dict:
+async def _refetch(layer: str, z: int, x0: int, y0: int) -> Optional[tuple[dict, int]]:
+    """Another try at a block that came back damaged; None if it fails (the caller keeps what it has)."""
+    await asyncio.sleep(RETRY_DELAY_S)
+    try:
+        return await _split_checked(layer, z, x0, y0, await _fetch(layer, z, x0, y0))
+    except UpstreamError as e:
+        log.warning("tiles %s/%s/%s/%s: refetch failed: %s", layer, z, x0, y0, e)
+        return None
+
+
+async def _split_checked(layer: str, z: int, x0: int, y0: int, raw: bytes) -> tuple[dict, int]:
     try:
         return await asyncio.to_thread(_split, layer, x0, y0, raw)
     except Exception as e:  # Pillow couldn't read what came back
         raise UpstreamError(f"bad image: {e}") from e
 
 
-def _split(layer: str, x0: int, y0: int, raw: bytes) -> dict:
-    """Cut a block image into recolored tiles: {(x, y): png bytes}."""
+def _split(layer: str, x0: int, y0: int, raw: bytes) -> tuple[dict, int]:
+    """Cut a block image into recolored tiles: ({(x, y): png bytes}, hole score (contours only, else 0))."""
     im = Image.open(io.BytesIO(raw))
     im.load()
     side = META * TILE_PX
@@ -334,12 +351,59 @@ def _split(layer: str, x0: int, y0: int, raw: bytes) -> dict:
         for dx in range(META):
             crop = im.crop((dx * TILE_PX, dy * TILE_PX, (dx + 1) * TILE_PX, (dy + 1) * TILE_PX))
             out[(x0 + dx, y0 + dy)] = _RECOLOR[layer](crop)
-    return out
+    score = hole_score(_upstream_ink(im)) if layer == "contours" else 0
+    return out, score
 
 
 def _store(layer: str, z: int, tiles: dict) -> None:
     for (x, y), data in tiles.items():
         _write_cached(_cache_path(layer, z, x, y), data)
+
+
+# ---------- spotting damaged blocks ----------
+# Contour lines never stop in the middle of an image: they close on themselves or run off its edge. Where 3DEP left a
+# blank rectangle, every line crossing its edge stops dead along the same straight row or column. On real 1024 px
+# blocks the most line ends found on one interior row/column is 3-9 (turning points that happen to line up); a cut-in
+# hole gives 17-57.
+HOLE_SCORE = 16
+HOLE_RETRIES = 2       # extra fetches of a holed block; a real straight edge in the data just keeps the best attempt
+_HOLE_GAP = 12         # px of nothing past a line's end
+_HOLE_WIN = 2          # rows either side that count as "the line carries on"
+_HOLE_MARGIN = 8       # lines ending at the image's own edge are normal
+
+
+def hole_score(ink: np.ndarray) -> int:
+    """The most separate lines that stop dead at one interior column or row (looking both ways) of a boolean
+    line mask. High = a straight-edged blank patch in the contours."""
+    best = 0
+    for m in (ink, ink.T):
+        rows, n = m.shape
+        if n <= _HOLE_GAP + 2 * _HOLE_MARGIN:
+            continue
+        near = m.copy()                 # a line "carries on" if there's ink within _HOLE_WIN rows
+        for d in range(1, _HOLE_WIN + 1):
+            near[d:] |= m[:-d]
+            near[:-d] |= m[d:]
+        cs = np.concatenate([np.zeros((rows, 1), np.int32), np.cumsum(near, axis=1, dtype=np.int32)], axis=1)
+        c = np.arange(_HOLE_MARGIN, n - _HOLE_GAP - _HOLE_MARGIN)
+        ends_right = m[:, c] & ((cs[:, c + 1 + _HOLE_GAP] - cs[:, c + 1]) == 0)
+        ends_left = m[:, c] & ((cs[:, c] - cs[:, c - _HOLE_GAP]) == 0)
+        for ends in (ends_right, ends_left):
+            # count each line once: the first row of each run of line-end pixels in a column
+            starts = ends & ~np.vstack([np.zeros((1, ends.shape[1]), bool), ends[:-1]])
+            best = max(best, int(starts.sum(axis=0).max()))
+    return best
+
+
+def _upstream_ink(im: Image.Image) -> np.ndarray:
+    """Line mask of a raw 3DEP contour image: dark, visible pixels."""
+    rgba = im.convert("RGBA")
+    return (np.asarray(rgba.getchannel("A")) >= 128) & (np.asarray(rgba.convert("L")) < 200)
+
+
+def _cached_ink(data: bytes) -> np.ndarray:
+    """Line mask of a cached (recolored) contour tile: its alpha."""
+    return np.asarray(Image.open(io.BytesIO(data)).convert("RGBA").getchannel("A")) > 64
 
 
 # Layers where an empty tile can mean a failed render. Woods & water is empty over every field and town.
@@ -359,24 +423,55 @@ def _is_blank(layer: str, data: bytes) -> bool:
     return alpha is not None and alpha.getextrema()[1] == 0
 
 
-BLANK_SWEEP_MARKER = ".blank-check-v1"
+BLANK_SWEEP_MARKER = ".blank-check-v2"   # v1 only caught wholly blank tiles; v2 also holes inside contour blocks
 
 
-def recheck_blank_tiles() -> int:
-    """One-time repair of tiles cached blank before blocks were checked: delete each blank contour/hillshade tile
-    whose 4x4 block has a cached tile with content, so it's fetched (and checked) again when next viewed.
-    Wholly blank blocks are left alone (flat land). Returns how many were deleted; 0 once the marker is written."""
+def _remove(paths) -> int:
+    n = 0
+    for p in paths:
+        try:
+            os.remove(p)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def _block_hole_score(tiles: dict) -> Optional[int]:
+    """Hole score of a cached contour block from its 16 tile files ({(x, y): path}); None if one is unreadable."""
+    side = META * TILE_PX
+    ink = np.zeros((side, side), bool)
+    x0 = min(x for x, _ in tiles)
+    y0 = min(y for _, y in tiles)
+    try:
+        for (x, y), path in tiles.items():
+            with open(path, "rb") as f:
+                t = _cached_ink(f.read())
+            if t.shape != (TILE_PX, TILE_PX):
+                return None
+            ink[(y - y0) * TILE_PX:(y - y0 + 1) * TILE_PX, (x - x0) * TILE_PX:(x - x0 + 1) * TILE_PX] = t
+    except Exception:
+        return None
+    return hole_score(ink)
+
+
+def recheck_blank_tiles() -> Optional[dict]:
+    """One-time repair of tiles cached before blocks were checked, so they're fetched (and checked) again when next
+    viewed: deletes every tile of a fully cached contour block with a hole in it, and each blank contour/hillshade
+    tile whose 4x4 block has a cached tile with content (wholly blank blocks are flat land, left alone).
+    Returns {"blank": tiles deleted, "checked": contour blocks scored, "holed": contour blocks deleted}, or None when
+    the marker says it has already run."""
     marker = os.path.join(TILE_CACHE_DIR, BLANK_SWEEP_MARKER)
     if os.path.exists(marker) or not os.path.isdir(TILE_CACHE_DIR):
-        return 0
-    removed = 0
+        return None
+    out = {"blank": 0, "checked": 0, "holed": 0}
     for layer in BLANK_CHECKED:
         layer_dir = os.path.join(TILE_CACHE_DIR, layer)
         if not os.path.isdir(layer_dir):
             continue
         for z in os.listdir(layer_dir):
             z_dir = os.path.join(layer_dir, z)
-            blocks: dict[tuple, dict] = {}     # (x0, y0) -> {path: blank?}
+            blocks: dict[tuple, dict] = {}     # (x0, y0) -> {(x, y): (path, blank?)}
             for x in os.listdir(z_dir) if os.path.isdir(z_dir) else []:
                 x_dir = os.path.join(z_dir, x)
                 if not (x.isdigit() and os.path.isdir(x_dir)):
@@ -387,27 +482,32 @@ def recheck_blank_tiles() -> int:
                         continue
                     path = os.path.join(x_dir, name)
                     try:
-                        small = os.path.getsize(path) <= BLANK_MAX_BYTES
-                        blank = small and _is_blank(layer, open(path, "rb").read())
+                        blank = False
+                        if os.path.getsize(path) <= BLANK_MAX_BYTES:
+                            with open(path, "rb") as f:
+                                blank = _is_blank(layer, f.read())
                     except OSError:
                         continue
-                    blocks.setdefault(block_of(int(x), int(y)), {})[path] = blank
-            for tiles in blocks.values():
-                if all(tiles.values()) or not any(tiles.values()):
-                    continue
-                for path, blank in tiles.items():
-                    if blank:
-                        try:
-                            os.remove(path)
-                            removed += 1
-                        except OSError:
-                            pass
+                    blocks.setdefault(block_of(int(x), int(y)), {})[(int(x), int(y))] = (path, blank)
+            for (bx, by), tiles in blocks.items():
+                flags = [b for _, b in tiles.values()]
+                if layer == "contours" and len(tiles) == META * META and not all(flags):
+                    out["checked"] += 1
+                    score = _block_hole_score({k: p for k, (p, _) in tiles.items()})
+                    if score is not None and score >= HOLE_SCORE:
+                        log.info("tiles: cached contours/%s/%s/%s has a hole (score %d), removing the block",
+                                 z, bx, by, score)
+                        _remove(p for p, _ in tiles.values())
+                        out["holed"] += 1
+                        continue
+                if any(flags) and not all(flags):
+                    out["blank"] += _remove(p for p, b in tiles.values() if b)
     try:
         with open(marker, "w") as f:
             f.write(f"{time.time():.0f}\n")
     except OSError:
         log.warning("could not write %s", marker, exc_info=True)
-    return removed
+    return out
 
 
 def prune_cache(max_age_s: float = PRUNE_AFTER_S) -> int:

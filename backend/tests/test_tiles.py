@@ -352,8 +352,78 @@ def test_sweep_removes_blank_tiles_beside_drawn_ones_once(cache_dir):
     drawn = _cache_tile(cache_dir, 16, 16628, 25404, ink=True)
     hole = _cache_tile(cache_dir, 16, 16629, 25404, ink=False)
     flat = [_cache_tile(cache_dir, 16, 16632 + i, 25404, ink=False) for i in range(2)]   # wholly blank block
-    assert service.recheck_blank_tiles() == 1
+    assert service.recheck_blank_tiles()["blank"] == 1
     assert drawn.exists() and not hole.exists() and all(p.exists() for p in flat)
     # runs once: later blanks (now checked at fetch time) are left alone
     hole = _cache_tile(cache_dir, 16, 16629, 25404, ink=False)
-    assert service.recheck_blank_tiles() == 0 and hole.exists()
+    assert service.recheck_blank_tiles() is None and hole.exists()
+
+
+# ---------- blocks with a straight-edged hole in the contours ----------
+
+def _rings(hole: bool = False) -> Image.Image:
+    """A synthetic contour block: groups of concentric rings (dark lines on white), optionally with a blank
+    rectangle cut out of the middle the way 3DEP sometimes leaves one."""
+    from PIL import ImageDraw
+    im = Image.new("L", (BLOCK_PX, BLOCK_PX), 253)
+    d = ImageDraw.Draw(im)
+    for cx, cy in ((250, 250), (760, 300), (300, 780), (780, 760), (512, 512)):
+        for r in range(10, 330, 14):
+            d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=0, width=2)
+    if hole:
+        d.rectangle((400, 300, 800, 600), fill=253)
+    return im
+
+
+def test_hole_score_separates_clean_and_holed_blocks():
+    clean = service.hole_score(service._upstream_ink(_rings()))
+    holed = service.hole_score(service._upstream_ink(_rings(hole=True)))
+    assert clean < service.HOLE_SCORE <= holed
+
+
+def test_holed_block_is_fetched_again_and_the_clean_one_cached(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_png(_rings(hole=True)), _png(_rings())], calls)
+    data = asyncio.run(service.get_tile("contours", 16, 16629, 25405))   # a tile inside the hole
+    assert len(calls) == 2 and _ink(data)
+    cached = {p: p.read_bytes() for p in cache_dir.rglob("*.png")}
+    assert len(cached) == service.META ** 2
+
+
+def test_block_holed_every_time_keeps_the_best_attempt(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_png(_rings(hole=True))], calls)
+    asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 1 + service.HOLE_RETRIES
+    assert len(list(cache_dir.rglob("*.png"))) == service.META ** 2
+
+
+def test_clean_contour_block_is_fetched_once(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_png(_rings())], calls)
+    asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 1
+
+
+def _cache_block(cache_dir, z, x0, y0, im: Image.Image, skip=()):
+    tiles, _ = service._split("contours", x0, y0, _png(im))
+    paths = []
+    for (x, y), data in tiles.items():
+        if (x, y) in skip:
+            continue
+        p = cache_dir / "contours" / str(z) / str(x) / f"{y}.png"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        paths.append(p)
+    return paths
+
+
+def test_sweep_removes_cached_blocks_with_holes(cache_dir):
+    holed = _cache_block(cache_dir, 16, 16624, 25392, _rings(hole=True))
+    clean = _cache_block(cache_dir, 16, 16628, 25392, _rings())
+    partial = _cache_block(cache_dir, 16, 16632, 25392, _rings(hole=True), skip={(16632, 25392)})
+    r = service.recheck_blank_tiles()
+    assert r == {"blank": 0, "checked": 2, "holed": 1}
+    assert not any(p.exists() for p in holed)
+    assert all(p.exists() for p in clean + partial)     # incomplete blocks aren't scored
+    assert service.recheck_blank_tiles() is None
