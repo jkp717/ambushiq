@@ -38,7 +38,18 @@ RETRY_DELAY_S = 1.5            # base wait before another try after a gateway er
 # gateway error gets two more tries, backing off 1x then 3x RETRY_DELAY_S. A timeout gets only one more: each one
 # already cost REQUEST_TIMEOUT_S, and three would outlast the proxy's 120 s.
 RETRY_BACKOFF = (1, 3)
-RETRY_STATUS = {500, 502, 503, 504}
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
+# How many upstream requests run at once, per host, adapts to how the host is coping (AIMD): a 5xx/429/timeout
+# halves it and pauses new requests for a while; a run of successes adds one back. 3DEP answers overload with
+# bursts of 502/504 rather than a 429, and hammering it with retries during a burst only makes it worse.
+LIMIT_START = 4
+LIMIT_MIN = 1
+LIMIT_MAX = 6
+GROW_AFTER = 8                 # successes in a row before the limit goes up by one
+PAUSE_MIN_S = 5.0              # first pause after pushback; doubles on each further pushback, up to PAUSE_MAX_S
+PAUSE_MAX_S = 60.0
+BACKGROUND_MAX = 2             # prefetch never uses more than this many slots, and leaves one free for the map
 PRUNE_AFTER_S = 180 * 86400
 TOUCH_AFTER_S = 86400
 
@@ -67,7 +78,6 @@ NLCD_TINTS = {
 }
 _MATCH_DIST2 = 3 * 30 ** 2   # only accept a near-exact palette match
 
-_sem: Optional[asyncio.Semaphore] = None
 _client: Optional[httpx.AsyncClient] = None
 # Tiles being fetched right now -> (task, the waiting requests' still_wanted checks). A browser retry, or two
 # layers wanting the same tile, joins the running fetch instead of queuing a second upstream call.
@@ -132,22 +142,124 @@ def _upstream_request(layer: str, z: int, x0: int, y0: int) -> tuple[str, dict]:
     }
 
 
-async def _fetch(layer: str, z: int, x0: int, y0: int, still_wanted: Optional[StillWanted] = None) -> bytes:
+class _UpstreamLimiter:
+    """Adaptive cap on concurrent requests to one upstream host (see LIMIT_START).
+
+    Background requests (the overnight prefetch) take a slot only when no map request is waiting, never more than
+    BACKGROUND_MAX of them, and leave one slot free while the limit allows it, so someone viewing the map isn't
+    stuck behind the prefetch."""
+
+    def __init__(self, host: str):
+        self.host = host
+        self.loop = asyncio.get_running_loop()
+        self.limit = LIMIT_START
+        self.active = 0
+        self.background_active = 0
+        self.live_waiting = 0
+        self.streak = 0
+        self.pause_until = 0.0
+        self.next_pause = PAUSE_MIN_S
+        self._cond = asyncio.Condition()
+
+    def _may_start(self, background: bool) -> bool:
+        if self.active >= self.limit:
+            return False
+        if background:
+            if self.live_waiting or self.background_active >= BACKGROUND_MAX:
+                return False
+            if self.limit > 1 and self.active >= self.limit - 1:
+                return False
+        return True
+
+    async def acquire(self, background: bool = False) -> None:
+        async with self._cond:
+            if not background:
+                self.live_waiting += 1
+            try:
+                while True:
+                    wait = self.pause_until - time.monotonic()
+                    if wait <= 0 and self._may_start(background):
+                        break
+                    try:
+                        await asyncio.wait_for(self._cond.wait(), timeout=wait if wait > 0 else None)
+                    except asyncio.TimeoutError:
+                        pass
+            finally:
+                if not background:
+                    self.live_waiting -= 1
+                    self._cond.notify_all()      # a background request may have been waiting on this one
+            self.active += 1
+            if background:
+                self.background_active += 1
+
+    async def release(self, background: bool, ok: Optional[bool], detail: str = "", secs: float = 0.0,
+                      retry_after: Optional[float] = None) -> None:
+        """`ok`: True = success, False = the host pushed back (5xx/429/timeout), None = neither (e.g. a 400)."""
+        async with self._cond:
+            self.active -= 1
+            if background:
+                self.background_active -= 1
+            now = time.monotonic()
+            if ok:
+                self.streak += 1
+                if self.streak >= GROW_AFTER:
+                    self.streak = 0
+                    self.next_pause = PAUSE_MIN_S
+                    if self.limit < LIMIT_MAX:
+                        self.limit += 1
+                        log.info("%s: upstream limit raised to %d", self.host, self.limit)
+            elif ok is False:
+                self.streak = 0
+                if now >= self.pause_until:          # one burst of failures counts once, not once per request
+                    old = self.limit
+                    self.limit = max(LIMIT_MIN, self.limit // 2)
+                    pause = retry_after if retry_after is not None else self.next_pause
+                    self.pause_until = now + pause
+                    self.next_pause = min(PAUSE_MAX_S, self.next_pause * 2)
+                    log.warning("%s pushed back (%s after %.1f s): upstream limit %d -> %d, pausing %.0f s",
+                                self.host, detail, secs, old, self.limit, pause)
+            self._cond.notify_all()
+
+
+_limiters: dict[str, _UpstreamLimiter] = {}
+
+
+def _limiter_for(url: str) -> _UpstreamLimiter:
+    host = httpx.URL(url).host
+    lim = _limiters.get(host)
+    if lim is None or lim.loop is not asyncio.get_running_loop():   # (a new event loop only happens in tests)
+        lim = _limiters[host] = _UpstreamLimiter(host)
+    return lim
+
+
+def _retry_after(r) -> Optional[float]:
+    try:
+        return max(0.0, min(PAUSE_MAX_S * 5, float(r.headers.get("retry-after", ""))))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _fetch(layer: str, z: int, x0: int, y0: int, still_wanted: Optional[StillWanted] = None,
+                 background: bool = False) -> bytes:
     """The upstream image for the block whose top-left tile is x0/y0."""
-    global _sem, _client
-    if _sem is None:
-        _sem = asyncio.Semaphore(6)       # don't flood USGS when a whole screen of tiles misses at once
+    global _client
     if _client is None:
         _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
     url, params = _upstream_request(layer, z, x0, y0)
+    lim = _limiter_for(url)
     timed_out = False
+    err: Optional[UpstreamError] = None
     for attempt in range(1 + len(RETRY_BACKOFF)):
         if attempt:
             if timed_out and attempt >= 2:
                 break                            # a second slow attempt in a row: give up rather than hold the request
-            await asyncio.sleep(RETRY_DELAY_S * RETRY_BACKOFF[attempt - 1])   # outside the semaphore, so other tiles keep moving
-        async with _sem:
-            # Quick panning queues many tiles behind the semaphore; ones the map already dropped are skipped
+            await asyncio.sleep(RETRY_DELAY_S * RETRY_BACKOFF[attempt - 1])   # outside the limiter, so other tiles keep moving
+        await lim.acquire(background)
+        ok: Optional[bool] = None
+        detail, retry_after = "", None
+        started = time.monotonic()
+        try:
+            # Quick panning queues many tiles behind the limiter; ones the map already dropped are skipped
             # here so the tiles on screen now don't wait behind them. A fetch that has started runs to the
             # end and gets cached, since that work is already paid for.
             if still_wanted is not None and not await still_wanted():
@@ -158,14 +270,22 @@ async def _fetch(layer: str, z: int, x0: int, y0: int, still_wanted: Optional[St
                 err = UpstreamError(f"{type(e).__name__}: {e}")
                 err.__cause__ = e
                 timed_out = isinstance(e, httpx.TimeoutException)
+                ok, detail = False, type(e).__name__
                 continue
-        timed_out = False
-        if r.status_code in RETRY_STATUS:
-            err = UpstreamError(f"HTTP {r.status_code}")
-            continue
-        if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
-            raise UpstreamError(f"HTTP {r.status_code} {r.headers.get('content-type', '')}")
-        return r.content
+            timed_out = False
+            log.info("upstream %s/%s/%s/%s: HTTP %s in %.1f s (limit %d)", layer, z, x0, y0, r.status_code,
+                     time.monotonic() - started, lim.limit)
+            if r.status_code in RETRY_STATUS:
+                err = UpstreamError(f"HTTP {r.status_code}")
+                ok, detail = False, f"HTTP {r.status_code}"
+                retry_after = _retry_after(r) if r.status_code == 429 else None
+                continue
+            if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+                raise UpstreamError(f"HTTP {r.status_code} {r.headers.get('content-type', '')}")
+            ok = True
+            return r.content
+        finally:
+            await lim.release(background, ok, detail, time.monotonic() - started, retry_after)
     raise err
 
 
@@ -263,9 +383,33 @@ def _write_cached(path: str, data: bytes) -> None:
         log.warning("tile cache write failed for %s", path, exc_info=True)
 
 
-async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[StillWanted] = None) -> bytes:
+def block_tiles(x0: int, y0: int) -> list[tuple[int, int]]:
+    return [(x0 + dx, y0 + dy) for dy in range(META) for dx in range(META)]
+
+
+def block_cached(layer: str, z: int, x0: int, y0: int) -> bool:
+    """Whether every tile of the block whose top-left tile is x0/y0 is in the disk cache."""
+    return all(os.path.isfile(_cache_path(layer, z, x, y)) for x, y in block_tiles(x0, y0))
+
+
+def touch_block(layer: str, z: int, x0: int, y0: int) -> None:
+    """Marks a cached block as recently used (as a view of it would), so prune_cache keeps it."""
+    now = time.time()
+    for x, y in block_tiles(x0, y0):
+        path = _cache_path(layer, z, x, y)
+        try:
+            if now - os.path.getmtime(path) > TOUCH_AFTER_S:
+                os.utime(path)
+        except OSError:
+            pass
+
+
+async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[StillWanted] = None,
+                   background: bool = False) -> bytes:
     """The overlay tile, from the disk cache or freshly fetched + recolored. Raises UpstreamError, or
-    TileAbandoned when `still_wanted` says the caller gave up while the fetch was waiting its turn."""
+    TileAbandoned when `still_wanted` says the caller gave up while the fetch was waiting its turn.
+    `background` (the overnight prefetch) gives way to map requests for upstream slots; a map request for a
+    block the prefetch is already fetching just joins that fetch."""
     path = _cache_path(layer, z, x, y)
     cached = await asyncio.to_thread(_read_cached, path)
     if cached is not None:
@@ -282,7 +426,7 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
                     return True
             return False
 
-        task = asyncio.create_task(_fetch_block(layer, z, x0, y0, anyone_wants))
+        task = asyncio.create_task(_fetch_block(layer, z, x0, y0, anyone_wants, background))
         entry = _inflight[key] = (task, wanters)
         task.add_done_callback(lambda t: _inflight.pop(key) if _inflight.get(key, (None,))[0] is t else None)
     task, wanters = entry
@@ -294,7 +438,8 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
         wanters.remove(still_wanted)
 
 
-async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: StillWanted) -> dict:
+async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: StillWanted,
+                       background: bool = False) -> dict:
     """Fetch one block upstream, cut it into tiles, recolor and cache each: {(x, y): png bytes}.
     A failure is logged here, once per block, however many requests were waiting on it.
 
@@ -306,7 +451,7 @@ async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: Still
       version has content. A wholly blank block is accepted: flat land really has no 10 ft contours, and it shouldn't
       pay for a second slow request."""
     try:
-        raw = await _fetch(layer, z, x0, y0, still_wanted)
+        raw = await _fetch(layer, z, x0, y0, still_wanted, background)
         tiles, score = await _split_checked(layer, z, x0, y0, raw)
     except UpstreamError as e:
         log.warning("tiles %s/%s/%s-%s/%s-%s failed: %s", layer, z, x0, x0 + META - 1, y0, y0 + META - 1, e)
@@ -315,14 +460,14 @@ async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: Still
         if score < HOLE_SCORE:
             break
         log.info("tiles %s/%s/%s/%s: block has a hole (score %d), fetching it again", layer, z, x0, y0, score)
-        again = await _refetch(layer, z, x0, y0)
+        again = await _refetch(layer, z, x0, y0, background)
         if again is not None and again[1] < score:
             tiles, score = again
     blank = {k for k, data in tiles.items() if _is_blank(layer, data)}
     if blank and len(blank) < len(tiles):
         log.info("tiles %s/%s/%s/%s: %d of %d tiles came back blank, fetching the block again",
                  layer, z, x0, y0, len(blank), len(tiles))
-        again = await _refetch(layer, z, x0, y0)
+        again = await _refetch(layer, z, x0, y0, background)
         if again is not None:
             for k in blank:
                 if not _is_blank(layer, again[0][k]):
@@ -331,11 +476,11 @@ async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: Still
     return tiles
 
 
-async def _refetch(layer: str, z: int, x0: int, y0: int) -> Optional[tuple[dict, int]]:
+async def _refetch(layer: str, z: int, x0: int, y0: int, background: bool = False) -> Optional[tuple[dict, int]]:
     """Another try at a block that came back damaged; None if it fails (the caller keeps what it has)."""
     await asyncio.sleep(RETRY_DELAY_S)
     try:
-        return await _split_checked(layer, z, x0, y0, await _fetch(layer, z, x0, y0))
+        return await _split_checked(layer, z, x0, y0, await _fetch(layer, z, x0, y0, background=background))
     except UpstreamError as e:
         log.warning("tiles %s/%s/%s/%s: refetch failed: %s", layer, z, x0, y0, e)
         return None

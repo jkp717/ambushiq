@@ -55,6 +55,22 @@ function estimateTileCount(map, layer, latLngBounds, zoomLevels) {
 const RETRY_ROUND_DELAYS_MS = [5000, 20000];
 const RETRY_CONCURRENCY = 2;
 
+// Our own terrain overlays (/api/tiles/...: contours, hillshade, woods & water) are cut from 4x4-tile blocks the
+// server fetches from USGS in one request. Asking for a block's 16 tiles together lets them share that one fetch;
+// in plain row order a block's tiles are spread over 4 rows, so a block that failed is fetched again for each row.
+// The server also limits how many USGS requests run at once, so more parallel requests here only wait longer.
+const TERRAIN_CONCURRENCY = 4;
+const TERRAIN_BLOCK = 4;
+
+function isTerrainLayer(layer) {
+  return typeof layer?._url === "string" && layer._url.startsWith("/api/tiles/");
+}
+
+function blockOrder(a, b) {
+  const blk = (v) => Math.floor(v / TERRAIN_BLOCK);
+  return a.z - b.z || blk(a.y) - blk(b.y) || blk(a.x) - blk(b.x) || a.y - b.y || a.x - b.x;
+}
+
 function cancellableWait(ms, isCancelled) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -77,7 +93,12 @@ function cancellableWait(ms, isCancelled) {
  * undone with removeTiles even if this throws part-way. */
 async function downloadArea({ map, layer, bounds, zoomLevels, concurrency = 6, onProgress, isCancelled, onTileSaved }) {
   const tiles = computeTiles(map, layer, bounds, zoomLevels);
-  const result = await fetchTiles({ tiles, concurrency, onProgress, isCancelled, onTileSaved });
+  const terrain = isTerrainLayer(layer);
+  if (terrain) tiles.sort(blockOrder);
+  const result = await fetchTiles({
+    tiles, concurrency: terrain ? Math.min(concurrency, TERRAIN_CONCURRENCY) : concurrency,
+    onProgress, isCancelled, onTileSaved,
+  });
   return { ...result, tileKeys: tiles.map((t) => t.key) };
 }
 

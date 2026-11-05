@@ -45,6 +45,7 @@ def registry() -> dict[str, dict]:
     from app.osmtrails.importer import osm_trails_job
     from app.regions.terrain import fetch_property_terrain
     from app.stands.service import terrain_reanalyze_job
+    from app.tiles.prefetch import prefetch_tiles_job
     return {
         "property_terrain": {
             "label": "Analyze property terrain", "icon": "terrain", "region_scoped": True,
@@ -102,6 +103,12 @@ def registry() -> dict[str, dict]:
         "prune_roads": {
             "label": "Prune roads cache", "icon": "cleanup", "fn": sch.prune_roads_job,
             "description": "Drops cached road map data nobody has viewed in ~6 months.",
+        },
+        "prefetch_tiles": {
+            "label": "Prefetch terrain tiles", "icon": "terrain", "fn": prefetch_tiles_job,
+            "description": "Overnight, fetches contour and hillshade tiles from USGS for each region's property "
+                           "and for areas queued from the offline-maps panel, so offline downloads of them are quick. "
+                           "Stops after 6 hours and carries on the next night.",
         },
         "prune_tiles": {
             "label": "Prune terrain tile cache", "icon": "cleanup", "fn": sch.prune_tiles_job,

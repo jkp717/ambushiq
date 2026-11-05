@@ -3,11 +3,20 @@ import { Download, Trash2, X, HardDrive, RefreshCw } from "lucide-react";
 import Modal from "./ui/Modal.jsx";
 import Field from "./ui/Field.jsx";
 import Banner from "./ui/Banner.jsx";
+import { api } from "../services/api.js";
 import {
   formatBytes, estimateTileCount, downloadArea, repairArea, getLayerStats,
   listSavedAreas, saveAreaRecord, deleteSavedArea, removeTiles, forgetAreas, clearAllOffline,
   AVG_TILE_BYTES_FALLBACK,
 } from "../utils/offlineTiles.js";
+
+const PREFETCH_IDS = new Set(["contours", "hillshade"]);   // layers the server can prepare overnight
+const PREP_STATUS = {
+  queued: () => "Waiting for tonight's run",
+  running: (p) => `Being fetched — ${p.blocks_done.toLocaleString()} of ${p.blocks_total.toLocaleString()} blocks`,
+  partial: (p) => `${p.blocks_done.toLocaleString()} of ${p.blocks_total.toLocaleString()} blocks fetched — the rest continues tonight`,
+  ready: () => "Ready — open this view and download it (it will be quick)",
+};
 
 const MIN_ZOOM_FLOOR = 5; // leaflet.offline's own sanity floor — prevents saving the whole USA
 const MAX_ZOOM_CEIL = 18; // each level is ~4x the tiles of the one before; deeper gets huge fast
@@ -41,6 +50,16 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
   const [stats, setStats] = useState(null);
   const [note, setNote] = useState(null);          // a one-line outcome, e.g. after a cancelled download
   const [confirmClear, setConfirmClear] = useState(false);
+  // Contours/hillshade not yet on the server for this view: { missing, total, estMinutes } -> offer overnight prep
+  const [serverPrep, setServerPrep] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [prepAreas, setPrepAreas] = useState([]);   // areas the server is preparing (or has prepared) overnight
+
+  function loadPrepAreas() {
+    api(`/tiles/prefetch?region_id=${activeRegion.id}`).then(setPrepAreas).catch(() => {});
+  }
+  useEffect(loadPrepAreas, [activeRegion.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => setServerPrep(null), [selected, minZoom, maxZoom]);   // the offer was for the old choice
 
   useEffect(() => {
     if (!layerList.length) return;
@@ -80,12 +99,58 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
     });
   }
 
+  // Contour and hillshade tiles are slow USGS renders the server fetches overnight (app.tiles.prefetch). Before
+  // downloading them, ask the server whether it already has this view; if not, offer to prepare it overnight so the
+  // download is quick and complete, or to download now anyway (slower, may leave gaps for Repair).
+  const prepLayers = layerList.filter((l) => selected.has(l.id) && PREFETCH_IDS.has(l.id));
+  const prepBody = () => ({
+    north: bounds.getNorth(), south: bounds.getSouth(), west: bounds.getWest(), east: bounds.getEast(),
+    layers: prepLayers.map((l) => l.id), min_zoom: minZoom, max_zoom: maxZoom,
+  });
+
+  async function onDownloadClick() {
+    setErr(null);
+    setNote(null);
+    if (prepLayers.length) {
+      setChecking(true);
+      let check = null;
+      try {
+        check = await api("/tiles/prefetch/check", { method: "POST", body: JSON.stringify(prepBody()) });
+      } catch {
+        check = null;   // server unreachable or area too big to prepare: just download
+      }
+      setChecking(false);
+      if (check && !check.ready) {
+        setServerPrep({ missing: check.missing_blocks * 16, total: check.total_blocks * 16, estMinutes: check.est_minutes });
+        return;
+      }
+    }
+    startDownload();
+  }
+
+  async function prepareOvernight() {
+    setErr(null);
+    try {
+      await api("/tiles/prefetch", {
+        method: "POST",
+        body: JSON.stringify({ ...prepBody(), region_id: activeRegion.id, label: label.trim() || "Offline area" }),
+      });
+      setNote(`The server will fetch the ${prepLayers.map((l) => l.label.toLowerCase()).join(" and ")} tiles for this view `
+        + "overnight. Come back to this view tomorrow and download it — it will be quick.");
+      setServerPrep(null);
+      loadPrepAreas();
+    } catch (e) {
+      setErr(`Couldn't queue this area on the server (${e.message}).`);
+    }
+  }
+
   // A download either finishes and is listed, or is undone: a cancelled or failed run removes every tile it added
   // (and the areas it already finished), so nothing is left in storage that the list doesn't show. Tiles that were
   // already saved before this run started are never touched; they may belong to other saved areas.
   async function startDownload() {
     setErr(null);
     setNote(null);
+    setServerPrep(null);
     cancelledRef.current = false;
     const targets = layerList.filter((l) => selected.has(l.id));
     if (!targets.length) { setErr("Pick at least one map layer."); return; }
@@ -257,12 +322,46 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
               {[...selected].some((id) => offlineLayers?.[id]?.needsKey) && " MapTiler tiles count against your MapTiler monthly tile quota."}
             </p>
 
-            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <button className="btn btn-primary" onClick={startDownload} disabled={estimatedTiles === 0}>
-                <Download size={15} /> Download this area
-              </button>
-              <button className="btn" onClick={onClose}>Close</button>
-            </div>
+            {serverPrep ? (
+              <div style={{ marginTop: 10, padding: 10, borderRadius: 6, background: "var(--surf)", fontSize: 12.5 }}>
+                <div style={{ marginBottom: 8 }}>
+                  About {serverPrep.missing.toLocaleString()} of the {prepLayers.map((l) => l.label.toLowerCase()).join(" and ")} tiles
+                  for this view aren't on the server yet, and USGS is slow to draw them. The server can fetch them overnight
+                  (about {serverPrep.estMinutes.toLocaleString()} min of work); downloading this view after that is quick and complete.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button className="btn btn-primary" onClick={prepareOvernight}>Prepare overnight</button>
+                  <button className="btn" onClick={startDownload}>
+                    <Download size={15} /> Download now anyway
+                  </button>
+                  <button className="btn" onClick={() => setServerPrep(null)}>Back</button>
+                </div>
+                <div style={{ color: "var(--sub)", fontSize: 11.5, marginTop: 6 }}>
+                  Downloading now is slower and may miss tiles the server can't get in time; Repair can fill them later.
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button className="btn btn-primary" onClick={onDownloadClick} disabled={estimatedTiles === 0 || checking}>
+                  <Download size={15} /> {checking ? "Checking the server…" : "Download this area"}
+                </button>
+                <button className="btn" onClick={onClose}>Close</button>
+              </div>
+            )}
+
+            {prepAreas.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <strong style={{ fontSize: 13 }}>Prepared on the server overnight</strong>
+                {prepAreas.map((p) => (
+                  <div key={p.id} style={{ fontSize: 12, padding: "4px 0", borderBottom: "1px solid var(--bord)" }}>
+                    {p.label} <span style={{ color: "var(--sub)" }}>· {p.layers.join(", ")} · zoom {p.min_zoom}–{p.max_zoom}</span>
+                    <div style={{ fontSize: 11, color: p.status === "ready" ? "var(--navy)" : "var(--sub)" }}>
+                      {PREP_STATUS[p.status]?.(p) || p.status}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 

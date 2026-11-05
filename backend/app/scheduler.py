@@ -200,6 +200,9 @@ def start_scheduler():
                   replace_existing=True, max_instances=1)
     sched.add_job(run_tracked, CronTrigger(hour=4, minute=30), args=["prune_tiles"], id="prune_tiles",
                   replace_existing=True, max_instances=1)
+    # Overnight in the US (midnight Central), when USGS 3DEP is least busy; runs up to 6 hours (app.tiles.prefetch)
+    sched.add_job(run_tracked, CronTrigger(hour=6, minute=0), args=["prefetch_tiles"], id="prefetch_tiles",
+                  replace_existing=True, max_instances=1)
     # Daily check; each state is only re-downloaded once its data is a month old (app.osmtrails.importer)
     sched.add_job(run_tracked, CronTrigger(hour=2, minute=0), args=["osm_trails"], id="osm_trails",
                   replace_existing=True, max_instances=1)

@@ -83,7 +83,7 @@ def test_recolor_landcover_keeps_woods_and_water_only():
 def test_get_tile_fetches_once_then_serves_cache(cache_dir, monkeypatch, client):
     calls = []
 
-    async def fake_fetch(layer, z, x, y, still_wanted=None):
+    async def fake_fetch(layer, z, x, y, still_wanted=None, background=False):
         calls.append((layer, z, x, y))
         return _png(Image.new("L", (BLOCK_PX, BLOCK_PX), 200))
 
@@ -98,7 +98,7 @@ def test_get_tile_fetches_once_then_serves_cache(cache_dir, monkeypatch, client)
 
 
 def test_upstream_failure_is_an_uncached_503(cache_dir, monkeypatch, client):
-    async def failing_fetch(layer, z, x, y, still_wanted=None):
+    async def failing_fetch(layer, z, x, y, still_wanted=None, background=False):
         raise service.UpstreamError("down")
 
     monkeypatch.setattr(service, "_fetch", failing_fetch)
@@ -128,8 +128,14 @@ def _fake_upstream(monkeypatch, calls, statuses=(), delay=0.0):
             return _Resp(queue.pop(0) if queue else 200)
 
     monkeypatch.setattr(service, "_client", FakeClient())
-    monkeypatch.setattr(service, "_sem", None)
+    _quick_limiters(monkeypatch)
+
+
+def _quick_limiters(monkeypatch):
+    """Fresh upstream limiters with no retry waits or pushback pauses."""
+    monkeypatch.setattr(service, "_limiters", {})
     monkeypatch.setattr(service, "RETRY_DELAY_S", 0)
+    monkeypatch.setattr(service, "PAUSE_MIN_S", 0.0)
 
 
 def _answer(value):
@@ -189,8 +195,7 @@ def test_timeouts_get_only_one_more_try(cache_dir, monkeypatch):
             raise httpx.ReadTimeout("slow")
 
     monkeypatch.setattr(service, "_client", SlowClient())
-    monkeypatch.setattr(service, "_sem", None)
-    monkeypatch.setattr(service, "RETRY_DELAY_S", 0)
+    _quick_limiters(monkeypatch)
     with pytest.raises(service.UpstreamError):
         asyncio.run(service.get_tile("contours", 16, 16628, 25404))
     assert len(calls) == 2
@@ -223,12 +228,13 @@ def test_shared_fetch_goes_ahead_if_any_waiter_still_wants_it(cache_dir, monkeyp
 
     async def both():
         # the queue is full while both requests arrive; by the time a slot frees, one has given up
-        service._sem = asyncio.Semaphore(1)
-        await service._sem.acquire()
+        lim = service._limiter_for(service._3DEP)
+        lim.limit = 1
+        await lim.acquire()
         reqs = asyncio.gather(service.get_tile("hillshade", 12, 1000, 1500, _answer(False)),
                               service.get_tile("hillshade", 12, 1000, 1500, _answer(True)))
         await asyncio.sleep(0.2)
-        service._sem.release()
+        await lim.release(False, None)
         return await reqs
 
     a, b = asyncio.run(both())
@@ -262,7 +268,7 @@ def test_block_is_cut_in_the_right_places(cache_dir, monkeypatch):
     im = Image.new("L", (BLOCK_PX, BLOCK_PX), 253)
     im.paste(0, (0, 0, BLOCK_PX // 2, BLOCK_PX))
 
-    async def fake_fetch(layer, z, x, y, still_wanted=None):
+    async def fake_fetch(layer, z, x, y, still_wanted=None, background=False):
         return _png(im)
 
     monkeypatch.setattr(service, "_fetch", fake_fetch)
@@ -311,7 +317,7 @@ def _block(dark_cols: int) -> bytes:
 
 
 def _scripted_fetch(monkeypatch, answers, calls):
-    async def fake_fetch(layer, z, x, y, still_wanted=None):
+    async def fake_fetch(layer, z, x, y, still_wanted=None, background=False):
         calls.append(layer)
         a = answers[min(len(calls), len(answers)) - 1]
         if isinstance(a, Exception):
@@ -452,3 +458,131 @@ def test_sweep_removes_cached_blocks_with_holes(cache_dir):
     assert not any(p.exists() for p in holed)
     assert all(p.exists() for p in clean + partial)     # incomplete blocks aren't scored
     assert service.recheck_blank_tiles() is None
+
+
+# ---------- adaptive upstream limiter ----------
+
+def _counting_upstream(monkeypatch, statuses=(), delay=0.02, headers=None):
+    """Fake upstream recording the most requests in flight at once; answers `statuses` in turn, then 200s."""
+    queue = list(statuses)
+    seen = {"now": 0, "max": 0, "calls": 0}
+
+    class Resp(_Resp):
+        def __init__(self, status):
+            super().__init__(status)
+            self.headers = {**self.headers, **(headers or {})}
+
+    class FakeClient:
+        async def get(self, url, params=None):
+            seen["calls"] += 1
+            seen["now"] += 1
+            seen["max"] = max(seen["max"], seen["now"])
+            try:
+                await asyncio.sleep(delay)
+                return Resp(queue.pop(0) if queue else 200)
+            finally:
+                seen["now"] -= 1
+
+    monkeypatch.setattr(service, "_client", FakeClient())
+    _quick_limiters(monkeypatch)
+    return seen
+
+
+def test_never_more_requests_in_flight_than_the_limit(cache_dir, monkeypatch):
+    seen = _counting_upstream(monkeypatch)
+
+    async def many():
+        # 12 different blocks at once
+        await asyncio.gather(*(service.get_tile("contours", 16, 16000 + 4 * i, 25000) for i in range(12)))
+
+    asyncio.run(many())
+    assert seen["calls"] == 12 and seen["max"] == service.LIMIT_START
+
+
+def test_pushback_halves_the_limit_and_pauses(cache_dir, monkeypatch):
+    _counting_upstream(monkeypatch, statuses=[504])
+    monkeypatch.setattr(service, "PAUSE_MIN_S", 0.3)
+
+    async def run():
+        t0 = time.monotonic()
+        await service.get_tile("contours", 16, 16628, 25404)
+        lim = service._limiter_for(service._3DEP)
+        return lim.limit, time.monotonic() - t0
+
+    limit, took = asyncio.run(run())
+    assert limit == service.LIMIT_START // 2
+    assert took >= 0.3          # the retry waited out the pause
+
+
+def test_one_burst_of_failures_halves_the_limit_once(cache_dir, monkeypatch):
+    _counting_upstream(monkeypatch, statuses=[502, 502, 502, 502])
+    monkeypatch.setattr(service, "PAUSE_MIN_S", 0.2)
+
+    async def run():
+        await asyncio.gather(*(service.get_tile("contours", 16, 16000 + 4 * i, 25000) for i in range(4)))
+        return service._limiter_for(service._3DEP).limit
+
+    assert asyncio.run(run()) == service.LIMIT_START // 2
+
+
+def test_limit_grows_back_after_a_run_of_successes(cache_dir, monkeypatch):
+    _counting_upstream(monkeypatch)
+
+    async def run():
+        lim = service._limiter_for(service._3DEP)
+        lim.limit = 1
+        for i in range(service.GROW_AFTER):
+            await service.get_tile("contours", 16, 16000 + 4 * i, 25000)
+        return lim.limit
+
+    assert asyncio.run(run()) == 2
+
+
+def test_429_retry_after_sets_the_pause(cache_dir, monkeypatch):
+    _counting_upstream(monkeypatch, statuses=[429], headers={"retry-after": "0.4"})
+
+    async def run():
+        t0 = time.monotonic()
+        await service.get_tile("contours", 16, 16628, 25404)
+        return time.monotonic() - t0
+
+    assert asyncio.run(run()) >= 0.4
+
+
+def test_background_requests_leave_a_slot_for_the_map(cache_dir, monkeypatch):
+    seen = _counting_upstream(monkeypatch, delay=0.05)
+
+    async def run():
+        await asyncio.gather(*(service.get_tile("contours", 16, 16000 + 4 * i, 25000, background=True)
+                               for i in range(6)))
+
+    asyncio.run(run())
+    assert seen["calls"] == 6 and seen["max"] == min(service.BACKGROUND_MAX, service.LIMIT_START - 1)
+
+
+def test_map_requests_go_ahead_of_waiting_background_ones(cache_dir, monkeypatch):
+    order = []
+
+    class FakeClient:
+        async def get(self, url, params=None):
+            order.append(params["bbox"])
+            await asyncio.sleep(0.02)
+            return _Resp(200)
+
+    monkeypatch.setattr(service, "_client", FakeClient())
+    _quick_limiters(monkeypatch)
+
+    async def run():
+        lim = service._limiter_for(service._3DEP)
+        lim.limit = 1
+        await lim.acquire()                       # hold the only slot
+        bg = asyncio.ensure_future(service.get_tile("contours", 16, 16000, 25000, background=True))
+        await asyncio.sleep(0.01)
+        live = asyncio.ensure_future(service.get_tile("contours", 16, 16100, 25000))
+        await asyncio.sleep(0.01)
+        await lim.release(False, None)
+        await asyncio.gather(bg, live)
+        return service._upstream_request("contours", 16, 16100, 25000)[1]["bbox"]
+
+    live_bbox = asyncio.run(run())
+    assert order[0] == live_bbox
