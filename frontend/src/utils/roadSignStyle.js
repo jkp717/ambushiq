@@ -30,6 +30,24 @@ export function roadSignSvg(kind, color, size = 16) {
         <circle cx="7" cy="16" r="2.6"/><circle cx="17" cy="16" r="2.6"/>
         <path d="M4.5 13 7 10h10l2.5 3M10 10l1.2-3.2H14"/></g>`);
   }
+  if (kind === "foot") {
+    // OpenStreetMap foot trail: hiker on a rounded sign in the trail color
+    return svg(size, `<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="${color}" stroke="#fff" stroke-width="1.4"/>
+      <g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12.5" cy="5.6" r="1.6" fill="#fff" stroke="none"/>
+        <path d="M12 8.5 10.5 13l2.5 2.5V20M10.5 13 8.5 20M12 9.5l3 2.5M16.5 9.5V20"/></g>`);
+  }
+  if (kind === "horse") {
+    // OpenStreetMap horse trail: horseshoe on a rounded sign
+    return svg(size, `<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="${color}" stroke="#fff" stroke-width="1.4"/>
+      <path d="M7.5 18.5 6.5 11a5.5 5.5 0 0 1 11 0l-1 7.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>`);
+  }
+  if (kind === "track") {
+    // OpenStreetMap track: two dirt ruts with grass between, on a rounded sign
+    return svg(size, `<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="${color}" stroke="#fff" stroke-width="1.4"/>
+      <g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
+        <path d="M9.5 4.5 6.5 19.5M14.5 4.5l3 15"/><path d="M12 8v1.5M12 13v1.5" stroke-width="1.4"/></g>`);
+  }
   // connector / local: a road receding into the distance (edges + dashed center) on a white sign
   return svg(size, `<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="#fff"/>
     <g stroke="${color}" stroke-width="2" stroke-linecap="round" fill="none">

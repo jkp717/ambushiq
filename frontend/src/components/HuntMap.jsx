@@ -142,6 +142,35 @@ function lineHoverTip(kind, color, name) {
 }
 const trailTip = (p) => lineHoverTip(p.kind, TRAIL_COLORS[p.kind] || TRAIL_COLORS.trail, p.name);
 
+// OpenStreetMap foot trails, horse trails and tracks (via /api/osm-trails: Geofabrik state extracts the server
+// downloads for each region's state). Drawn just below the Forest Service lines, which win where both exist.
+const OSM_TRAIL_STYLES = {
+  foot:  { color: "#B5523B", weight: 2.5, dashArray: "1 5", lineCap: "round" },
+  horse: { color: "#7B4FA0", weight: 2.5, dashArray: "6 4" },
+  track: { color: "#6B7A3A", weight: 2, dashArray: "10 5" },
+};
+const OSM_KIND_LABEL = { foot: "Foot trail", horse: "Horse trail", track: "Track (two-track)" };
+const OSM_CLOSED_ACCESS = new Set(["private", "no"]);
+
+function osmTrailStyle(p, interactive) {
+  const s = OSM_TRAIL_STYLES[p.kind] || OSM_TRAIL_STYLES.foot;
+  return { ...s, opacity: OSM_CLOSED_ACCESS.has(p.access) ? 0.45 : 0.9, interactive };
+}
+
+function osmTrailPopup(p) {
+  const cap = (v) => v.charAt(0).toUpperCase() + v.slice(1).replace(/_/g, " ");
+  return `<div class="feat-popup">
+    <div class="feat-popup-title">${escHtml(p.name)}</div>
+    <div class="feat-popup-sub">${escHtml(OSM_KIND_LABEL[p.kind] || "Trail")}</div>
+    ${p.surface ? `<div class="land-row"><b>Surface:</b> ${escHtml(cap(p.surface))}</div>` : ""}
+    ${p.access ? `<div class="land-row"><b>Access:</b> ${escHtml(cap(p.access))}</div>` : ""}
+    <div class="land-note">Community-mapped OpenStreetMap data (© OpenStreetMap contributors). Check access before using.</div>
+  </div>`;
+}
+
+const osmTrailTip = (p) => lineHoverTip(p.kind, (OSM_TRAIL_STYLES[p.kind] || OSM_TRAIL_STYLES.foot).color, p.name);
+const OSM_ATTRIBUTION = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+
 // General roads (USGS National Map transportation) via /api/roads. Drawn above the public-land tint
 // so roads stay legible regardless of what else is on (and just below the MVUM forest trails/roads).
 const ROADS_MIN_ZOOM = 11;
@@ -671,7 +700,7 @@ const HuntMap = forwardRef(function HuntMap({
   onSuggestionColor, onAddSuggestionNote, onDeleteSuggestionNote, center,
   scoutDraft, onScoutRadiusChange, scoutRadiusMin, scoutRadiusMax,
   selectMode = false, selectedKeys, onToggleSelect, boxTool = false, onBoxSelect,
-  userLocation = null, onPublicLandStatus, onTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
+  userLocation = null, onPublicLandStatus, onTrailsStatus, onOsmTrailsStatus, onRecSitesStatus, onRoadsStatus, regionId,
   maptilerKey = "", height = 420, standActions = null, focusStandId = null, onFocused,
 }, ref) {
   const userRefs = useRef({ marker: null, circle: null });
@@ -773,10 +802,13 @@ const HuntMap = forwardRef(function HuntMap({
       // The MVUM forest trails/roads sit above the general roads: they draw many of the same physical roads,
       // and their popup (vehicle class, seasonal dates) is the more useful one where the two overlap.
       map.createPane("trailsPane").style.zIndex = 395;
+      // OpenStreetMap trails sit just below the Forest Service ones (their own pane, so a redraw of either can't
+      // reorder them).
+      map.createPane("osmTrailsPane").style.zIndex = 393;
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers; "lee" shading sits below both
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "roads", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "ruler", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "roads", "osmTrails", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "ruler", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       // Open straight onto the property when its features are already known, instead of loading a
@@ -1403,6 +1435,68 @@ const HuntMap = forwardRef(function HuntMap({
     return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
   }, [ready, layers.trails]);
 
+  // OpenStreetMap trails: part of the Trails layer, but their own request, so the Forest Service lines never wait
+  // on them. Status: off | zoom | loading | ok | importing | none | error (see /api/osm-trails).
+  const osmTrailData = useRef({ key: "", features: [] });
+  const osmTrailsStatusCb = useRef(onOsmTrailsStatus);
+  osmTrailsStatusCb.current = onOsmTrailsStatus;
+  const osmAttributed = useRef(false);
+  const drawOsmTrailsRef = useRef(() => {});
+  drawOsmTrailsRef.current = () => {
+    const g = layerGroups.current.osmTrails;
+    const map = mapRef.current;
+    if (!g || !map) return;
+    g.clearLayers();
+    const hide = new Set(hiddenKinds.trails || []);
+    const features = osmTrailData.current.features.filter((f) => !hide.has(f.properties.kind));
+    const shown = features.length > 0;
+    if (shown !== osmAttributed.current && map.attributionControl) {
+      if (shown) map.attributionControl.addAttribution(OSM_ATTRIBUTION);
+      else map.attributionControl.removeAttribution(OSM_ATTRIBUTION);
+      osmAttributed.current = shown;
+    }
+    if (!shown) return;
+    addSelectableLines(g, features, {
+      pane: "osmTrailsPane", styleFn: osmTrailStyle, popupFn: osmTrailPopup, tipFn: osmTrailTip,
+      interactive: !drawMode && !selectMode,
+    });
+  };
+  useEffect(() => { if (ready) drawOsmTrailsRef.current(); }, [ready, drawMode, selectMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return undefined;
+    const say = (s) => osmTrailsStatusCb.current && osmTrailsStatusCb.current(s);
+    const reset = () => { osmTrailData.current = { key: "", features: [] }; drawOsmTrailsRef.current(); };
+    if (!layers.trails) { reset(); say("off"); return undefined; }
+
+    let timer = null, ctrl = null, seq = 0;
+    const load = async () => {
+      const zoom = map.getZoom();
+      if (zoom < TRAILS_MIN_ZOOM) { if (ctrl) ctrl.abort(); reset(); say("zoom"); return; }
+      const b = map.getBounds();
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+      const mine = ++seq;
+      say("loading");
+      try {
+        const q = new URLSearchParams({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(), zoom });
+        const j = await api(`/osm-trails?${q}`, { signal: ctrl.signal });
+        if (mine !== seq) return;
+        const key = j.features.map((f) => f.id).sort().join(",");
+        if (key !== osmTrailData.current.key) { osmTrailData.current = { key, features: j.features }; drawOsmTrailsRef.current(); }
+        say(j.status || "ok");
+      } catch (e) {
+        if (e.name === "AbortError" || mine !== seq) return;
+        say("error");
+      }
+    };
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(load, 450); };
+    map.on("moveend", schedule);
+    schedule();
+    return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
+  }, [ready, layers.trails]);
+
   // General roads: same fetch/draw pattern as trails/public land, drawn in roadsPane.
   const roadData = useRef({ key: "", features: [] });
   const roadsStatusCb = useRef(onRoadsStatus);
@@ -1483,7 +1577,7 @@ const HuntMap = forwardRef(function HuntMap({
   // an item shown / hidden in a layer dropdown: redraw from the data already loaded (nothing is refetched)
   useEffect(() => {
     if (!ready) return;
-    drawLandRef.current(); drawTrailsRef.current(); drawRoadsRef.current(); drawRecSitesRef.current();
+    drawLandRef.current(); drawTrailsRef.current(); drawOsmTrailsRef.current(); drawRoadsRef.current(); drawRecSitesRef.current();
   }, [hiddenKinds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

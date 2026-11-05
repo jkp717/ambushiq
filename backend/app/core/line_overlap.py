@@ -48,8 +48,24 @@ def _cell(x: float, y: float) -> tuple[int, int]:
     return math.floor(x / CELL_M), math.floor(y / CELL_M)
 
 
-def _index(cover_feats: list, proj: _Proj, max_m: float) -> dict:
-    """Grid cell -> cover segments (ax, ay, bx, by, cover id) whose box, grown by max_m, touches the cell."""
+def _line_cells(parts_m: list) -> set:
+    """Every index cell the lines pass through (sampled every cell width), so only cover segments there are indexed."""
+    cells = set()
+    for pts in parts_m:
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            n = max(1, int(math.hypot(bx - ax, by - ay) // CELL_M) + 1)
+            for i in range(n + 1):
+                t = i / n
+                cells.add(_cell(ax + t * (bx - ax), ay + t * (by - ay)))
+        if pts:
+            cells.add(_cell(*pts[0]))
+    # neighbours too: sampling once per cell width can step over a corner the line clips
+    return {(cx + dx, cy + dy) for cx, cy in cells for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+
+
+def _index(cover_feats: list, proj: _Proj, max_m: float, wanted: Optional[set] = None) -> dict:
+    """Grid cell -> cover segments (ax, ay, bx, by, cover id) whose box, grown by max_m, touches the cell. With
+    `wanted`, only those cells are filled (the cells the lines being checked pass through)."""
     grid: dict = {}
     for f in cover_feats:
         for part in _parts(f["geometry"]):
@@ -60,7 +76,8 @@ def _index(cover_feats: list, proj: _Proj, max_m: float) -> dict:
                 x1, y1 = _cell(max(ax, bx) + max_m, max(ay, by) + max_m)
                 for cx in range(x0, x1 + 1):
                     for cy in range(y0, y1 + 1):
-                        grid.setdefault((cx, cy), []).append(seg)
+                        if wanted is None or (cx, cy) in wanted:
+                            grid.setdefault((cx, cy), []).append(seg)
     return grid
 
 
@@ -138,11 +155,11 @@ def overlap(line_feats: list, cover_feats: list, max_m: float = 25.0, max_angle:
         return results
     first = _parts(cover_feats[0]["geometry"])[0][0]
     proj = _Proj(first[1])
-    grid = _index(cover_feats, proj, max_m)
+    line_parts = [[[proj.fwd(p) for p in part] for part in _parts(f["geometry"])] for f in line_feats]
+    grid = _index(cover_feats, proj, max_m, _line_cells([pts for parts in line_parts for pts in parts]))
     min_cos = math.cos(math.radians(max_angle))
 
-    for res, f in zip(results, line_feats):
-        parts = [[proj.fwd(p) for p in part] for part in _parts(f["geometry"])]
+    for res, f, parts in zip(results, line_feats, line_parts):
         if not any(_near(grid, pts) for pts in parts):
             continue
         pieces, any_covered = [], False
@@ -174,3 +191,18 @@ def overlap(line_feats: list, cover_feats: list, max_m: float = 25.0, max_angle:
         if any_covered:
             res.pieces = pieces
     return results
+
+
+def cut_covered(features: list[dict], cover_feats: list[dict], **kw) -> list[dict]:
+    """`features` with every stretch that runs along a cover line removed. A feature with nothing covered is
+    returned as is; a covered one becomes its uncovered pieces, with ids "{id}~{n}" (possibly none)."""
+    if not features or not cover_feats:
+        return features
+    out = []
+    for f, res in zip(features, overlap(features, cover_feats, **kw)):
+        if res.pieces is None:
+            out.append(f)
+            continue
+        for n, piece in enumerate(res.pieces):
+            out.append({**f, "id": f"{f['id']}~{n}", "geometry": {"type": "LineString", "coordinates": piece}})
+    return out

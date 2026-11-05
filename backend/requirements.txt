@@ -5,6 +5,8 @@ psycopg[binary]==3.2.3
 httpx==0.28.1
 pydantic==2.10.4
 apscheduler==3.10.4
+# OpenStreetMap trails: reads Geofabrik state extracts (app.osmtrails.importer)
+osmium==4.3.2
 cryptography==44.0.0
 pillow>=10.0.0
 # MegaDetector via PytorchWildlife — explicit transitive deps listed here because

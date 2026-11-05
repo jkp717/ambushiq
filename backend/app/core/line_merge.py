@@ -72,7 +72,7 @@ class MergeMemo:
     of redoing it (~100 ms at the zoom-11 worst case). Each entry holds the exact cell feature lists it was built
     from, so a refreshed or failed cell (a different list object) is a miss."""
 
-    def __init__(self, size: int = 32):
+    def __init__(self, size: int = 8):   # small: each entry holds a whole view's lines, and memory is tight
         self.size = size
         self._entries: dict[Hashable, tuple[list, list]] = {}
 

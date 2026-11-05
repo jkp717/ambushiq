@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.core.line_merge import MergeMemo, merge_line_segments
-from app.core.line_overlap import overlap
+from app.core.line_overlap import cut_covered
 from app.roads.models import RoadCell
 
 log = logging.getLogger(__name__)
@@ -227,16 +227,7 @@ def cut_under_fs(features: list[dict], fs_roads: list[dict]) -> list[dict]:
     """Drop the stretches of USGS road that a Forest Service (MVUM) road runs along: both sources draw most
     national-forest roads, so the map showed two near-parallel lines with different names. The FS line stays (it has
     the vehicle rules and season); the rest of the USGS road is kept as pieces with ids "{id}~{n}"."""
-    if not fs_roads:
-        return features
-    out = []
-    for f, res in zip(features, overlap(features, fs_roads)):
-        if res.pieces is None:
-            out.append(f)
-            continue
-        for n, piece in enumerate(res.pieces):
-            out.append({**f, "id": f"{f['id']}~{n}", "geometry": {"type": "LineString", "coordinates": piece}})
-    return out
+    return cut_covered(features, fs_roads)
 
 
 class RoadsUnavailable(Exception):

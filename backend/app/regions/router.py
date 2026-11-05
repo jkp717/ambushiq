@@ -6,7 +6,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import delete as sa_delete, func, select, update as sa_update
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.core.database import engine
 from app.corridors.models import Corridor
 from app.deer_sign.models import DeerSign
 from app.dependencies import require_token
+from app.osmtrails.importer import kick as kick_osm_trails
 from app.regions.models import Region
 from app.regions.schemas import RegionIn
 from app.scouting.models import ScoutingSuggestion
@@ -35,7 +36,9 @@ def list_regions(_=Depends(require_token)):
 
 
 @router.post("")
-def create_region(body: RegionIn, _=Depends(require_token)):
+def create_region(body: RegionIn, background: BackgroundTasks, _=Depends(require_token)):
+    # the region's state may need its OpenStreetMap trails downloaded (runs after the response)
+    background.add_task(kick_osm_trails)
     with Session(engine) as s:
         existing_count = s.execute(select(func.count(Region.id))).scalar_one()
         region = Region(
@@ -52,11 +55,13 @@ def create_region(body: RegionIn, _=Depends(require_token)):
 
 
 @router.put("/{region_id}")
-def update_region(region_id: int, body: RegionIn, _=Depends(require_token)):
+def update_region(region_id: int, body: RegionIn, background: BackgroundTasks, _=Depends(require_token)):
     with Session(engine) as s:
         region = s.get(Region, region_id)
         if not region:
             raise HTTPException(404, "not found")
+        if (region.lat, region.lon) != (body.lat, body.lon):
+            background.add_task(kick_osm_trails)   # moved: maybe into a state not downloaded yet
         region.name = body.name
         region.lat = body.lat
         region.lon = body.lon

@@ -97,7 +97,16 @@ const TRAILS_HINTS = {
 };
 const TRAILS_LEGEND = [
   ["trail", "#8D6E00", "OHV/ATV/motorcycle trail"], ["road", "#6D4C1E", "Designated forest road", true],
+  // OpenStreetMap (HuntMap's OSM_TRAIL_STYLES)
+  ["foot", "#B5523B", "Foot trail", "dotted"], ["horse", "#7B4FA0", "Horse trail", true],
+  ["track", "#6B7A3A", "Track (two-track)", true],
 ];
+// The OpenStreetMap part of the Trails layer has its own status (its own request; see /api/osm-trails)
+const OSM_TRAILS_HINTS = {
+  importing: "Foot/horse trails and tracks are still downloading for this state",
+  none: "No foot/horse trails or tracks here yet: add a region in this state to download them",
+  error: "Foot/horse trails and tracks are unavailable right now",
+};
 
 const ROADS_HINTS = {
   zoom: "Zoom in to see roads",
@@ -124,8 +133,10 @@ function LegendRow({ on, onClick, swatch, label }) {
     </button>
   );
 }
+// dashed: false (solid, tinted), true (dashed) or "dotted"
 const lineSwatch = (color, dashed) => (
-  <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33", borderStyle: dashed ? "dashed" : "solid" }} />
+  <span className="land-swatch" style={{ borderColor: color, background: dashed ? "transparent" : color + "33",
+    borderStyle: dashed === "dotted" ? "dotted" : dashed ? "dashed" : "solid" }} />
 );
 
 const RECSITES_HINTS = {
@@ -245,6 +256,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [err, setErr] = useState(null);
   const [landStatus, setLandStatus] = useState("off");   // public land layer: off | zoom | loading | ok | partial | error
   const [trailsStatus, setTrailsStatus] = useState("off"); // trails layer: off | zoom | loading | ok | partial | error
+  const [osmTrailsStatus, setOsmTrailsStatus] = useState("off"); // its OpenStreetMap part: ... | importing | none
   const [recSitesStatus, setRecSitesStatus] = useState("off"); // recreation sites layer: off | zoom | loading | ok | partial | error
   const [roadsStatus, setRoadsStatus] = useState("off"); // roads layer: off | zoom | loading | ok | partial | error
   const [staleAt, setStaleAt] = useState(null);   // epoch seconds of the cached forecast being shown, or null when live
@@ -1154,7 +1166,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             scoutRadiusMin={scoutSettings.scout_radius_min_m} scoutRadiusMax={scoutSettings.scout_radius_max_m}
             selectMode={selectMode} selectedKeys={selectedKeys} onToggleSelect={toggleSelected}
             boxTool={boxTool} onBoxSelect={addSelected}
-            userLocation={userLocation} maptilerKey={maptilerKey} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus}
+            userLocation={userLocation} maptilerKey={maptilerKey} onPublicLandStatus={setLandStatus} onTrailsStatus={setTrailsStatus} onOsmTrailsStatus={setOsmTrailsStatus}
             onRecSitesStatus={setRecSitesStatus} onRoadsStatus={setRoadsStatus}
             standActions={standActions} focusStandId={focusStandId} onFocused={() => setFocusStandId(null)}
             regionId={activeRegion.id}
@@ -1237,6 +1249,7 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
               {legendOpen.trails && (
                 <div className="land-legend">
                   {TRAILS_HINTS[trailsStatus] && <div className="land-hint">{TRAILS_HINTS[trailsStatus]}</div>}
+                  {OSM_TRAILS_HINTS[osmTrailsStatus] && <div className="land-hint">{OSM_TRAILS_HINTS[osmTrailsStatus]}</div>}
                   {TRAILS_LEGEND.map(([key, color, label, dashed]) => (
                     <LegendRow key={key} on={kindOn("trails", key)} onClick={() => toggleKind("trails", key)}
                       label={label} swatch={lineSwatch(color, dashed)} />

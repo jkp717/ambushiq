@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Mountain, Camera, CloudSun, Trash2, Play, Loader2, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import { Mountain, Camera, CloudSun, Trash2, Map as MapIcon, Play, Loader2, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
 import { api } from "../services/api.js";
 import { formatDateTime } from "../utils/formatters.js";
 import Banner from "./ui/Banner.jsx";
 
-const ICONS = { terrain: Mountain, camera: Camera, weather: CloudSun, cleanup: Trash2 };
+const ICONS = { terrain: Mountain, camera: Camera, weather: CloudSun, cleanup: Trash2, map: MapIcon };
 const POLL_MS = 2000;   // while any job is running
 
 // Settings → Jobs: every manual/scheduled job with a Run now button and its live / last status.
