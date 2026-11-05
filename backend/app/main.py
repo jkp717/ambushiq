@@ -53,10 +53,12 @@ async def _static_cache_headers(request: Request, call_next):
     """Vite hashes /assets filenames per build, so those can cache forever —
     but index.html (which references those hashed names) must always be
     revalidated, or browsers/phones keep serving a stale shell that points at
-    asset URLs from an old deploy and UI updates never show up."""
+    asset URLs from an old deploy and UI updates never show up. /vendor holds the
+    self-hosted map libraries in version-named folders (vendor/leaflet-1.9.4/...),
+    so those never change under a given URL either."""
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/assets/"):
+    if path.startswith(("/assets/", "/vendor/")):
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     elif not path.startswith("/api/") and not path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
@@ -117,6 +119,9 @@ app.include_router(alerts_router)
 STATIC_DIR = os.environ.get("STATIC_DIR", "/app/static")
 if os.path.isdir(STATIC_DIR):
     app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
+    # Self-hosted map libraries (frontend/public/vendor): a missing file is a 404, never index.html
+    if os.path.isdir(os.path.join(STATIC_DIR, "vendor")):
+        app.mount("/vendor", StaticFiles(directory=os.path.join(STATIC_DIR, "vendor")), name="vendor")
 
     @app.get("/")
     def index():

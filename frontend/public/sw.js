@@ -2,12 +2,11 @@
 // lets the app open with no signal. It caches only the app itself:
 //   - pages (navigations): network first, so a new deploy shows up whenever there's signal; the last good
 //     copy of index.html is used when the network fails.
-//   - /assets/* (Vite's hashed bundles) and the versioned Leaflet/plugin files from the CDNs: cache first,
-//     since a given URL never changes.
+//   - /assets/* (Vite's hashed bundles) and /vendor/* (the self-hosted Leaflet/plugin files, in version-named
+//     folders): cache first, since a given URL never changes.
 // API data is not handled here: the app keeps its own saved copies (src/utils/offlineData.js), and offline
 // map tiles are leaflet.offline's (IndexedDB). Bump SHELL_CACHE only if this caching logic changes.
-const SHELL_CACHE = "ambushiq-shell-v1";
-const CDN_HOSTS = ["unpkg.com", "cdn.jsdelivr.net"];
+const SHELL_CACHE = "ambushiq-shell-v2";   // v2: map libraries moved from the CDNs to /vendor
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => {
@@ -37,8 +36,7 @@ async function cacheFirst(request) {
   const saved = await cache.match(request);
   if (saved) return saved;
   const response = await fetch(request);
-  // "opaque" = a CDN file fetched without CORS (e.g. a stylesheet with no crossorigin attribute)
-  if (response.ok || response.type === "opaque") cache.put(request, response.clone());
+  if (response.ok) cache.put(request, response.clone());
   return response;
 }
 
@@ -48,8 +46,8 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(request.url);
   if (request.mode === "navigate" && url.origin === self.location.origin && !url.pathname.startsWith("/api/")) {
     e.respondWith(networkFirstPage(request));
-  } else if ((url.origin === self.location.origin && url.pathname.startsWith("/assets/")) ||
-             CDN_HOSTS.includes(url.hostname)) {
+  } else if (url.origin === self.location.origin &&
+             (url.pathname.startsWith("/assets/") || url.pathname.startsWith("/vendor/"))) {
     e.respondWith(cacheFirst(request));
   }
 });

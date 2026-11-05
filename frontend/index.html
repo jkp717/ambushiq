@@ -20,18 +20,32 @@
 
     <!-- Android / browser theme colour -->
     <meta name="theme-color" content="#0C447C" />
+    <meta name="color-scheme" content="light dark" />
 
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-    <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.18.3/dist/leaflet-geoman.css" />
-    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.18.3/dist/leaflet-geoman.min.js"></script>
+    <!-- Map libraries, self-hosted (public/vendor, version-named folders) rather than loaded from CDNs: a fresh
+         home-screen install starts with an empty cache, and one slow third-party request used to hold the first
+         paint, leaving a black screen. The scripts are deferred so they don't block painting; deferred scripts and
+         the module below still run in document order, so L exists before geoman, leaflet.offline and the app. -->
+    <link rel="stylesheet" href="/vendor/leaflet-1.9.4/leaflet.css" />
+    <script defer src="/vendor/leaflet-1.9.4/leaflet.js"></script>
+    <link rel="stylesheet" href="/vendor/leaflet-geoman-free-2.18.3/leaflet-geoman.css" />
+    <script defer src="/vendor/leaflet-geoman-free-2.18.3/leaflet-geoman.min.js"></script>
 
     <!-- Offline map tile caching (leaflet.offline needs idb + the L global above) -->
-    <script src="https://cdn.jsdelivr.net/npm/idb@8.0.3/build/umd.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet.offline@3.2.1/dist/bundle.js"></script>
+    <script defer src="/vendor/idb-8.0.3/umd.js"></script>
+    <script defer src="/vendor/leaflet.offline-3.2.1/bundle.js"></script>
+
+    <!-- Boot screen: painted straight from this file while the scripts load; React replaces it on first render -->
+    <style>
+      html, body { margin: 0; background: #fff; }
+      .boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 14px; font: 500 14px system-ui, -apple-system, sans-serif; color: #666; }
+      .boot img { width: 72px; height: 72px; border-radius: 16px; }
+      @media (prefers-color-scheme: dark) { html, body { background: #1f1f1d; } .boot { color: #aaa; } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot"><img src="/icon.png" alt="" />Loading…</div></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
