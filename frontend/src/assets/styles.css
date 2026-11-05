@@ -443,10 +443,11 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 }
 .map-day-strip::-webkit-scrollbar { display: none; }
 /* The shelf header (Map.jsx): date + time, the day's weather in words beside it, and the day's hunt
-   chips. Desktop: one centred row. Phones: the weather wraps under the date/time when it doesn't fit, and
-   the chips sit centred on their own line below. */
+   chips. Desktop: one centred row. Phones: the weather always sits on its own line under the date/time (it
+   used to wrap only when too long, so the header jumped between one and two rows), and the chips sit centred
+   on their own line below. */
 .sheet-hd { display: flex; flex-direction: column; align-items: center; }
-.sheet-hd-line { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 12px; max-width: 100%; }
+.sheet-hd-line { display: flex; flex-direction: column; align-items: center; max-width: 100%; }
 .sheet-hd-when { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .sheet-hd-wx { font-size: 12.5px; font-weight: 500; color: var(--sub); white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; max-width: 100%; }
@@ -464,6 +465,7 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 /* desktop: everything on one row, the chips beside the weather (they fade and widen in instead) */
 @media (min-width: 700px) {
   .sheet-hd { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+  .sheet-hd-line { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 12px; }
   /* closed it also keeps zero height (0fr, from above) and cancels the row's 14px gap, so a day without
      chips doesn't leave the header row as tall as a chip */
   .map-day-alerts { max-width: 0; transition: max-width .3s ease, grid-template-rows .25s ease, opacity .2s ease; }

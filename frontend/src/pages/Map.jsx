@@ -903,8 +903,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             const hunt = sit && curDay?.hunt?.[sit];
             if (hunt) shownHunt.current = { sit, hunt };
             const shown = shownHunt.current;
-            // The shelf's always-visible header: date + time, the hour's weather beside it (wraps under it on a
-            // narrow phone), then the hunt chip beside that on desktop / centred below on phones.
+            // The shelf's always-visible header: date + time, the hour's weather beside it on desktop (always on
+            // its own line under it on phones), then the hunt chip beside that on desktop / centred below on phones.
             return (
               <span className="sheet-hd">
                 <span className="sheet-hd-line">
