@@ -268,9 +268,15 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, lo
       const off = () => {
         if (!popupOpen) line.setStyle({ color: base.color, weight: base.weight, opacity: base.opacity, dashArray: base.dashArray ?? null });
       };
-      hit.bindPopup(popupFn(f.properties), { minWidth: 200 });
+      // A road known only by a placeholder ("Unnamed local road") that still gets a street-name lookup says
+      // "Looking up name…" until the answer is in, instead of showing the placeholder and then flipping to the real
+      // name. A road with a Forest Service number keeps showing that ("FS Rd 423I") meanwhile: it's real information.
+      // A road already asked about this session gets its saved answer straight away (lookedUpNames, below).
+      const lookingUp = !!lookupName && f.properties.named === false && !f.properties.route;
+      const pendingProps = lookingUp ? { ...f.properties, name: "Looking up name…" } : f.properties;
+      hit.bindPopup(popupFn(lookingUp ? pendingProps : f.properties), { minWidth: 200 });
       if (tipFn && !COARSE_POINTER) {
-        hit.bindTooltip(tipFn(f.properties), {
+        hit.bindTooltip(tipFn(lookingUp ? pendingProps : f.properties), {
           sticky: true, direction: "top", offset: [0, -12], className: "line-hover-tip", opacity: 1,
         });
         hit.on("tooltipopen", () => { if (popupOpen) hit.closeTooltip(); });   // the detailed popup replaces it
@@ -278,19 +284,20 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, lo
       let ask = () => {};
       let timer = 0;
       if (lookupName && f.properties.named === false) {
-        const apply = (name) => {
-          if (!name) return;
-          const p = { ...f.properties, name, nameSource: "esri" };
+        const show = (p) => {
           hit.setPopupContent(popupFn(p));
           if (hit.getTooltip()) hit.setTooltipContent(tipFn(p));
         };
+        // the answer: the street name, or (none known) the source's own name/placeholder
+        const apply = (name) => show(name ? { ...f.properties, name, nameSource: "esri" } : f.properties);
         const known = lookedUpNames.get(f.id);
-        if (known) known.then(apply, () => {});
+        if (known) known.then(apply, () => show(f.properties));
         ask = (latlng) => {
           if (lookedUpNames.has(f.id)) return;
           const req = lookupName(f, latlng);
           lookedUpNames.set(f.id, req);
-          req.then(apply, () => lookedUpNames.delete(f.id));   // a failed request may be retried later
+          show(pendingProps);
+          req.then(apply, () => { lookedUpNames.delete(f.id); show(f.properties); });   // may be retried later
         };
       }
       hit.on("mouseover", (e) => { on(); clearTimeout(timer); timer = setTimeout(() => ask(e.latlng), NAME_LOOKUP_DELAY_MS); });
