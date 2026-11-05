@@ -23,6 +23,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
+from app.core.line_merge import MergeMemo, merge_line_segments
 from app.roads.models import RoadCell
 
 log = logging.getLogger(__name__)
@@ -199,86 +200,15 @@ async def _fetch_cell(kind: str, tz: int, ix: int, iy: int) -> list[dict]:
     return feats
 
 
-# ---------- merging segments into whole roads ----------
-# USGS stores a road as many segments, split at every intersection and wherever the source data changes, so one
-# feature per segment made the map's hover highlight a random-length piece. Segments are merged per request (a
-# road crosses several cells, so merging per cell would draw overlapping duplicates); cells still cache raw segments.
-
-def _line_parts(geom: dict) -> list:
-    return [geom["coordinates"]] if geom["type"] == "LineString" else geom["coordinates"]
-
-
-def _endpoints(geom: dict) -> set:
-    return {tuple(p) for part in _line_parts(geom) for p in (part[0], part[-1])}
-
+# ---------- merging segments into whole roads (see app.core.line_merge) ----------
 
 def merge_road_segments(features: list[dict]) -> list[dict]:
-    """One feature per road: segments with the same kind and name that touch end-to-end are joined into one
-    (Multi)LineString. Roads that share a name but don't connect stay separate. Unnamed segments are joined only
-    where exactly two segments of any road meet (a bend or data split), so an intersection ends them. Coordinates
-    are already rounded to 5 decimals, so shared endpoints match exactly. The merged feature keeps the smallest
-    member id, so a lone segment's id is unchanged and ids are stable whatever order USGS returns."""
-    n = len(features)
-    parent = list(range(n))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    ends = [_endpoints(f["geometry"]) for f in features]
-    touching: dict[tuple, list[int]] = {}       # endpoint -> every segment ending there
-    for i, pts in enumerate(ends):
-        for p in pts:
-            touching.setdefault(p, []).append(i)
-
-    for idxs in touching.values():
-        if len(idxs) < 2:
-            continue
-        by_road: dict[tuple, list[int]] = {}
-        for i in idxs:
-            p = features[i]["properties"]
-            by_road.setdefault((p["kind"], p["name"]), []).append(i)
-        for (kind, name), same in by_road.items():
-            if len(same) < 2 or (name == _UNNAMED.get(kind) and len(idxs) != 2):
-                continue
-            root = find(same[0])
-            for i in same[1:]:
-                parent[find(i)] = root
-
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(i)
-    out = []
-    for members in groups.values():
-        if len(members) == 1:
-            out.append(features[members[0]])
-            continue
-        first = min(members, key=lambda i: str(features[i]["id"]))
-        parts = [part for i in members for part in _line_parts(features[i]["geometry"])]
-        out.append({**features[first], "geometry": {"type": "MultiLineString", "coordinates": parts}})
-    return out
+    """One feature per road: connected segments with the same kind and name (unnamed ones only through bends)."""
+    return merge_line_segments(features, group_key=lambda p: (p["kind"], p["name"]),
+                               is_unnamed=lambda p: p["name"] == _UNNAMED.get(p["kind"]))
 
 
-_merge_memo: dict[tuple, tuple[list, list]] = {}   # (tz, cells) -> (the cell lists it was built from, merged)
-MERGE_MEMO_SIZE = 32
-
-
-async def _merged(tz: int, cells: list, cell_results: list, features: list) -> list:
-    """merge_road_segments, remembered per set of cells: panning within the same cells (the common case) reuses the
-    last merge instead of redoing it (~100 ms at the zoom-11 worst case). The memo holds the exact cell lists it was
-    built from, so a refreshed or failed cell (a different list object) is a miss."""
-    key = (tz, tuple(sorted(cells)))
-    sources = [feats for feats, _fresh in cell_results]
-    hit = _merge_memo.get(key)
-    if hit and len(hit[0]) == len(sources) and all(a is b for a, b in zip(hit[0], sources)):
-        return hit[1]
-    out = await asyncio.to_thread(merge_road_segments, features)
-    if len(_merge_memo) >= MERGE_MEMO_SIZE:
-        _merge_memo.pop(next(iter(_merge_memo)))
-    _merge_memo[key] = (sources, out)
-    return out
+_merge_memo = MergeMemo()
 
 
 class RoadsUnavailable(Exception):
@@ -400,5 +330,7 @@ async def roads(south: float, west: float, north: float, east: float, zoom: int)
     features = list(merged.values())
     if failures and not features:
         raise failures[0] if isinstance(failures[0], RoadsUnavailable) else RoadsUnavailable(str(failures[0]))
-    features = await _merged(tz, cells, [r for r in results if not isinstance(r, Exception)], features)
+    sources = [r[0] for r in results if not isinstance(r, Exception)]
+    features = await _merge_memo.get((tz, tuple(sorted(cells))), sources, features,
+                                     lambda f: merge_road_segments(f))
     return {"type": "FeatureCollection", "features": features, "attribution": ATTRIBUTION, "partial": partial}

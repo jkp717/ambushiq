@@ -48,6 +48,7 @@ def env(monkeypatch):
         s.commit()
     service._mem.clear()
     service._inflight.clear()
+    service._merge_memo.clear()
     monkeypatch.setattr(service.asyncio, "sleep", lambda *_a, **_k: _instant())
     state = {"trail_requests": [], "road_requests": [], "trail_features": [trail_feature(1)],
              "road_features": [road_feature(2)], "trail_status": 200, "road_status": 200, "pages": None}
@@ -219,7 +220,7 @@ def test_cells_are_cached_in_memory_and_in_the_database(env):
 
 def test_large_areas_are_fetched_in_pages(env, monkeypatch):
     monkeypatch.setattr(service, "PAGE_SIZE", 2)
-    env["pages"] = [[trail_feature(1), trail_feature(2)], [trail_feature(3)]]
+    env["pages"] = [[trail_feature(1, "A"), trail_feature(2, "B")], [trail_feature(3, "C")]]
     out = run(**BOX)
     trail_ids = sorted(f["id"] for f in out["features"] if f["properties"]["kind"] == "trail")
     assert trail_ids == ["trail-1", "trail-2", "trail-3"] and len(env["trail_requests"]) == 2
@@ -258,3 +259,53 @@ def test_old_cells_are_pruned_and_recent_ones_kept(env):
     assert service.prune_cache() == 1
     assert service._db_load("trails:v1:trail:old") is None and service._db_load("trails:v1:trail:new") is not None
     assert "trails:v1:trail:old" not in service._mem and "trails:v1:trail:new" in service._mem
+
+
+# ---------- merging segments into whole trails/roads ----------
+
+def seg(fid, coords, name="FR 1003", kind="road", vehicle_class="hcv", seasonal=None):
+    return {"type": "Feature", "id": f"{kind}-{fid}", "geometry": {"type": "LineString", "coordinates": coords},
+            "properties": {"name": name, "kind": kind, "vehicle_class": vehicle_class, "seasonal": seasonal,
+                           "forestname": "Ouachita National Forest", "jurisdiction": "FS - FOREST SERVICE",
+                           "source": "USFS MVUM"}}
+
+
+def test_connected_segments_with_matching_details_merge():
+    a, b, c = [0, 0], [1, 0], [2, 0]
+    out = service.merge_trail_segments([seg(2, [b, c]), seg(1, [a, b])])
+    assert [f["id"] for f in out] == ["road-1"]
+    assert out[0]["geometry"]["type"] == "MultiLineString" and out[0]["properties"]["name"] == "FR 1003"
+
+
+def test_segments_with_different_details_stay_separate_so_the_popup_is_accurate():
+    a, b, c = [0, 0], [1, 0], [2, 0]
+    assert len(service.merge_trail_segments([seg(1, [a, b]), seg(2, [b, c], seasonal="Apr 1 - Dec 15")])) == 2
+    assert len(service.merge_trail_segments([seg(1, [a, b]), seg(2, [b, c], vehicle_class="atv")])) == 2
+    assert len(service.merge_trail_segments([seg(1, [a, b]), seg(2, [b, c], kind="trail")])) == 2
+
+
+def test_same_name_but_not_connected_stays_separate():
+    out = service.merge_trail_segments([seg(1, [[0, 0], [1, 0]]), seg(2, [[5, 5], [6, 5]])])
+    assert sorted(f["id"] for f in out) == ["road-1", "road-2"]
+
+
+def test_unnamed_trails_join_through_bends_but_stop_at_junctions():
+    a, b, c = [0, 0], [1, 0], [2, 0]
+    u = dict(name="Unnamed trail", kind="trail")
+    assert len(service.merge_trail_segments([seg(1, [a, b], **u), seg(2, [b, c], **u)])) == 1
+    assert len(service.merge_trail_segments([seg(1, [a, b], **u), seg(2, [b, c], **u), seg(3, [b, [1, 1]], **u)])) == 3
+
+
+def test_request_returns_one_feature_per_trail_and_reuses_the_merge(env, monkeypatch):
+    env["trail_features"] = [
+        trail_feature(1, geom={"type": "LineString", "coordinates": [[-92.30, 34.70], [-92.299, 34.70]]}),
+        trail_feature(2, geom={"type": "LineString", "coordinates": [[-92.299, 34.70], [-92.298, 34.70]]}),
+    ]
+    calls = []
+    real = service.merge_trail_segments
+    monkeypatch.setattr(service, "merge_trail_segments", lambda f: calls.append(1) or real(f))
+    out = run(**BOX)
+    trails = [f for f in out["features"] if f["properties"]["kind"] == "trail"]
+    assert [f["id"] for f in trails] == ["trail-1"] and trails[0]["geometry"]["type"] == "MultiLineString"
+    run(**BOX)
+    assert len(calls) == 1

@@ -22,6 +22,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
+from app.core.line_merge import MergeMemo, merge_line_segments
 from app.trails.models import TrailCell
 
 log = logging.getLogger(__name__)
@@ -358,6 +359,21 @@ def prune_cache(max_age_s: float = PRUNE_AFTER_S) -> int:
         return 0
 
 
+# ---------- merging segments into whole trails/roads (see app.core.line_merge) ----------
+_UNNAMED = {"Unnamed trail", "Unnamed road"}
+
+
+def merge_trail_segments(features: list[dict]) -> list[dict]:
+    """One feature per trail/road: connected segments join only when every property matches (name, kind, vehicle
+    class, seasonal dates, forest, jurisdiction), so the popup stays true for the whole highlighted line. Unnamed
+    segments join only through bends."""
+    return merge_line_segments(features, group_key=lambda p: tuple(sorted(p.items())),
+                               is_unnamed=lambda p: p["name"] in _UNNAMED)
+
+
+_merge_memo = MergeMemo()
+
+
 class BadBounds(ValueError):
     """The requested map area is invalid, too zoomed out, or too large."""
 
@@ -391,4 +407,7 @@ async def trails(south: float, west: float, north: float, east: float, zoom: int
     features = list(merged.values())
     if failures and not features:
         raise failures[0] if isinstance(failures[0], TrailsUnavailable) else TrailsUnavailable(str(failures[0]))
+    sources = [r[0] for r in results if not isinstance(r, Exception)]
+    features = await _merge_memo.get((tz, tuple(sorted(cells))), sources, features,
+                                     lambda f: merge_trail_segments(f))
     return {"type": "FeatureCollection", "features": features, "attribution": ATTRIBUTION, "partial": partial}
