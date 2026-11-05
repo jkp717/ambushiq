@@ -34,6 +34,7 @@ def env(monkeypatch):
         s.commit()
     service._mem.clear()
     service._inflight.clear()
+    service._merge_memo.clear()
     monkeypatch.setattr(service.asyncio, "sleep", lambda *_a, **_k: _instant())
     state = {"requests": {}, "features": {"highway": [], "secondary": [], "connector": [], "local": [road_feature(1)]},
              "status": 200, "pages": None}
@@ -150,7 +151,7 @@ def test_cells_are_cached_in_memory_and_in_the_database(env):
 
 def test_large_areas_are_fetched_in_pages(env, monkeypatch):
     monkeypatch.setattr(service, "PAGE_SIZE", 2)
-    env["pages"] = [[road_feature(1), road_feature(2)], [road_feature(3)]]
+    env["pages"] = [[road_feature(1, "A Rd"), road_feature(2, "B Rd")], [road_feature(3, "C Rd")]]
     out = run(**BOX)
     local_ids = sorted(f["id"] for f in out["features"] if f["properties"]["kind"] == "local")
     assert local_ids == ["local-1", "local-2", "local-3"] and len(env["requests"]["local"]) == 2
@@ -189,3 +190,80 @@ def test_old_cells_are_pruned_and_recent_ones_kept(env):
     assert service.prune_cache() == 1
     assert service._db_load("roads:v1:local:old") is None and service._db_load("roads:v1:local:new") is not None
     assert "roads:v1:local:old" not in service._mem and "roads:v1:local:new" in service._mem
+
+
+# ---------- merging segments into whole roads ----------
+
+def seg(fid, coords, name="Oak Rd", kind="local"):
+    return {"type": "Feature", "id": f"{kind}-{fid}", "geometry": {"type": "LineString", "coordinates": coords},
+            "properties": {"name": name, "kind": kind, "source": "USGS National Map"}}
+
+
+def by_id(out):
+    return {f["id"]: f for f in out}
+
+
+def test_connected_segments_of_one_road_merge_into_one_feature():
+    a, b, c = [0, 0], [1, 0], [2, 0]
+    out = service.merge_road_segments([seg(2, [b, c]), seg(1, [a, b]), seg(3, [b, [1, 1]], name="Elm St")])
+    f = by_id(out)
+    assert set(f) == {"local-1", "local-3"}
+    assert f["local-1"]["geometry"]["type"] == "MultiLineString" and len(f["local-1"]["geometry"]["coordinates"]) == 2
+    assert f["local-1"]["properties"] == {"name": "Oak Rd", "kind": "local", "source": "USGS National Map"}
+    assert f["local-3"]["geometry"]["type"] == "LineString"                     # a lone segment is untouched
+
+
+def test_same_name_but_not_connected_stays_separate():
+    out = service.merge_road_segments([seg(1, [[0, 0], [1, 0]]), seg(2, [[5, 5], [6, 5]])])
+    assert sorted(f["id"] for f in out) == ["local-1", "local-2"]
+
+
+def test_different_kinds_with_the_same_name_do_not_merge():
+    out = service.merge_road_segments([seg(1, [[0, 0], [1, 0]]), seg(1, [[1, 0], [2, 0]], kind="secondary")])
+    assert len(out) == 2
+
+
+def test_named_road_chains_through_many_splits_and_junctions():
+    pts = [[i, 0] for i in range(6)]
+    segs = [seg(i, [pts[i], pts[i + 1]]) for i in range(5)] + [seg(9, [pts[2], [2, 1]], name="Side St")]
+    out = service.merge_road_segments(segs)
+    assert len(out) == 2 and len(by_id(out)["local-0"]["geometry"]["coordinates"]) == 5
+
+
+def test_unnamed_segments_join_through_bends_but_stop_at_junctions():
+    u = service._UNNAMED["local"]
+    a, b, c, d = [0, 0], [1, 0], [2, 0], [3, 0]
+    bend = service.merge_road_segments([seg(1, [a, b], name=u), seg(2, [b, c], name=u)])
+    assert len(bend) == 1
+    junction = service.merge_road_segments([seg(1, [a, b], name=u), seg(2, [b, c], name=u), seg(3, [b, [1, 1]], name=u)])
+    assert len(junction) == 3
+    crossed = service.merge_road_segments([seg(1, [b, c], name=u), seg(2, [c, d], name=u), seg(3, [c, [2, 1]], name="Elm St")])
+    assert len(crossed) == 3                                                    # a named road crossing is a junction too
+
+
+def test_merged_ids_do_not_depend_on_input_order():
+    s1, s2 = seg(7, [[0, 0], [1, 0]]), seg(4, [[1, 0], [2, 0]])
+    assert [f["id"] for f in service.merge_road_segments([s1, s2])] == \
+           [f["id"] for f in service.merge_road_segments([s2, s1])] == ["local-4"]
+
+
+def test_request_returns_one_feature_per_road(env):
+    env["features"]["local"] = [
+        road_feature(1, geom={"type": "LineString", "coordinates": [[-92.30, 34.70], [-92.299, 34.70]]}),
+        road_feature(2, geom={"type": "LineString", "coordinates": [[-92.299, 34.70], [-92.298, 34.70]]}),
+    ]
+    out = run(**BOX)
+    assert [f["id"] for f in out["features"]] == ["local-1"]
+    assert out["features"][0]["geometry"]["type"] == "MultiLineString"
+
+
+def test_merge_is_reused_for_the_same_cells_and_redone_after_a_refresh(env, monkeypatch):
+    calls = []
+    real = service.merge_road_segments
+    monkeypatch.setattr(service, "merge_road_segments", lambda f: calls.append(1) or real(f))
+    first = run(**BOX)
+    second = run(**BOX)
+    assert len(calls) == 1 and second["features"] is first["features"]          # panning in the same cells
+    service._mem.clear()                                                        # cells reloaded (new lists)
+    run(**BOX)
+    assert len(calls) == 2
