@@ -286,19 +286,44 @@ async def get_tile(layer: str, z: int, x: int, y: int, still_wanted: Optional[St
 
 async def _fetch_block(layer: str, z: int, x0: int, y0: int, still_wanted: StillWanted) -> dict:
     """Fetch one block upstream, cut it into tiles, recolor and cache each: {(x, y): png bytes}.
-    A failure is logged here, once per block, however many requests were waiting on it."""
+    A failure is logged here, once per block, however many requests were waiting on it.
+
+    3DEP sometimes answers 200 with an image that is blank in part of the block (seen as a tile-aligned hole in the
+    contours at one zoom). Since tiles are cached for good, a block that is partly blank (some tiles empty, others
+    not) is fetched once more and each tile keeps whichever version has content. A wholly blank block is accepted:
+    flat land really has no 10 ft contours, and it shouldn't pay for a second slow request."""
     try:
         raw = await _fetch(layer, z, x0, y0, still_wanted)
-        try:
-            return await asyncio.to_thread(_split_and_store, layer, z, x0, y0, raw)
-        except Exception as e:  # Pillow couldn't read what came back
-            raise UpstreamError(f"bad image: {e}") from e
+        tiles = await _split_checked(layer, z, x0, y0, raw)
     except UpstreamError as e:
         log.warning("tiles %s/%s/%s-%s/%s-%s failed: %s", layer, z, x0, x0 + META - 1, y0, y0 + META - 1, e)
         raise
+    blank = {k for k, data in tiles.items() if _is_blank(layer, data)}
+    if blank and len(blank) < len(tiles):
+        log.info("tiles %s/%s/%s/%s: %d of %d tiles came back blank, fetching the block again",
+                 layer, z, x0, y0, len(blank), len(tiles))
+        await asyncio.sleep(RETRY_DELAY_S)
+        try:
+            again = await _split_checked(layer, z, x0, y0, await _fetch(layer, z, x0, y0))
+        except UpstreamError as e:      # keep the first answer: no worse than not checking
+            log.warning("tiles %s/%s/%s/%s: refetch of blank tiles failed: %s", layer, z, x0, y0, e)
+        else:
+            for k in blank:
+                if not _is_blank(layer, again[k]):
+                    tiles[k] = again[k]
+    await asyncio.to_thread(_store, layer, z, tiles)
+    return tiles
 
 
-def _split_and_store(layer: str, z: int, x0: int, y0: int, raw: bytes) -> dict:
+async def _split_checked(layer: str, z: int, x0: int, y0: int, raw: bytes) -> dict:
+    try:
+        return await asyncio.to_thread(_split, layer, x0, y0, raw)
+    except Exception as e:  # Pillow couldn't read what came back
+        raise UpstreamError(f"bad image: {e}") from e
+
+
+def _split(layer: str, x0: int, y0: int, raw: bytes) -> dict:
+    """Cut a block image into recolored tiles: {(x, y): png bytes}."""
     im = Image.open(io.BytesIO(raw))
     im.load()
     side = META * TILE_PX
@@ -308,10 +333,81 @@ def _split_and_store(layer: str, z: int, x0: int, y0: int, raw: bytes) -> dict:
     for dy in range(META):
         for dx in range(META):
             crop = im.crop((dx * TILE_PX, dy * TILE_PX, (dx + 1) * TILE_PX, (dy + 1) * TILE_PX))
-            data = _RECOLOR[layer](crop)
-            _write_cached(_cache_path(layer, z, x0 + dx, y0 + dy), data)
-            out[(x0 + dx, y0 + dy)] = data
+            out[(x0 + dx, y0 + dy)] = _RECOLOR[layer](crop)
     return out
+
+
+def _store(layer: str, z: int, tiles: dict) -> None:
+    for (x, y), data in tiles.items():
+        _write_cached(_cache_path(layer, z, x, y), data)
+
+
+# Layers where an empty tile can mean a failed render. Woods & water is empty over every field and town.
+BLANK_CHECKED = ("contours", "hillshade")
+BLANK_MAX_BYTES = 2048   # a fully transparent 256 px tile PNG is a few hundred bytes; anything with content is more
+
+
+def _is_blank(layer: str, data: bytes) -> bool:
+    """A contour tile with no lines / a hillshade tile with no data (fully transparent)."""
+    if layer not in BLANK_CHECKED or len(data) > BLANK_MAX_BYTES:
+        return False
+    try:
+        im = Image.open(io.BytesIO(data))
+        alpha = im.getchannel("A") if "A" in im.getbands() else None
+    except Exception:
+        return False
+    return alpha is not None and alpha.getextrema()[1] == 0
+
+
+BLANK_SWEEP_MARKER = ".blank-check-v1"
+
+
+def recheck_blank_tiles() -> int:
+    """One-time repair of tiles cached blank before blocks were checked: delete each blank contour/hillshade tile
+    whose 4x4 block has a cached tile with content, so it's fetched (and checked) again when next viewed.
+    Wholly blank blocks are left alone (flat land). Returns how many were deleted; 0 once the marker is written."""
+    marker = os.path.join(TILE_CACHE_DIR, BLANK_SWEEP_MARKER)
+    if os.path.exists(marker) or not os.path.isdir(TILE_CACHE_DIR):
+        return 0
+    removed = 0
+    for layer in BLANK_CHECKED:
+        layer_dir = os.path.join(TILE_CACHE_DIR, layer)
+        if not os.path.isdir(layer_dir):
+            continue
+        for z in os.listdir(layer_dir):
+            z_dir = os.path.join(layer_dir, z)
+            blocks: dict[tuple, dict] = {}     # (x0, y0) -> {path: blank?}
+            for x in os.listdir(z_dir) if os.path.isdir(z_dir) else []:
+                x_dir = os.path.join(z_dir, x)
+                if not (x.isdigit() and os.path.isdir(x_dir)):
+                    continue
+                for name in os.listdir(x_dir):
+                    y = name[:-4]
+                    if not (name.endswith(".png") and y.isdigit()):
+                        continue
+                    path = os.path.join(x_dir, name)
+                    try:
+                        small = os.path.getsize(path) <= BLANK_MAX_BYTES
+                        blank = small and _is_blank(layer, open(path, "rb").read())
+                    except OSError:
+                        continue
+                    blocks.setdefault(block_of(int(x), int(y)), {})[path] = blank
+            for tiles in blocks.values():
+                if all(tiles.values()) or not any(tiles.values()):
+                    continue
+                for path, blank in tiles.items():
+                    if blank:
+                        try:
+                            os.remove(path)
+                            removed += 1
+                        except OSError:
+                            pass
+    try:
+        with open(marker, "w") as f:
+            f.write(f"{time.time():.0f}\n")
+    except OSError:
+        log.warning("could not write %s", marker, exc_info=True)
+    return removed
 
 
 def prune_cache(max_age_s: float = PRUNE_AFTER_S) -> int:

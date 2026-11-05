@@ -95,12 +95,18 @@ def prune_roads_job(progress):
 
 
 def prune_tiles_job(progress):
-    """Scheduler job (daily): delete cached terrain overlay tiles nobody has viewed in ~6 months."""
-    from app.tiles.service import prune_cache
+    """Scheduler job (daily): delete cached terrain overlay tiles nobody has viewed in ~6 months (and, once,
+    tiles cached blank by a bad upstream render, so they're fetched again)."""
+    from app.tiles.service import prune_cache, recheck_blank_tiles
     n = prune_cache()
     if n:
         log.info("scheduler: pruned %d stale overlay tile(s)", n)
-    return f"pruned {n} tile{'' if n == 1 else 's'}"
+    msg = f"pruned {n} tile{'' if n == 1 else 's'}"
+    b = recheck_blank_tiles()
+    if b:
+        log.info("scheduler: removed %d overlay tile(s) cached blank", b)
+        msg += f"; removed {b} blank tile{'' if b == 1 else 's'} to refetch"
+    return msg
 
 
 def auto_cleanup_job(progress):

@@ -273,3 +273,87 @@ def test_prune_cache_removes_only_old_tiles(cache_dir):
     os.utime(old, (stale, stale))
     assert service.prune_cache() == 1
     assert not old.exists() and new.exists()
+
+
+# ---------- blocks that come back partly blank ----------
+
+def _block(dark_cols: int) -> bytes:
+    """A contour block image with ink in its first `dark_cols` tile columns (0 = all blank)."""
+    im = Image.new("L", (BLOCK_PX, BLOCK_PX), 253)
+    if dark_cols:
+        im.paste(0, (0, 0, dark_cols * service.TILE_PX, BLOCK_PX))
+    return _png(im)
+
+
+def _scripted_fetch(monkeypatch, answers, calls):
+    async def fake_fetch(layer, z, x, y, still_wanted=None):
+        calls.append(layer)
+        a = answers[min(len(calls), len(answers)) - 1]
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    monkeypatch.setattr(service, "RETRY_DELAY_S", 0)
+
+
+def _ink(data: bytes) -> bool:
+    return _open(data).getchannel("A").getextrema()[1] > 0
+
+
+def test_partly_blank_block_is_fetched_again_and_filled(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_block(2), _block(4)], calls)
+    right = asyncio.run(service.get_tile("contours", 16, 16631, 25404))   # blank in the first answer
+    assert len(calls) == 2 and _ink(right)
+    assert _ink((cache_dir / "contours" / "16" / "16631" / "25404.png").read_bytes())
+
+
+def test_wholly_blank_block_is_fetched_once(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_block(0)], calls)
+    data = asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 1 and not _ink(data)
+    assert len(list(cache_dir.rglob("*.png"))) == service.META ** 2
+
+
+def test_fully_drawn_block_is_fetched_once(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_block(4)], calls)
+    asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 1
+
+
+def test_failed_refetch_keeps_the_first_answer(cache_dir, monkeypatch):
+    calls = []
+    _scripted_fetch(monkeypatch, [_block(2), service.UpstreamError("HTTP 504")], calls)
+    left = asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 2 and _ink(left)
+    assert len(list(cache_dir.rglob("*.png"))) == service.META ** 2
+
+
+def test_landcover_blocks_are_never_refetched(cache_dir, monkeypatch):
+    calls = []
+    half = Image.new("RGB", (BLOCK_PX, BLOCK_PX), (255, 255, 255))
+    half.paste((104, 170, 99), (0, 0, BLOCK_PX // 2, BLOCK_PX))
+    _scripted_fetch(monkeypatch, [_png(half)], calls)
+    asyncio.run(service.get_tile("landcover", 12, 1000, 1500))
+    assert len(calls) == 1
+
+
+def _cache_tile(cache_dir, z, x, y, ink: bool):
+    p = cache_dir / "contours" / str(z) / str(x) / f"{y}.png"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    im = Image.new("L", (service.TILE_PX, service.TILE_PX), 0 if ink else 253)
+    p.write_bytes(service.recolor_contours(im))
+    return p
+
+
+def test_sweep_removes_blank_tiles_beside_drawn_ones_once(cache_dir):
+    drawn = _cache_tile(cache_dir, 16, 16628, 25404, ink=True)
+    hole = _cache_tile(cache_dir, 16, 16629, 25404, ink=False)
+    flat = [_cache_tile(cache_dir, 16, 16632 + i, 25404, ink=False) for i in range(2)]   # wholly blank block
+    assert service.recheck_blank_tiles() == 1
+    assert drawn.exists() and not hole.exists() and all(p.exists() for p in flat)
+    # runs once: later blanks (now checked at fetch time) are left alone
+    hole = _cache_tile(cache_dir, 16, 16629, 25404, ink=False)
+    assert service.recheck_blank_tiles() == 0 and hole.exists()
