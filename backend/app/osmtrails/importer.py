@@ -296,8 +296,7 @@ async def import_extract(extract_id: str, pbf_url: str) -> int:
         await _download(pbf_url, pbf)
         size_mb = os.path.getsize(pbf) / 1e6
         kept = await _import_in_subprocess(extract_id, pbf)
-        log.info("osm trails: %s imported, %d ways in %d cells (%.0f MB, %.0f s)",
-                 extract_id, kept, len(cells), size_mb, time.time() - t0)
+        log.info("osm trails: %s imported, %d ways (%.0f MB, %.0f s)", extract_id, kept, size_mb, time.time() - t0)
         from app.osmtrails import service
         service.invalidate()
         return kept

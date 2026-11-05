@@ -133,6 +133,31 @@ def test_job_imports_needed_states_and_skips_fresh_ones(db, monkeypatch):
     assert asyncio.run(importer.osm_trails_job(Progress())) == "up to date" and calls == ["us/illinois"]
 
 
+def test_import_extract_downloads_imports_and_cleans_up(db, monkeypatch, tmp_path):
+    """The real import_extract, with only the download and the subprocess stubbed: it must report the subprocess's
+    count, refresh the served data and delete the downloaded file (a NameError here once failed every import)."""
+    monkeypatch.setattr(importer, "WORK_DIR", str(tmp_path))
+    with Session(engine) as s:
+        s.add(OsmExtract(extract_id="us/arkansas", pbf_url="u", polygon_json=json.dumps(STATE), status="queued"))
+        s.commit()
+
+    async def fake_download(url, dest):
+        with open(dest, "wb") as fh:
+            fh.write(b"x" * 1000)
+
+    async def fake_subprocess(eid, pbf):
+        importer.store_cells(eid, {(1, 1): ["{}"]}, 42)
+        return 42
+    invalidated = []
+    monkeypatch.setattr(importer, "_download", fake_download)
+    monkeypatch.setattr(importer, "_import_in_subprocess", fake_subprocess)
+    monkeypatch.setattr(service, "invalidate", lambda: invalidated.append(1))
+    assert asyncio.run(importer.import_extract("us/arkansas", "u")) == 42
+    assert invalidated and not list(tmp_path.iterdir())
+    with Session(engine) as s:
+        assert s.get(OsmExtract, "us/arkansas").status == "ok"
+
+
 def test_a_failed_reimport_keeps_the_previous_cells(db, monkeypatch):
     _add_region()
 
