@@ -49,53 +49,122 @@ function estimateTileCount(map, layer, latLngBounds, zoomLevels) {
   return computeTiles(map, layer, latLngBounds, zoomLevels).length;
 }
 
+// Tiles that failed in the main pass get these extra rounds, after a pause, at low concurrency. The terrain
+// layers' upstream (USGS 3DEP) answers 502/504 in bursts when busy, and a block that failed a minute ago
+// usually comes back fine once the burst passes.
+const RETRY_ROUND_DELAYS_MS = [5000, 20000];
+const RETRY_CONCURRENCY = 2;
+
+function cancellableWait(ms, isCancelled) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = setInterval(() => {
+      if (isCancelled?.() || Date.now() - started >= ms) { clearInterval(tick); resolve(); }
+    }, 250);
+  });
+}
+
 /** Download every tile for `bounds` across `zoomLevels` into IndexedDB, with
  * limited concurrency. Already-cached tiles are skipped (cheap `hasTile`
- * check) so re-running a download only backfills gaps. Best-effort: a tile
- * that fails to fetch is skipped rather than aborting the whole run — the
- * user can re-run later to fill any holes (e.g. from a mid-download signal drop).
+ * check) so re-running a download only backfills gaps. A tile that fails to
+ * fetch doesn't abort the run: failed tiles get RETRY_ROUND_DELAYS_MS more rounds
+ * at the end, and any still missing after that are counted in `missing` (a
+ * re-run of the same area later fills them).
+ * `onProgress(done, total, retrying)` — `retrying` is the number of tiles in the
+ * current retry round (0 during the main pass).
  * `onTileSaved(key)` is called for each tile this run newly stores (not ones already
  * there, which may belong to other saved areas), so a cancelled or failed run can be
  * undone with removeTiles even if this throws part-way. */
 async function downloadArea({ map, layer, bounds, zoomLevels, concurrency = 6, onProgress, isCancelled, onTileSaved }) {
-  const { hasTile, downloadTile, saveTile } = offline();
   const tiles = computeTiles(map, layer, bounds, zoomLevels);
-  const total = tiles.length;
-  let done = 0, bytes = 0, measured = 0, idx = 0;
-  onProgress?.(0, total);
+  const result = await fetchTiles({ tiles, concurrency, onProgress, isCancelled, onTileSaved });
+  return { ...result, tileKeys: tiles.map((t) => t.key) };
+}
 
-  async function worker() {
-    while (idx < tiles.length) {
-      if (isCancelled?.()) return;
-      const tile = tiles[idx++];
-      try {
-        if (!(await hasTile(tile.key))) {
-          const blob = await downloadTile(tile.url);
-          // a failed tile (e.g. the terrain server's 503) isn't an image: leave the gap for a re-run to fill
-          if (!blob.type.startsWith("image/")) throw new Error(`not a tile: ${blob.type}`);
-          await saveTile(tile, blob);
-          onTileSaved?.(tile.key);
-          bytes += blob.size;
-          measured += 1;
-        }
-      } catch {
-        // network blip / tile server error — skip and move on
+/** Fetches `tiles` (leaflet.offline tile infos) into storage, retrying failures as downloadArea describes.
+ * Returns { downloaded, total, missing, missingTiles, estimatedBytes }; `missingTiles` are the tile infos
+ * still not stored, kept on the saved area so repairArea can fetch just those later. */
+async function fetchTiles({ tiles, concurrency, onProgress, isCancelled, onTileSaved }) {
+  const { hasTile, downloadTile, saveTile } = offline();
+  const total = tiles.length;
+  let done = 0, bytes = 0, measured = 0;
+  onProgress?.(0, total, 0);
+
+  // Fetches and stores one tile; false if it couldn't (network blip, tile server error).
+  async function fetchOne(tile) {
+    try {
+      if (!(await hasTile(tile.key))) {
+        const blob = await downloadTile(tile.url);
+        // a failed tile (e.g. the terrain server's 503) isn't an image
+        if (!blob.type.startsWith("image/")) throw new Error(`not a tile: ${blob.type}`);
+        await saveTile(tile, blob);
+        onTileSaved?.(tile.key);
+        bytes += blob.size;
+        measured += 1;
       }
-      done += 1;
-      onProgress?.(done, total);
+      return true;
+    } catch {
+      return false;
     }
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, total) || 1 }, worker);
-  await Promise.all(workers);
+  // Runs `list` through `workers` parallel workers; returns the tiles that failed.
+  async function runPass(list, workers, onEach) {
+    const failed = [];
+    let idx = 0;
+    async function worker() {
+      while (idx < list.length) {
+        if (isCancelled?.()) return;
+        const tile = list[idx++];
+        if (!(await fetchOne(tile))) failed.push(tile);
+        onEach?.();
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(workers, list.length) || 1 }, worker));
+    return failed;
+  }
+
+  let failed = await runPass(tiles, concurrency, () => { done += 1; onProgress?.(done, total, 0); });
+  for (const wait of RETRY_ROUND_DELAYS_MS) {
+    if (!failed.length || isCancelled?.()) break;
+    onProgress?.(done, total, failed.length);
+    await cancellableWait(wait, isCancelled);
+    if (isCancelled?.()) break;
+    failed = await runPass(failed, RETRY_CONCURRENCY);
+  }
 
   const avgBytes = measured ? bytes / measured : AVG_TILE_BYTES_FALLBACK;
   return {
     downloaded: done,
     total,
-    tileKeys: tiles.map((t) => t.key),
+    missing: failed.length,
+    missingTiles: failed.map(({ key, url, urlTemplate, z, x, y }) => ({ key, url, urlTemplate, z, x, y })),
     estimatedBytes: Math.round(avgBytes * total),
   };
+}
+
+/** Retries a saved area's missing tiles and updates its record (missing count and list). Returns the updated
+ * record, or null if the area is gone or has nothing to repair. Areas saved before missing tiles were
+ * recorded have no `missingTiles`, so there is nothing to repair for them. */
+async function repairArea(id, { onProgress, isCancelled } = {}) {
+  const area = listSavedAreas().find((a) => a.id === id);
+  if (!area?.missingTiles?.length) return null;
+  const tiles = area.missingTiles.map((t) => ({ ...t, createdAt: Date.now() }));
+  await fetchTiles({ tiles, concurrency: RETRY_CONCURRENCY, onProgress, isCancelled });
+  // A cancelled repair keeps what it stored (those tiles belong to this area); the rest stay listed as missing.
+  // (`bytes` is already an estimate for the whole area, missing tiles included, so it doesn't change.)
+  const remaining = await missingAfterRepair(area.missingTiles);
+  const updated = { ...area, missing: remaining.length, missingTiles: remaining, repairedAt: new Date().toISOString() };
+  const areas = listSavedAreas().map((a) => (a.id === id ? updated : a));
+  try { localStorage.setItem(AREAS_KEY, JSON.stringify(areas)); } catch {}
+  return updated;
+}
+
+// The tiles of `tiles` still not in storage (works the same whether the repair finished or was cancelled).
+async function missingAfterRepair(tiles) {
+  const { hasTile } = offline();
+  const have = await Promise.all(tiles.map((t) => hasTile(t.key).catch(() => false)));
+  return tiles.filter((_, i) => !have[i]);
 }
 
 /** Storage totals for one layer's urlTemplate (across all saved areas for it). */
@@ -172,6 +241,7 @@ export {
   formatBytes,
   estimateTileCount,
   downloadArea,
+  repairArea,
   getLayerStats,
   listSavedAreas,
   saveAreaRecord,

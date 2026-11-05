@@ -33,7 +33,11 @@ TILE_CACHE_DIR = os.environ.get("TILE_CACHE_DIR", "/app/data/tiles")
 TILE_PX = 256
 META = 4                       # tiles per side of one upstream request (a META*TILE_PX image)
 REQUEST_TIMEOUT_S = 45.0       # 3DEP takes 5-30 s for a dense 10 ft contour tile
-RETRY_DELAY_S = 1.5            # one more try after a gateway error/timeout (USGS 502/504s are intermittent)
+RETRY_DELAY_S = 1.5            # base wait before another try after a gateway error/timeout
+# USGS 502/504s come in bursts (a busy 3DEP answers several zoom-18 contour blocks in a row with a fast 502), so a
+# gateway error gets two more tries, backing off 1x then 3x RETRY_DELAY_S. A timeout gets only one more: each one
+# already cost REQUEST_TIMEOUT_S, and three would outlast the proxy's 120 s.
+RETRY_BACKOFF = (1, 3)
 RETRY_STATUS = {500, 502, 503, 504}
 PRUNE_AFTER_S = 180 * 86400
 TOUCH_AFTER_S = 86400
@@ -136,9 +140,12 @@ async def _fetch(layer: str, z: int, x0: int, y0: int, still_wanted: Optional[St
     if _client is None:
         _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
     url, params = _upstream_request(layer, z, x0, y0)
-    for attempt in (1, 2):
-        if attempt == 2:
-            await asyncio.sleep(RETRY_DELAY_S)   # outside the semaphore, so other tiles keep moving
+    timed_out = False
+    for attempt in range(1 + len(RETRY_BACKOFF)):
+        if attempt:
+            if timed_out and attempt >= 2:
+                break                            # a second slow attempt in a row: give up rather than hold the request
+            await asyncio.sleep(RETRY_DELAY_S * RETRY_BACKOFF[attempt - 1])   # outside the semaphore, so other tiles keep moving
         async with _sem:
             # Quick panning queues many tiles behind the semaphore; ones the map already dropped are skipped
             # here so the tiles on screen now don't wait behind them. A fetch that has started runs to the
@@ -147,10 +154,12 @@ async def _fetch(layer: str, z: int, x0: int, y0: int, still_wanted: Optional[St
                 raise TileAbandoned()
             try:
                 r = await _client.get(url, params=params)
-            except httpx.HTTPError as e:     # timeout / connection trouble: worth one more try
+            except httpx.HTTPError as e:     # timeout / connection trouble: worth another try
                 err = UpstreamError(f"{type(e).__name__}: {e}")
                 err.__cause__ = e
+                timed_out = isinstance(e, httpx.TimeoutException)
                 continue
+        timed_out = False
         if r.status_code in RETRY_STATUS:
             err = UpstreamError(f"HTTP {r.status_code}")
             continue

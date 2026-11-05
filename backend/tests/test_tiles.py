@@ -5,6 +5,7 @@ import math
 import os
 import time
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -163,12 +164,36 @@ def test_gateway_error_is_retried_once(cache_dir, monkeypatch):
     assert os.path.isfile(cache_dir / "contours" / "16" / "16628" / "25404.png")
 
 
-def test_two_gateway_errors_give_up(cache_dir, monkeypatch):
+def test_a_burst_of_gateway_errors_is_ridden_out(cache_dir, monkeypatch):
     calls = []
     _fake_upstream(monkeypatch, calls, statuses=[502, 504])
+    data = asyncio.run(service.get_tile("contours", 18, 66472, 101562))
+    assert data and len(calls) == 3
+    assert os.path.isfile(cache_dir / "contours" / "18" / "66472" / "101562.png")
+
+
+def test_three_gateway_errors_give_up(cache_dir, monkeypatch):
+    calls = []
+    _fake_upstream(monkeypatch, calls, statuses=[502, 504, 502])
     with pytest.raises(service.UpstreamError):
         asyncio.run(service.get_tile("contours", 16, 16628, 25404))
-    assert len(calls) == 2 and not any(cache_dir.rglob("*.png"))
+    assert len(calls) == 3 and not any(cache_dir.rglob("*.png"))
+
+
+def test_timeouts_get_only_one_more_try(cache_dir, monkeypatch):
+    calls = []
+
+    class SlowClient:
+        async def get(self, url, params=None):
+            calls.append(params)
+            raise httpx.ReadTimeout("slow")
+
+    monkeypatch.setattr(service, "_client", SlowClient())
+    monkeypatch.setattr(service, "_sem", None)
+    monkeypatch.setattr(service, "RETRY_DELAY_S", 0)
+    with pytest.raises(service.UpstreamError):
+        asyncio.run(service.get_tile("contours", 16, 16628, 25404))
+    assert len(calls) == 2
 
 
 def test_client_error_is_not_retried(cache_dir, monkeypatch):

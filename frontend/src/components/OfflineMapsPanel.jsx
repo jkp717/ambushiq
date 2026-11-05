@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Trash2, X, HardDrive } from "lucide-react";
+import { Download, Trash2, X, HardDrive, RefreshCw } from "lucide-react";
 import Modal from "./ui/Modal.jsx";
 import Field from "./ui/Field.jsx";
 import Banner from "./ui/Banner.jsx";
 import {
-  formatBytes, estimateTileCount, downloadArea, getLayerStats,
+  formatBytes, estimateTileCount, downloadArea, repairArea, getLayerStats,
   listSavedAreas, saveAreaRecord, deleteSavedArea, removeTiles, forgetAreas, clearAllOffline,
   AVG_TILE_BYTES_FALLBACK,
 } from "../utils/offlineTiles.js";
@@ -91,24 +91,23 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
     if (!targets.length) { setErr("Pick at least one map layer."); return; }
 
     const newKeys = [];
-    const savedIds = [];
+    const records = [];      // listed only once every layer has finished, so an undone run leaves no record behind
     let failed = null;
     for (let i = 0; i < targets.length; i++) {
       if (cancelledRef.current) break;
       const target = targets[i];
-      setProgress({ layerLabel: target.label, done: 0, total: 0, layerIdx: i + 1, layerCount: targets.length });
+      const step = { layerLabel: target.label, layerIdx: i + 1, layerCount: targets.length };
+      setProgress({ ...step, done: 0, total: 0, retrying: 0 });
       try {
         const result = await downloadArea({
           map, layer: target.layer, bounds, zoomLevels,
-          onProgress: (done, total) => setProgress({ layerLabel: target.label, done, total, layerIdx: i + 1, layerCount: targets.length }),
+          onProgress: (done, total, retrying) => setProgress({ ...step, done, total, retrying }),
           isCancelled: () => cancelledRef.current,
           onTileSaved: (key) => newKeys.push(key),
         });
         if (cancelledRef.current) break;
-        const id = `${Date.now()}-${target.id}`;
-        savedIds.push(id);
-        saveAreaRecord({
-          id,
+        records.push({
+          id: `${Date.now()}-${target.id}`,
           label: label.trim() || `${target.label} area`,
           layerId: target.id,
           layerLabel: target.label,
@@ -116,6 +115,8 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
           minZoom, maxZoom,
           tileKeys: result.tileKeys,
           tileCount: result.total,
+          missing: result.missing,
+          missingTiles: result.missingTiles,   // what "Repair" fetches later
           bytes: result.estimatedBytes,
           downloadedAt: new Date().toISOString(),
         });
@@ -128,14 +129,50 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
       setProgress({ removing: true });
       let left = 0;
       try { left = await removeTiles(newKeys); } catch { left = newKeys.length; }
-      forgetAreas(savedIds);
       const leftNote = left ? ` (${left.toLocaleString()} tiles couldn't be removed — use “Clear all offline maps”)` : "";
       if (failed) setErr(`Couldn't download ${failed} tiles — check your connection and try again. Nothing was saved${leftNote}.`);
       else setNote(`Download cancelled — nothing was saved${leftNote}.`);
+    } else {
+      // Downloading the same view again (e.g. to fill tiles the server couldn't send) replaces that area's
+      // entry instead of listing it twice: an area whose tiles the new download fully covers is superseded.
+      const covers = records.map((r) => ({ r, keys: new Set(r.tileKeys) }));
+      const superseded = (a) => covers.some(({ r, keys }) => a.layerId === r.layerId && a.regionId === r.regionId
+        && (a.tileKeys || []).every((k) => keys.has(k)));
+      forgetAreas(listSavedAreas().filter(superseded).map((a) => a.id));
+      records.forEach(saveAreaRecord);
+      const gaps = records.filter((r) => r.missing);
+      if (gaps.length) {
+        setErr(`${gaps.map((r) => `${r.missing.toLocaleString()} ${r.layerLabel}`).join(", ")} tiles couldn't be downloaded `
+          + "(the map server was busy). The rest was saved — use Repair on the saved area later to fill the gaps.");
+      }
     }
     setProgress(null);
     setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
     setLabel("");
+  }
+
+  // Fetches just the tiles a saved area is missing. Cancelling keeps what was fetched (it belongs to the area).
+  async function repair(area) {
+    setErr(null);
+    setNote(null);
+    cancelledRef.current = false;
+    const step = { repairing: true, layerLabel: area.label, layerIdx: 1, layerCount: 1 };
+    setProgress({ ...step, done: 0, total: area.missing, retrying: 0 });
+    try {
+      const updated = await repairArea(area.id, {
+        onProgress: (done, total, retrying) => setProgress({ ...step, done, total, retrying }),
+        isCancelled: () => cancelledRef.current,
+      });
+      const fixed = area.missing - (updated?.missing ?? area.missing);
+      if (!updated) setNote("Nothing to repair for this area.");
+      else if (!updated.missing) setNote(`Repaired “${area.label}” — all ${fixed.toLocaleString()} missing tiles are saved now.`);
+      else setErr(`Repaired ${fixed.toLocaleString()} tiles of “${area.label}”; ${updated.missing.toLocaleString()} still `
+        + `couldn't be downloaded${cancelledRef.current ? " (repair cancelled)" : " — the map server may still be busy, try again later"}.`);
+    } catch {
+      setErr("Couldn't repair this area — check your connection and try again.");
+    }
+    setProgress(null);
+    setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
   }
 
   async function removeArea(id) {
@@ -236,8 +273,15 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
         {progress && !progress.removing && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 13, marginBottom: 6 }}>
-              Downloading {progress.layerLabel} ({progress.layerIdx}/{progress.layerCount}) — {progress.done}/{progress.total || "…"} tiles
+              {progress.repairing
+                ? <>Repairing {progress.layerLabel} — {progress.done}/{progress.total || "…"} missing tiles</>
+                : <>Downloading {progress.layerLabel} ({progress.layerIdx}/{progress.layerCount}) — {progress.done}/{progress.total || "…"} tiles</>}
             </div>
+            {progress.retrying > 0 && (
+              <div style={{ fontSize: 12, color: "var(--sub)", marginBottom: 6 }}>
+                Trying {progress.retrying.toLocaleString()} tiles again that the map server didn't send…
+              </div>
+            )}
             <div style={{ height: 8, borderRadius: 4, background: "var(--surf)", overflow: "hidden" }}>
               <div style={{
                 height: "100%", background: "var(--navy)", borderRadius: 4,
@@ -266,7 +310,18 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
                   <div style={{ color: "var(--sub)", fontSize: 11 }}>
                     {a.tileCount.toLocaleString()} tiles · {formatBytes(a.bytes)} · zoom {a.minZoom}–{a.maxZoom} · {new Date(a.downloadedAt).toLocaleDateString()}
                   </div>
+                  {a.missing > 0 && (
+                    <div style={{ color: "var(--red)", fontSize: 11 }}>
+                      {a.missing.toLocaleString()} tiles missing
+                    </div>
+                  )}
                 </div>
+                {a.missingTiles?.length > 0 && (
+                  <button className="btn" style={{ padding: "3px 8px", fontSize: 12 }}
+                    title="Download just the tiles this area is missing" onClick={() => repair(a)}>
+                    <RefreshCw size={13} /> Repair
+                  </button>
+                )}
                 <button className="icon-btn" title="Delete this area" onClick={() => removeArea(a.id)}><Trash2 size={14} /></button>
               </div>
             ))}
