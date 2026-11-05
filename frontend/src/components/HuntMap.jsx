@@ -135,9 +135,13 @@ function trailPopup(p) {
   </div>`;
 }
 
-// The small label that follows the pointer while hovering a road or trail: a road-sign icon for its type + its name.
-function lineHoverTip(kind, color, name) {
-  return `<span class="line-hover-tip-row">${roadSignSvg(kind, color)}<span>${escHtml(name)}</span></span>`;
+// The small label that follows the pointer while hovering a road or trail: a road-sign icon for its type + its name,
+// and optionally a second name on its own line (a Forest Service road's street name, see addSelectableLines).
+function lineHoverTip(kind, color, name, second) {
+  const text = second
+    ? `<span class="line-hover-tip-text"><span>${escHtml(name)}</span><span class="line-hover-tip-line2">${escHtml(second)}</span></span>`
+    : `<span>${escHtml(name)}</span>`;
+  return `<span class="line-hover-tip-row">${roadSignSvg(kind, color)}${text}</span>`;
 }
 const trailTip = (p) => lineHoverTip(p.kind, TRAIL_COLORS[p.kind] || TRAIL_COLORS.trail, p.name);
 
@@ -190,22 +194,25 @@ function roadStyle(p, interactive) {
 }
 
 // `nameSource: "esri"` is set by the map once a road USGS doesn't name gets its street name from Esri (see
-// roadNameLookup); `route` is the Forest Service road number, which names the road until then ("FS Rd 423I").
+// roadNameLookup). `route` is the Forest Service road number: such a road keeps "FS Rd 423I" as its name and gets the
+// street name as `streetName`, shown on a line of its own ("Looking up name…" until the answer is in).
 function roadPopup(p) {
   const routeRow = p.route && p.name !== `FS Rd ${p.route}`
     ? `<div class="land-row"><b>Forest Service route:</b> ${escHtml(p.route)}</div>` : "";
-  const note = p.nameSource === "esri"
-    ? "Road line from USGS National Map; name from Esri address data."
+  const fromEsri = p.nameSource === "esri";
+  const note = fromEsri && p.streetName
+    ? "Road line and FS number from USGS National Map; street name from Esri address data."
+    : fromEsri ? "Road line from USGS National Map; name from Esri address data."
     : "USGS National Map road data.";
   return `<div class="feat-popup">
-    <div class="feat-popup-title">${escHtml(p.name)}</div>
+    <div class="feat-popup-title">${escHtml(p.name)}${p.streetName ? `<br>${escHtml(p.streetName)}` : ""}</div>
     <div class="feat-popup-sub">${escHtml(ROAD_KIND_LABEL[p.kind] || "Road")}</div>
     ${routeRow}
     <div class="land-note">${note}</div>
   </div>`;
 }
 
-const roadTip = (p) => lineHoverTip(p.kind || "local", (ROAD_STYLES[p.kind] || ROAD_STYLES.local).color, p.name);
+const roadTip = (p) => lineHoverTip(p.kind || "local", (ROAD_STYLES[p.kind] || ROAD_STYLES.local).color, p.name, p.streetName);
 
 // The point on a (Multi)LineString nearest `latlng` (flat-earth projection; fine over a road's length), so the
 // street-name lookup asks about a point on the road itself rather than wherever the pointer sits in the wide hit area.
@@ -242,6 +249,12 @@ const roadNameLookup = (f, latlng) => {
 // for NAME_LOOKUP_DELAY_MS, or right away when clicked, and the label and popup switch to it when it arrives. Answers
 // (a name or null) are kept for the session in `lookedUpNames`, by feature id, so each road is asked at most once.
 const NAME_LOOKUP_DELAY_MS = 250;
+const LOOKING_UP = "Looking up name…";
+// A street name that only restates the Forest Service number ("Forest Service Road 463") adds nothing to "FS Rd 463".
+const restatesRoute = (name, route) => {
+  const n = name.toLowerCase();
+  return n.includes(String(route).toLowerCase()) && /\b(forest|fs|fsr|nf)\b/.test(n);
+};
 const lookedUpNames = new Map();   // feature id -> Promise<string | null>
 const COARSE_POINTER = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 const LINE_HIT_WEIGHT = COARSE_POINTER ? 22 : 14;
@@ -269,13 +282,17 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, lo
       };
       // A road known only by a placeholder ("Unnamed local road") that still gets a street-name lookup says
       // "Looking up name…" until the answer is in, instead of showing the placeholder and then flipping to the real
-      // name. A road with a Forest Service number keeps showing that ("FS Rd 423I") meanwhile: it's real information.
+      // name. A road with a Forest Service number keeps that ("FS Rd 423I") as its name, which never changes, and the
+      // street name goes on a second line (`streetName`): "Looking up name…" there until the answer is in, then the
+      // name, or no second line if none is known. Both names are right, so neither replaces the other.
       // A road already asked about this session gets its saved answer straight away (lookedUpNames, below).
-      const lookingUp = !!lookupName && f.properties.named === false && !f.properties.route;
-      const pendingProps = lookingUp ? { ...f.properties, name: "Looking up name…" } : f.properties;
-      hit.bindPopup(popupFn(lookingUp ? pendingProps : f.properties), { minWidth: 200 });
+      const lookingUp = !!lookupName && f.properties.named === false;
+      const hasRoute = !!f.properties.route;
+      const pendingProps = !lookingUp ? f.properties
+        : hasRoute ? { ...f.properties, streetName: LOOKING_UP } : { ...f.properties, name: LOOKING_UP };
+      hit.bindPopup(popupFn(pendingProps), { minWidth: 200 });
       if (tipFn && !COARSE_POINTER) {
-        hit.bindTooltip(tipFn(lookingUp ? pendingProps : f.properties), {
+        hit.bindTooltip(tipFn(pendingProps), {
           sticky: true, direction: "top", offset: [0, -12], className: "line-hover-tip", opacity: 1,
         });
         hit.on("tooltipopen", () => { if (popupOpen) hit.closeTooltip(); });   // the detailed popup replaces it
@@ -288,7 +305,14 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, lo
           if (hit.getTooltip()) hit.setTooltipContent(tipFn(p));
         };
         // the answer: the street name, or (none known) the source's own name/placeholder
-        const apply = (name) => show(name ? { ...f.properties, name, nameSource: "esri" } : f.properties);
+        const apply = (name) => {
+          if (hasRoute) {
+            show(name && !restatesRoute(name, f.properties.route)
+              ? { ...f.properties, streetName: name, nameSource: "esri" } : f.properties);
+          } else {
+            show(name ? { ...f.properties, name, nameSource: "esri" } : f.properties);
+          }
+        };
         const known = lookedUpNames.get(f.id);
         if (known) known.then(apply, () => show(f.properties));
         ask = (latlng) => {
