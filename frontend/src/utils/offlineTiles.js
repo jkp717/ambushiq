@@ -53,8 +53,11 @@ function estimateTileCount(map, layer, latLngBounds, zoomLevels) {
  * limited concurrency. Already-cached tiles are skipped (cheap `hasTile`
  * check) so re-running a download only backfills gaps. Best-effort: a tile
  * that fails to fetch is skipped rather than aborting the whole run — the
- * user can re-run later to fill any holes (e.g. from a mid-download signal drop). */
-async function downloadArea({ map, layer, bounds, zoomLevels, concurrency = 6, onProgress, isCancelled }) {
+ * user can re-run later to fill any holes (e.g. from a mid-download signal drop).
+ * `onTileSaved(key)` is called for each tile this run newly stores (not ones already
+ * there, which may belong to other saved areas), so a cancelled or failed run can be
+ * undone with removeTiles even if this throws part-way. */
+async function downloadArea({ map, layer, bounds, zoomLevels, concurrency = 6, onProgress, isCancelled, onTileSaved }) {
   const { hasTile, downloadTile, saveTile } = offline();
   const tiles = computeTiles(map, layer, bounds, zoomLevels);
   const total = tiles.length;
@@ -71,6 +74,7 @@ async function downloadArea({ map, layer, bounds, zoomLevels, concurrency = 6, o
           // a failed tile (e.g. the terrain server's 503) isn't an image: leave the gap for a re-run to fill
           if (!blob.type.startsWith("image/")) throw new Error(`not a tile: ${blob.type}`);
           await saveTile(tile, blob);
+          onTileSaved?.(tile.key);
           bytes += blob.size;
           measured += 1;
         }
@@ -117,20 +121,38 @@ function saveAreaRecord(record) {
   return areas;
 }
 
+/** Removes these tiles from offline storage; returns how many couldn't be removed. */
+async function removeTiles(keys) {
+  const { removeTile } = offline();
+  const results = await Promise.allSettled((keys || []).map((k) => removeTile(k)));
+  return results.filter((r) => r.status === "rejected").length;
+}
+
+/** Forgets saved-area records by id (their tiles are handled by the caller). */
+function forgetAreas(ids) {
+  const drop = new Set(ids);
+  const remaining = listSavedAreas().filter((a) => !drop.has(a.id));
+  try { localStorage.setItem(AREAS_KEY, JSON.stringify(remaining)); } catch {}
+  return remaining;
+}
+
 /** Deletes a saved area's tiles. Note: if this area's footprint overlaps
  * another saved area (same layer/zoom/location), those shared tiles are
  * removed too — re-downloading the other area will transparently backfill
- * them. Not worth reference-counting for how this is used in practice. */
+ * them. Not worth reference-counting for how this is used in practice.
+ * Returns how many tiles couldn't be removed. */
 async function deleteSavedArea(id) {
-  const areas = listSavedAreas();
-  const area = areas.find((a) => a.id === id);
-  if (area) {
-    const { removeTile } = offline();
-    await Promise.all((area.tileKeys || []).map((k) => removeTile(k).catch(() => {})));
-  }
-  const remaining = areas.filter((a) => a.id !== id);
-  try { localStorage.setItem(AREAS_KEY, JSON.stringify(remaining)); } catch {}
-  return remaining;
+  const area = listSavedAreas().find((a) => a.id === id);
+  const failed = area ? await removeTiles(area.tileKeys) : 0;
+  forgetAreas([id]);
+  return failed;
+}
+
+/** Empties offline storage entirely: every saved tile (listed in an area or not, e.g. left by a deleted region)
+ * and every saved-area record, for all regions. */
+async function clearAllOffline() {
+  await offline().truncate();
+  try { localStorage.setItem(AREAS_KEY, "[]"); } catch {}
 }
 
 /** Removes the saved-area *records* for a deleted region (called after a
@@ -153,7 +175,10 @@ export {
   getLayerStats,
   listSavedAreas,
   saveAreaRecord,
+  removeTiles,
+  forgetAreas,
   deleteSavedArea,
+  clearAllOffline,
   pruneSavedAreasForRegion,
   AVG_TILE_BYTES_FALLBACK,
 };

@@ -5,7 +5,8 @@ import Field from "./ui/Field.jsx";
 import Banner from "./ui/Banner.jsx";
 import {
   formatBytes, estimateTileCount, downloadArea, getLayerStats,
-  listSavedAreas, saveAreaRecord, deleteSavedArea, AVG_TILE_BYTES_FALLBACK,
+  listSavedAreas, saveAreaRecord, deleteSavedArea, removeTiles, forgetAreas, clearAllOffline,
+  AVG_TILE_BYTES_FALLBACK,
 } from "../utils/offlineTiles.js";
 
 const MIN_ZOOM_FLOOR = 5; // leaflet.offline's own sanity floor — prevents saving the whole USA
@@ -38,6 +39,8 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
   const [err, setErr] = useState(null);
   const [areas, setAreas] = useState(() => filterAreasForRegion(listSavedAreas(), activeRegion));
   const [stats, setStats] = useState(null);
+  const [note, setNote] = useState(null);          // a one-line outcome, e.g. after a cancelled download
+  const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
     if (!layerList.length) return;
@@ -77,12 +80,19 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
     });
   }
 
+  // A download either finishes and is listed, or is undone: a cancelled or failed run removes every tile it added
+  // (and the areas it already finished), so nothing is left in storage that the list doesn't show. Tiles that were
+  // already saved before this run started are never touched; they may belong to other saved areas.
   async function startDownload() {
     setErr(null);
+    setNote(null);
     cancelledRef.current = false;
     const targets = layerList.filter((l) => selected.has(l.id));
     if (!targets.length) { setErr("Pick at least one map layer."); return; }
 
+    const newKeys = [];
+    const savedIds = [];
+    let failed = null;
     for (let i = 0; i < targets.length; i++) {
       if (cancelledRef.current) break;
       const target = targets[i];
@@ -92,10 +102,13 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
           map, layer: target.layer, bounds, zoomLevels,
           onProgress: (done, total) => setProgress({ layerLabel: target.label, done, total, layerIdx: i + 1, layerCount: targets.length }),
           isCancelled: () => cancelledRef.current,
+          onTileSaved: (key) => newKeys.push(key),
         });
         if (cancelledRef.current) break;
+        const id = `${Date.now()}-${target.id}`;
+        savedIds.push(id);
         saveAreaRecord({
-          id: `${Date.now()}-${target.id}`,
+          id,
           label: label.trim() || `${target.label} area`,
           layerId: target.id,
           layerLabel: target.label,
@@ -107,9 +120,18 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
           downloadedAt: new Date().toISOString(),
         });
       } catch {
-        setErr(`Couldn't download ${target.label} tiles — check your connection and try again.`);
+        failed = target.label;
         break;
       }
+    }
+    if (cancelledRef.current || failed) {
+      setProgress({ removing: true });
+      let left = 0;
+      try { left = await removeTiles(newKeys); } catch { left = newKeys.length; }
+      forgetAreas(savedIds);
+      const leftNote = left ? ` (${left.toLocaleString()} tiles couldn't be removed — use “Clear all offline maps”)` : "";
+      if (failed) setErr(`Couldn't download ${failed} tiles — check your connection and try again. Nothing was saved${leftNote}.`);
+      else setNote(`Download cancelled — nothing was saved${leftNote}.`);
     }
     setProgress(null);
     setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
@@ -117,7 +139,23 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
   }
 
   async function removeArea(id) {
-    await deleteSavedArea(id);
+    setNote(null);
+    const left = await deleteSavedArea(id);
+    if (left) setNote(`${left.toLocaleString()} tiles couldn't be removed — use “Clear all offline maps”.`);
+    setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
+  }
+
+  // Empties offline storage for every region, including tiles no listed area accounts for (left by a deleted
+  // region, or by a download from before cancelled runs were undone).
+  async function clearAll() {
+    setConfirmClear(false);
+    setErr(null);
+    try {
+      await clearAllOffline();
+      setNote("All offline maps were removed from this device.");
+    } catch {
+      setErr("Couldn't clear offline maps — try again.");
+    }
     setAreas(filterAreasForRegion(listSavedAreas(), activeRegion));
   }
 
@@ -134,6 +172,7 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
         </p>
 
         {err && <Banner>{err}</Banner>}
+        {note && <div style={{ fontSize: 12.5, color: "var(--sub)", marginBottom: 10 }}>{note}</div>}
 
         {!progress && (
           <>
@@ -190,7 +229,11 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
           </>
         )}
 
-        {progress && (
+        {progress?.removing && (
+          <div style={{ marginTop: 10, fontSize: 13 }}>Removing the partial download…</div>
+        )}
+
+        {progress && !progress.removing && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 13, marginBottom: 6 }}>
               Downloading {progress.layerLabel} ({progress.layerIdx}/{progress.layerCount}) — {progress.done}/{progress.total || "…"} tiles
@@ -227,6 +270,21 @@ function OfflineMapsPanel({ mapApi, activeRegion, onClose }) {
                 <button className="icon-btn" title="Delete this area" onClick={() => removeArea(a.id)}><Trash2 size={14} /></button>
               </div>
             ))}
+            {stats?.tileCount > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                {!confirmClear ? (
+                  <button className="btn" onClick={() => setConfirmClear(true)}>
+                    <Trash2 size={14} /> Clear all offline maps
+                  </button>
+                ) : (
+                  <>
+                    <span style={{ fontSize: 12.5 }}>Remove every saved map on this device, for all regions?</span>
+                    <button className="btn" style={{ color: "var(--red)", borderColor: "rgba(163,45,45,.4)" }} onClick={clearAll}>Yes, clear all</button>
+                    <button className="btn" onClick={() => setConfirmClear(false)}>Keep</button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
