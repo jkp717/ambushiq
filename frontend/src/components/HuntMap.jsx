@@ -844,7 +844,11 @@ const HuntMap = forwardRef(function HuntMap({
     // zIndex keeps the stack fixed (base parts low, overlays high) whatever order layers get switched in.
     // A blend mode goes on the layer's container: each container is its own stacking context, so a
     // blend set on the tile images would have nothing beneath them to mix with.
-    const tile = (src, { blend, opacity = 1, zIndex = 1 } = {}) => {
+    // statusLabel: what the "Loading …" pill calls this layer. A part of a base map (Esri Topo Shaded draws the
+    // hillshade and woods & water layers; Esri Imagery+Topo the contours) is named after the base map, since its
+    // own name read like an overlay you hadn't switched on; parts also skip the "zoom in to see" hint (the base
+    // map still shows when zoomed out).
+    const tile = (src, { blend, opacity = 1, zIndex = 1, statusLabel = src.loadingLabel, zoomHint = true } = {}) => {
       const layer = L.tileLayer.offline(resolveUrl(src, maptilerKey), {
         maxZoom: MAP_MAX_ZOOM, maxNativeZoom: src.nativeMaxZoom, minZoom: src.minZoom ?? 0,
         attribution: src.attribution, opacity, zIndex,
@@ -853,10 +857,10 @@ const HuntMap = forwardRef(function HuntMap({
         ...(src.loadingLabel ? { updateWhenIdle: true, updateWhenZooming: false } : {}),
       });
       if (blend) layer.on("add", () => { layer.getContainer().style.mixBlendMode = blend; });
-      if (src.loadingLabel) {
+      if (statusLabel) {
         // "loading" fires when the layer starts fetching tiles, "load" once every visible tile is in
         // (failed tiles included); removing the layer mid-load must clear it too.
-        const setBusy = statusFlag(tileLoads, setTilesLoading, src.loadingLabel);
+        const setBusy = statusFlag(tileLoads, setTilesLoading, statusLabel);
         // A tile the server couldn't get from USGS (slow 10 ft contours, gateway errors) comes back as a 503;
         // ask for it again a few times, backing off, while it's still on the map. The pill stays up while
         // any retry is pending, so "done" really means done. `?r=` keeps the browser from reusing its failure.
@@ -880,10 +884,10 @@ const HuntMap = forwardRef(function HuntMap({
         layer.on("loading", () => setBusy(true));
         layer.on("load", refresh);
         layer.on("remove", () => { retries.forEach(clearTimeout); retries.clear(); setBusy(false); });
-        if (src.minZoom) {
+        if (src.minZoom && zoomHint) {
           // Below its minZoom the layer requests nothing and, if it was mid-load, never fires "load" (Leaflet
           // just drops the pending tiles), so clear the spinner and say why it's blank instead.
-          const setOut = statusFlag(tileZoomOut, setTilesZoomIn, src.loadingLabel);
+          const setOut = statusFlag(tileZoomOut, setTilesZoomIn, statusLabel);
           const check = () => {
             const out = map.getZoom() < src.minZoom;
             setOut(out);
@@ -900,7 +904,9 @@ const HuntMap = forwardRef(function HuntMap({
     for (const src of TILE_SOURCES) {
       if (!available(src)) continue;
       if (src.parts) {
-        const group = L.layerGroup(src.parts.map((p, i) => tile(byId[p.id], { ...p, zIndex: 1 + i })));
+        const group = L.layerGroup(src.parts.map((p, i) => tile(byId[p.id], {
+          ...p, zIndex: 1 + i, statusLabel: byId[p.id].loadingLabel && src.label, zoomHint: false,
+        })));
         bases[src.label] = group; idOf.set(group, src.id);
         continue;
       }
