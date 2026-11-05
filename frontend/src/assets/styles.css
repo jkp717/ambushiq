@@ -361,11 +361,13 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   box-shadow: 0 -4px 16px rgba(0, 0, 0, .18);
   transition: transform .22s cubic-bezier(.2, .8, .2, 1);
 }
-/* Closed: slide down until only the header (handle + date/time, with its own bottom padding) shows, held
-   above the bottom safe area (a phone's home indicator). Same in the browser and the installed PWA
-   (BottomSheet.jsx reads the gap from its probe element and mirrors this distance; it writes
-   --sheet-header-h). */
-.bottom-sheet { --sheet-closed-gap: env(safe-area-inset-bottom, 0px); }
+/* Closed: slide down until only the header (handle + date/time, with its own 14px bottom padding) shows, held
+   above the bottom safe area (a phone's home indicator). The header's padding already keeps the text off the
+   edge, so it counts toward the safe area instead of stacking on top of it: in the installed iPhone PWA (34px
+   inset) the full inset plus padding left ~48px of blank space under the forecast line; now it's 28px, still
+   clear of the home indicator bar. In a browser tab (no inset) it's the header's padding alone, as before.
+   BottomSheet.jsx reads the gap from its probe element and mirrors this distance; it writes --sheet-header-h. */
+.bottom-sheet { --sheet-closed-gap: max(0px, calc(env(safe-area-inset-bottom, 0px) - 20px)); }
 /* Rubber-banding up past fully open lifts the sheet's bottom edge: this fill below it keeps the map from
    showing through the gap (it sits off-screen at rest). */
 .bottom-sheet::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 80px;
