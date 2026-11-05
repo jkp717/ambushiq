@@ -296,3 +296,51 @@ def test_route_named_segments_merge_through_junctions():
     out = service.merge_road_segments([seg(1, [a, b], name="FS Rd 423I"), seg(2, [b, c], name="FS Rd 423I"),
                                        seg(3, [b, [1, 1]], name=u)])
     assert len(out) == 2
+
+
+# ---------- under_fs: USGS roads left out where a Forest Service road draws them ----------
+
+def test_cut_under_fs_removes_covered_stretches_and_keeps_the_rest():
+    fs = [{"type": "Feature", "id": "road-1", "properties": {"kind": "road"},
+           "geometry": {"type": "LineString", "coordinates": [[-92.300, 34.70], [-92.290, 34.70]]}}]
+    along = seg(1, [[-92.300, 34.7001], [-92.290, 34.7001]])
+    past = seg(2, [[-92.295, 34.7001], [-92.280, 34.7001]])
+    away = seg(3, [[-92.300, 34.75], [-92.290, 34.75]])
+    out = by_id(service.cut_under_fs([along, past, away], fs))
+    assert set(out) == {"local-2~0", "local-3"}
+    assert out["local-2~0"]["geometry"]["coordinates"][-1] == [-92.28, 34.7001]
+    assert out["local-3"] is away
+
+
+def test_request_with_under_fs_leaves_out_roads_under_fs_roads(env, monkeypatch):
+    env["features"]["local"] = [road_feature(1, geom={"type": "LineString",
+                                                      "coordinates": [[-92.300, 34.7001], [-92.292, 34.7001]]})]
+    fs_cell = [{"type": "Feature", "id": "road-9", "properties": {"kind": "road"},
+                "geometry": {"type": "LineString", "coordinates": [[-92.301, 34.70], [-92.291, 34.70]]}}]
+
+    async def fs_cells(_tz, _cells):
+        return [fs_cell]
+    monkeypatch.setattr(service, "_fs_road_cells", fs_cells)
+    assert run(**BOX, under_fs=True)["features"] == []
+    assert [f["id"] for f in run(**BOX)["features"]] == ["local-1"]             # flag off: drawn as usual
+
+
+def test_fs_outage_hides_nothing(env, monkeypatch):
+    async def none(_tz, _cells):
+        return []
+    monkeypatch.setattr(service, "_fs_road_cells", none)
+    assert [f["id"] for f in run(**BOX, under_fs=True)["features"]] == ["local-1"]
+
+
+# ---------- feature ids: two segments from one junction must not collide ----------
+
+def test_objectid_is_requested_so_usgs_sends_feature_ids(env):
+    run(**BOX)
+    assert "objectid" in env["requests"]["local"][0]["outFields"].split(",")
+
+
+def test_fallback_ids_differ_for_segments_sharing_a_starting_junction():
+    a = {"properties": {"name": "10"}, "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 0]]}}
+    b = {"properties": {"name": "10"}, "geometry": {"type": "LineString", "coordinates": [[0, 0], [0, 1]]}}
+    ids = {service.normalize_road_feature(f, 0.00001, 0, "local")["id"] for f in (a, b)}
+    assert len(ids) == 2

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.core.line_merge import MergeMemo, merge_line_segments
+from app.core.line_overlap import overlap
 from app.roads.models import RoadCell
 
 log = logging.getLogger(__name__)
@@ -32,7 +33,10 @@ _BASE_URL = "https://carto.nationalmap.gov/arcgis/rest/services/transportation/M
 _LAYER_IDS = {"highway": 29, "secondary": 30, "connector": 31, "local": 32}
 _UNNAMED = {"highway": "Unnamed highway", "secondary": "Unnamed secondary highway",
             "connector": "Unnamed connecting road", "local": "Unnamed local road"}
-OUT_FIELDS = "name,federal_lands_route"   # federal_lands_route: e.g. a Forest Service road number ("423I")
+# objectid: without it in outFields the service sends no feature id, and the fallback id (name + first point)
+# collided for two segments of one road starting at the same junction, silently dropping one of them.
+# federal_lands_route: e.g. a Forest Service road number ("423I").
+OUT_FIELDS = "objectid,name,federal_lands_route"
 ATTRIBUTION = "Roads: USGS National Map"
 
 MIN_ZOOM = 11
@@ -132,8 +136,12 @@ def tolerance_deg(tz: int, lat: float) -> float:
 
 # ---------- fetching one cell ----------
 
-def _first_point(geom: dict) -> list:
-    return geom["coordinates"][0] if geom["type"] == "LineString" else geom["coordinates"][0][0]
+def _fallback_id(name: str, geom: dict) -> str:
+    """Id for a feature the service sent without one: name + both ends (two segments of one road often share a
+    starting junction, so the first point alone collided)."""
+    parts = [geom["coordinates"]] if geom["type"] == "LineString" else geom["coordinates"]
+    a, b = parts[0][0], parts[-1][-1]
+    return f"{name}|{a[0]},{a[1]}|{b[0]},{b[1]}"
 
 
 def normalize_road_feature(raw: dict, tol: float, lat: float, kind: str) -> Optional[dict]:
@@ -148,8 +156,7 @@ def normalize_road_feature(raw: dict, tol: float, lat: float, kind: str) -> Opti
     name = usgs_name or (f"FS Rd {route}" if route else _UNNAMED.get(kind, "Unnamed road"))
     fid = raw.get("id")
     if fid is None:
-        p = _first_point(geom)
-        fid = f"{name}|{p[0]},{p[1]}"
+        fid = _fallback_id(name, geom)
     return {
         "type": "Feature", "id": f"{kind}-{fid}", "geometry": geom,
         "properties": {"name": name, "kind": kind, "named": bool(usgs_name), "route": route,
@@ -214,6 +221,22 @@ def merge_road_segments(features: list[dict]) -> list[dict]:
 
 
 _merge_memo = MergeMemo()
+
+
+def cut_under_fs(features: list[dict], fs_roads: list[dict]) -> list[dict]:
+    """Drop the stretches of USGS road that a Forest Service (MVUM) road runs along: both sources draw most
+    national-forest roads, so the map showed two near-parallel lines with different names. The FS line stays (it has
+    the vehicle rules and season); the rest of the USGS road is kept as pieces with ids "{id}~{n}"."""
+    if not fs_roads:
+        return features
+    out = []
+    for f, res in zip(features, overlap(features, fs_roads)):
+        if res.pieces is None:
+            out.append(f)
+            continue
+        for n, piece in enumerate(res.pieces):
+            out.append({**f, "id": f"{f['id']}~{n}", "geometry": {"type": "LineString", "coordinates": piece}})
+    return out
 
 
 class RoadsUnavailable(Exception):
@@ -306,8 +329,17 @@ class BadBounds(ValueError):
     """The requested map area is invalid, too zoomed out, or too large."""
 
 
-async def roads(south: float, west: float, north: float, east: float, zoom: int) -> dict:
-    """GeoJSON FeatureCollection of roads intersecting the box, plus `attribution` and `partial`."""
+async def _fs_road_cells(tz: int, cells: list) -> list[list]:
+    """The Forest Service (MVUM) road cells for the same grid (app.trails shares this grid scheme and caches them).
+    A cell that can't be loaded is skipped: its USGS roads are simply all drawn."""
+    from app.trails import service as trails_service   # imported here: app.trails imports this module too
+    res = await asyncio.gather(*(trails_service.get_cell("road", tz, x, y) for x, y in cells), return_exceptions=True)
+    return [r[0] for r in res if not isinstance(r, Exception)]
+
+
+async def roads(south: float, west: float, north: float, east: float, zoom: int, under_fs: bool = False) -> dict:
+    """GeoJSON FeatureCollection of roads intersecting the box, plus `attribution` and `partial`. With `under_fs`
+    (the map shows Forest Service roads), USGS stretches under an FS road are left out (see cut_under_fs)."""
     if not (-85 <= south < north <= 85 and -180 <= west < east <= 180):
         raise BadBounds("invalid bounds")
     if zoom < MIN_ZOOM:
@@ -336,6 +368,8 @@ async def roads(south: float, west: float, north: float, east: float, zoom: int)
     if failures and not features:
         raise failures[0] if isinstance(failures[0], RoadsUnavailable) else RoadsUnavailable(str(failures[0]))
     sources = [r[0] for r in results if not isinstance(r, Exception)]
-    features = await _merge_memo.get((tz, tuple(sorted(cells))), sources, features,
-                                     lambda f: merge_road_segments(f))
+    fs_cells = await _fs_road_cells(tz, cells) if under_fs else []
+    fs_roads = list({f["id"]: f for cell in fs_cells for f in cell}.values())
+    features = await _merge_memo.get((tz, tuple(sorted(cells)), under_fs), sources + fs_cells, features,
+                                     lambda f: merge_road_segments(cut_under_fs(f, fs_roads)))
     return {"type": "FeatureCollection", "features": features, "attribution": ATTRIBUTION, "partial": partial}

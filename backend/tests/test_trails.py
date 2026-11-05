@@ -49,6 +49,11 @@ def env(monkeypatch):
     service._mem.clear()
     service._inflight.clear()
     service._merge_memo.clear()
+    usgs = {"cells": []}                                       # USGS road cells for aliases (none unless a test sets)
+
+    async def _usgs(_tz, _cells):
+        return usgs["cells"]
+    monkeypatch.setattr(service, "_usgs_road_cells", _usgs)
     monkeypatch.setattr(service.asyncio, "sleep", lambda *_a, **_k: _instant())
     state = {"trail_requests": [], "road_requests": [], "trail_features": [trail_feature(1)],
              "road_features": [road_feature(2)], "trail_status": 200, "road_status": 200, "pages": None}
@@ -69,6 +74,7 @@ def env(monkeypatch):
 
     real = httpx.AsyncClient
     monkeypatch.setattr(service.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    state["usgs"] = usgs
     return state
 
 
@@ -309,3 +315,54 @@ def test_request_returns_one_feature_per_trail_and_reuses_the_merge(env, monkeyp
     assert [f["id"] for f in trails] == ["trail-1"] and trails[0]["geometry"]["type"] == "MultiLineString"
     run(**BOX)
     assert len(calls) == 1
+
+
+# ---------- aliases: USGS names of the roads an FS road covers ----------
+
+def usgs(fid, coords, name="10", named=True):
+    return {"type": "Feature", "id": f"local-{fid}", "geometry": {"type": "LineString", "coordinates": coords},
+            "properties": {"name": name, "kind": "local", "named": named, "route": None, "source": "USGS National Map"}}
+
+
+ALONG = [[-88.690, 37.510], [-88.680, 37.510]]                     # ~880 m east-west
+ALONG_OFFSET = [[-88.690, 37.51008], [-88.680, 37.51008]]          # ~9 m north of it, same direction
+
+
+def test_fs_road_gets_the_names_of_usgs_roads_along_it():
+    out = service.add_aliases([seg(1, ALONG, name="GLEN STREET")], [usgs(1, ALONG_OFFSET)])
+    assert out[0]["properties"]["aliases"] == ["10"]
+
+
+def test_own_name_unnamed_and_crossing_roads_are_not_aliases():
+    crossing = usgs(2, [[-88.685, 37.505], [-88.685, 37.515]], name="Cross Rd")
+    out = service.add_aliases([seg(1, ALONG, name="GLEN STREET")],
+                              [usgs(1, ALONG_OFFSET, name="Glen Street"), usgs(3, ALONG_OFFSET, named=False), crossing])
+    assert "aliases" not in out[0]["properties"]
+
+
+def test_trails_are_not_given_aliases():
+    out = service.add_aliases([seg(1, ALONG, name="Ridge Trail", kind="trail")], [usgs(1, ALONG_OFFSET)])
+    assert "aliases" not in out[0]["properties"]
+
+
+def test_request_adds_aliases_from_usgs_cells(env):
+    env["trail_features"] = []
+    env["road_features"] = [road_feature(2, name="GLEN STREET",
+                                         geom={"type": "LineString", "coordinates": ALONG})]
+    env["usgs"]["cells"] = [[usgs(1, ALONG_OFFSET)]]
+    out = run(south=37.50, west=-88.70, north=37.52, east=-88.67, zoom=13)
+    fs = [f for f in out["features"] if f["properties"]["kind"] == "road"]
+    assert fs and fs[0]["properties"]["aliases"] == ["10"]
+
+
+def test_objectid_is_requested_from_mvum():
+    assert "objectid" in service.TRAILS_OUT_FIELDS.split(",") and "objectid" in service.ROADS_OUT_FIELDS.split(",")
+
+
+def test_fallback_ids_differ_for_trails_sharing_a_starting_junction():
+    a = trail_feature(None, geom={"type": "LineString", "coordinates": [[0, 0], [1, 0]]})
+    b = trail_feature(None, geom={"type": "LineString", "coordinates": [[0, 0], [0, 1]]})
+    for f in (a, b):
+        del f["id"]
+    ids = {service.normalize_trail_feature(f, 0.00001, 0)["id"] for f in (a, b)}
+    assert len(ids) == 2

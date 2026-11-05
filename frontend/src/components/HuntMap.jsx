@@ -130,6 +130,7 @@ function trailPopup(p) {
     <div class="feat-popup-title">${escHtml(p.name)}</div>
     <div class="feat-popup-sub">${escHtml(TRAIL_KIND_LABEL[p.kind] || "Trail")} · ${escHtml(p.vehicle_class)}</div>
     ${p.seasonal ? `<div class="land-row"><b>Season:</b> ${escHtml(p.seasonal)}</div>` : ""}
+    ${p.aliases?.length ? `<div class="land-row"><b>Also called:</b> ${escHtml(p.aliases.join(", "))}</div>` : ""}
     <div class="land-row"><b>Forest:</b> ${escHtml(p.forestname || "Unknown")}</div>
     <div class="land-note">Designated-use data from the US Forest Service Motor Vehicle Use Map — National Forest land only. Verify current status before riding.</div>
   </div>`;
@@ -1420,6 +1421,9 @@ const HuntMap = forwardRef(function HuntMap({
   };
   useEffect(() => { if (ready) drawRoadsRef.current(); }, [ready, drawMode, selectMode]);
 
+  // While Forest Service roads are on the map (Trails layer on, that kind not hidden), the server leaves out the USGS
+  // stretches they already draw, so each national-forest road shows once (the FS popup lists the USGS name).
+  const roadsUnderFs = !!layers.trails && !(hiddenKinds.trails || []).includes("road");
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return undefined;
@@ -1438,6 +1442,7 @@ const HuntMap = forwardRef(function HuntMap({
       say("loading");
       try {
         const q = new URLSearchParams({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(), zoom });
+        if (roadsUnderFs) q.set("under_fs", "1");
         const j = await api(`/roads?${q}`, { signal: ctrl.signal });
         if (mine !== seq) return;
         const key = j.features.map((f) => f.id).sort().join(",");
@@ -1452,7 +1457,7 @@ const HuntMap = forwardRef(function HuntMap({
     map.on("moveend", schedule);
     schedule();
     return () => { clearTimeout(timer); if (ctrl) ctrl.abort(); map.off("moveend", schedule); };
-  }, [ready, layers.roads]);
+  }, [ready, layers.roads, roadsUnderFs]);
 
   // Recreation sites (trailheads, campgrounds, picnic sites, day-use areas): same fetch/draw pattern,
   // rendered as teardrop pins via pointToLayer instead of line/polygon styling.

@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.core.line_merge import MergeMemo, merge_line_segments
+from app.core.line_overlap import overlap
 from app.trails.models import TrailCell
 
 log = logging.getLogger(__name__)
@@ -30,8 +31,10 @@ log = logging.getLogger(__name__)
 _MVUM_BASE = "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_MVUM_01/MapServer"
 TRAILS_URL = f"{_MVUM_BASE}/2/query"
 ROADS_URL = f"{_MVUM_BASE}/1/query"
-TRAILS_OUT_FIELDS = "name,motorcycle,atv,seasonal,forestname,jurisdiction"
-ROADS_OUT_FIELDS = ("name,passengervehicle,highclearancevehicle,truck,atv,motorcycle,forestname,jurisdiction,"
+# objectid: without it the service sends no feature id, and the fallback id (name + first point) collided for two
+# segments of one road starting at the same junction, silently dropping one of them.
+TRAILS_OUT_FIELDS = "objectid,name,motorcycle,atv,seasonal,forestname,jurisdiction"
+ROADS_OUT_FIELDS = ("objectid,name,passengervehicle,highclearancevehicle,truck,atv,motorcycle,forestname,jurisdiction,"
                      "passengervehicle_datesopen,highclearancevehicle_datesopen,truck_datesopen")
 ATTRIBUTION = "Off-road trails & roads: U.S. Forest Service Motor Vehicle Use Map (MVUM) — National Forest land only"
 
@@ -43,7 +46,7 @@ REQUEST_TIMEOUT_S = 25
 CELL_TTL_S = 30 * 24 * 3600
 EMPTY_CELL_TTL_S = 24 * 3600      # an empty answer is re-checked daily: it may be a real gap or a glitch
 PRUNE_AFTER_S = 180 * 24 * 3600   # cells not refreshed in this long are dropped to keep the cache bounded
-CACHE_SCHEMA = "v1"      # bump when the stored feature shape or filters change
+CACHE_SCHEMA = "v2"      # bump when the stored feature shape or filters change
 
 _ROAD_DATES_FIELD = {
     "Passenger vehicle": "passengervehicle_datesopen",
@@ -176,8 +179,12 @@ def tolerance_deg(tz: int, lat: float) -> float:
 
 # ---------- fetching one cell ----------
 
-def _first_point(geom: dict) -> list:
-    return geom["coordinates"][0] if geom["type"] == "LineString" else geom["coordinates"][0][0]
+def _fallback_id(name: str, geom: dict) -> str:
+    """Id for a feature the service sent without one: name + both ends (two segments of one road often share a
+    starting junction, so the first point alone collided)."""
+    parts = [geom["coordinates"]] if geom["type"] == "LineString" else geom["coordinates"]
+    a, b = parts[0][0], parts[-1][-1]
+    return f"{name}|{a[0]},{a[1]}|{b[0]},{b[1]}"
 
 
 def normalize_trail_feature(raw: dict, tol: float, lat: float) -> Optional[dict]:
@@ -188,8 +195,7 @@ def normalize_trail_feature(raw: dict, tol: float, lat: float) -> Optional[dict]
     name = (props.get("name") or "").strip() or "Unnamed trail"
     fid = raw.get("id")
     if fid is None:
-        p = _first_point(geom)
-        fid = f"{name}|{p[0]},{p[1]}"
+        fid = _fallback_id(name, geom)
     return {
         "type": "Feature", "id": f"trail-{fid}", "geometry": geom,
         "properties": {
@@ -209,8 +215,7 @@ def normalize_road_feature(raw: dict, tol: float, lat: float) -> Optional[dict]:
     name = (props.get("name") or "").strip() or "Unnamed road"
     fid = raw.get("id")
     if fid is None:
-        p = _first_point(geom)
-        fid = f"{name}|{p[0]},{p[1]}"
+        fid = _fallback_id(name, geom)
     vehicle_class = _road_vehicle_class(props)
     return {
         "type": "Feature", "id": f"road-{fid}", "geometry": geom,
@@ -373,6 +378,37 @@ def merge_trail_segments(features: list[dict]) -> list[dict]:
 
 _merge_memo = MergeMemo()
 
+ALIAS_MIN_M = 50.0   # a USGS road must run along an FS road at least this far to lend it a name
+
+
+def add_aliases(features: list[dict], usgs_roads: list[dict]) -> list[dict]:
+    """`aliases` on each Forest Service road: the names of USGS roads that run along it (the roads layer leaves those
+    stretches out under FS roads, so this is where their names still show), minus the FS road's own name."""
+    fs = [f for f in features if f["properties"].get("kind") == "road"]
+    named = [f for f in usgs_roads if f["properties"].get("named")]
+    if not fs or not named:
+        return features
+    names: dict = {}
+    for u, res in zip(named, overlap(named, fs)):
+        for fs_id, metres in res.covered_m.items():
+            if metres >= ALIAS_MIN_M:
+                names.setdefault(fs_id, set()).add(u["properties"]["name"])
+    out = []
+    for f in features:
+        own = (f["properties"].get("name") or "").casefold()
+        aliases = sorted(n for n in names.get(f["id"], ()) if n.casefold() != own)
+        out.append({**f, "properties": {**f["properties"], "aliases": aliases}} if aliases else f)
+    return out
+
+
+async def _usgs_road_cells(tz: int, cells: list) -> list[list]:
+    """USGS road cells for the same grid (app.roads shares this grid scheme and caches them); unavailable ones are
+    skipped, which only means fewer aliases."""
+    from app.roads import service as roads_service   # imported here: app.roads imports this module too
+    jobs = [(kind, x, y) for x, y in cells for kind in roads_service._LAYER_IDS]
+    res = await asyncio.gather(*(roads_service.get_cell(k, tz, x, y) for k, x, y in jobs), return_exceptions=True)
+    return [r[0] for r in res if not isinstance(r, Exception)]
+
 
 class BadBounds(ValueError):
     """The requested map area is invalid, too zoomed out, or too large."""
@@ -408,6 +444,8 @@ async def trails(south: float, west: float, north: float, east: float, zoom: int
     if failures and not features:
         raise failures[0] if isinstance(failures[0], TrailsUnavailable) else TrailsUnavailable(str(failures[0]))
     sources = [r[0] for r in results if not isinstance(r, Exception)]
-    features = await _merge_memo.get((tz, tuple(sorted(cells))), sources, features,
-                                     lambda f: merge_trail_segments(f))
+    usgs_cells = await _usgs_road_cells(tz, cells)
+    usgs_roads = list({f["id"]: f for cell in usgs_cells for f in cell}.values())
+    features = await _merge_memo.get((tz, tuple(sorted(cells))), sources + usgs_cells, features,
+                                     lambda f: add_aliases(merge_trail_segments(f), usgs_roads))
     return {"type": "FeatureCollection", "features": features, "attribution": ATTRIBUTION, "partial": partial}
