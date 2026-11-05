@@ -6,6 +6,7 @@ import { fmtYd } from "../utils/units.js";
 import { rulerKey, elevText } from "../utils/rulerElev.js";
 import { standColor, pinFg, standGlyph } from "../utils/standStyle.js";
 import { recSiteKind, recSitePinSvg, RECSITE_PIN_W, RECSITE_PIN_H } from "../utils/recSiteStyle.js";
+import { roadSignSvg } from "../utils/roadSignStyle.js";
 import { api } from "../services/api.js";
 
 /* global L */
@@ -134,6 +135,12 @@ function trailPopup(p) {
   </div>`;
 }
 
+// The small label that follows the pointer while hovering a road or trail: a road-sign icon for its type + its name.
+function lineHoverTip(kind, color, name) {
+  return `<span class="line-hover-tip-row">${roadSignSvg(kind, color)}<span>${escHtml(name)}</span></span>`;
+}
+const trailTip = (p) => lineHoverTip(p.kind, TRAIL_COLORS[p.kind] || TRAIL_COLORS.trail, p.name);
+
 // General roads (USGS National Map transportation) via /api/roads. Drawn above the public-land tint
 // so roads stay legible regardless of what else is on (and just below the MVUM forest trails/roads).
 const ROADS_MIN_ZOOM = 11;
@@ -161,13 +168,18 @@ function roadPopup(p) {
   </div>`;
 }
 
+const roadTip = (p) => lineHoverTip(p.kind || "local", (ROAD_STYLES[p.kind] || ROAD_STYLES.local).color, p.name);
+
 // Roads and trails are thin lines, and a line's own stroke is its click target, so a 1px local road is nearly
 // impossible to hit. Each feature is drawn twice: the visible line (not clickable) and, above it in the same
 // pane, a wide fully transparent copy that takes the clicks and popup. The visible line is highlighted while the
 // pointer is over it or its popup is open, which also gives touch screens (no hover) feedback on what was picked.
-const LINE_HIT_WEIGHT = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches ? 22 : 14;
+// With a `tipFn`, a small label (icon + name) follows the pointer while hovering; touch screens have no hover, so
+// they skip it and a tap goes straight to the popup.
+const COARSE_POINTER = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+const LINE_HIT_WEIGHT = COARSE_POINTER ? 22 : 14;
 
-function addSelectableLines(group, features, { pane, styleFn, popupFn, interactive }) {
+function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, interactive }) {
   const fc = { type: "FeatureCollection", features };
   const visible = new Map();
   L.geoJSON(fc, {
@@ -189,9 +201,15 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, interacti
         if (!popupOpen) line.setStyle({ color: base.color, weight: base.weight, opacity: base.opacity, dashArray: base.dashArray ?? null });
       };
       hit.bindPopup(popupFn(f.properties), { minWidth: 200 });
+      if (tipFn && !COARSE_POINTER) {
+        hit.bindTooltip(tipFn(f.properties), {
+          sticky: true, direction: "top", offset: [0, -12], className: "line-hover-tip", opacity: 1,
+        });
+        hit.on("tooltipopen", () => { if (popupOpen) hit.closeTooltip(); });   // the detailed popup replaces it
+      }
       hit.on("mouseover", on);
       hit.on("mouseout", off);
-      hit.on("popupopen", () => { popupOpen = true; on(); });
+      hit.on("popupopen", () => { popupOpen = true; on(); hit.closeTooltip(); });
       hit.on("popupclose", () => { popupOpen = false; off(); });
     },
   }).addTo(group);
@@ -1289,7 +1307,7 @@ const HuntMap = forwardRef(function HuntMap({
     const features = trailData.current.features.filter((f) => !hide.has(f.properties.kind));
     if (!features.length) return;
     addSelectableLines(g, features, {
-      pane: "trailsPane", styleFn: trailStyle, popupFn: trailPopup, interactive: !drawMode && !selectMode,
+      pane: "trailsPane", styleFn: trailStyle, popupFn: trailPopup, tipFn: trailTip, interactive: !drawMode && !selectMode,
     });
   };
   useEffect(() => { if (ready) drawTrailsRef.current(); }, [ready, drawMode, selectMode]);
@@ -1341,7 +1359,7 @@ const HuntMap = forwardRef(function HuntMap({
     const features = roadData.current.features.filter((f) => !hide.has(f.properties.kind || "local"));
     if (!features.length) return;
     addSelectableLines(g, features, {
-      pane: "roadsPane", styleFn: roadStyle, popupFn: roadPopup, interactive: !drawMode && !selectMode,
+      pane: "roadsPane", styleFn: roadStyle, popupFn: roadPopup, tipFn: roadTip, interactive: !drawMode && !selectMode,
     });
   };
   useEffect(() => { if (ready) drawRoadsRef.current(); }, [ready, drawMode, selectMode]);
