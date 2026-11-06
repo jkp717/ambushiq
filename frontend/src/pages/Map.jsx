@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Eye, EyeOff, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset } from "lucide-react";
+import { Eye, EyeOff, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset, Search } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -19,6 +19,7 @@ import HourlyForecast from "../components/HourlyForecast.jsx";
 import { WX_ICONS, WX_TEXT } from "../utils/wxIcons.js";
 import AddMenu from "../components/AddMenu.jsx";
 import OfflineMapsPanel from "../components/OfflineMapsPanel.jsx";
+import MapSearch from "../components/MapSearch.jsx";
 import { NamePrompt, FoodZonePrompt, CorridorPrompt } from "../components/Prompts.jsx";
 import ScoutingOverlapPrompt from "../components/ScoutingOverlapPrompt.jsx";
 import SelectionBar from "../components/SelectionBar.jsx";
@@ -280,6 +281,14 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [ratings, setRatings] = useState(null);      // day -> deer movement rating, for the day strip
   const huntMapRef = useRef(null);
   const [showOfflinePanel, setShowOfflinePanel] = useState(false);
+
+  // Map search (magnifier button / "/" key): the panel, the last query (shown again when reopened), and whether a
+  // picked result is on the map (it stays until cleared in the panel)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHasResult, setSearchHasResult] = useState(false);
+  const getHuntMap = useCallback(() => huntMapRef.current, []);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
 
   // Scouting Suggestions: draw-a-circle analysis flow
   const [scoutSettings, setScoutSettings] = useState({
@@ -789,6 +798,22 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     setDrawMode("ruler");
   }
   function toggleSelectMode() { if (selectMode) exitSelect(); else { cancelDraw(); setSelectMode(true); } }
+
+  // Drawing or selecting on the map takes over clicks: the search panel steps aside
+  useEffect(() => { if (drawMode || selectMode) setSearchOpen(false); }, [drawMode, selectMode]);
+  // "/" opens the search (desktop), unless typing somewhere already
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (drawMode || selectMode) return;
+      e.preventDefault();
+      setSearchOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawMode, selectMode]);
   const toggleSelected = useCallback((key) => setSelectedKeys((prev) => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -1180,7 +1205,16 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
             regionId={activeRegion.id}
             height="100%" />
         </div>
+        {searchOpen && (
+          <MapSearch getHuntMap={getHuntMap} query={searchQuery} onQueryChange={setSearchQuery} hasResult={searchHasResult}
+            onResultChange={setSearchHasResult} onClose={closeSearch} />
+        )}
         <div className="layer-overlay">
+          <button className={"layer-toggle-btn map-search-btn" + (searchOpen ? " open" : "") + (searchHasResult ? " has-result" : "")}
+            onClick={() => setSearchOpen((o) => !o)} disabled={!!drawMode || selectMode} aria-expanded={searchOpen}
+            title={searchHasResult ? "Search the map (a result is shown)" : "Search the map ( / )"}>
+            <Search size={16} />
+          </button>
           <button className={"layer-toggle-btn ruler" + (drawMode === "ruler" ? " on" : "")} onClick={toggleRuler}
             disabled={!!drawMode && drawMode !== "ruler"} aria-pressed={drawMode === "ruler"}
             title={drawMode === "ruler" ? "Stop measuring" : "Measure distance"}>

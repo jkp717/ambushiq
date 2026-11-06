@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import APP_VERSION
 from app.core.database import engine
-from app.osmtrails.models import OsmExtract, OsmTrailCell
+from app.osmtrails.models import OsmExtract, OsmTrailCell, OsmTrailName
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +179,109 @@ def run_import_process(extract_id: str, pbf: str) -> int:
     """Parse and store one state (in the separate process started by import_extract)."""
     cells, kept = parse_extract(pbf)
     store_cells(extract_id, cells, kept)
+    del cells
+    build_name_index(extract_id)
     return kept
+
+
+# ---------- name index for map search (app.search) ----------
+
+NEAR_DEG = 0.01            # same-name pieces closer than this (~1 km) are one trail
+MAX_PAIRWISE = 400         # a very common name ("Trail 1") is grouped by grid square instead of piece by piece
+GROUP_GRID_DEG = 0.1
+
+
+def _bbox(geom: dict) -> tuple[float, float, float, float]:
+    parts = [geom["coordinates"]] if geom["type"] == "LineString" else geom["coordinates"]
+    xs = [c[0] for p in parts for c in p]
+    ys = [c[1] for p in parts for c in p]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _near(a, b) -> bool:
+    return not (a[0] > b[2] + NEAR_DEG or b[0] > a[2] + NEAR_DEG or a[1] > b[3] + NEAR_DEG or b[1] > a[3] + NEAR_DEG)
+
+
+def cluster_pieces(pieces: list[dict]) -> list[list[dict]]:
+    """Split one name's pieces ({"bbox": ...}) into connected stretches: pieces whose boxes come within NEAR_DEG of
+    each other are joined (transitively)."""
+    n = len(pieces)
+    if n > MAX_PAIRWISE:
+        out: dict = {}
+        for p in pieces:
+            b = p["bbox"]
+            out.setdefault((math.floor((b[0] + b[2]) / 2 / GROUP_GRID_DEG),
+                            math.floor((b[1] + b[3]) / 2 / GROUP_GRID_DEG)), []).append(p)
+        return list(out.values())
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _near(pieces[i]["bbox"], pieces[j]["bbox"]):
+                parent[find(i)] = find(j)
+    groups: dict = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(pieces[i])
+    return list(groups.values())
+
+
+def build_name_index(extract_id: str) -> int:
+    """(Re)build the state's rows in osm_trail_names from its stored cells, reading one cell at a time (a feature on
+    a cell edge is in both cells: counted once). Returns the number of rows."""
+    pieces: dict = {}   # feature id -> {name, kind, bbox, cells}
+    with Session(engine) as s:
+        rows = s.execute(select(OsmTrailCell.key, OsmTrailCell.payload)
+                         .where(OsmTrailCell.extract_id == extract_id)).yield_per(50)
+        for key, payload in rows:
+            for f in json.loads(payload):
+                p = f["properties"]
+                if p["name"] in UNNAMED_NAMES:
+                    continue
+                got = pieces.get(f["id"])
+                if got:
+                    got["cells"].add(key)
+                else:
+                    pieces[f["id"]] = {"id": f["id"], "name": p["name"], "kind": p["kind"],
+                                       "bbox": _bbox(f["geometry"]), "cells": {key}}
+    by_name: dict = {}
+    for pc in pieces.values():
+        by_name.setdefault((pc["name"].casefold(), pc["kind"]), []).append(pc)
+    out = []
+    for (name_lc, kind), group in by_name.items():
+        for stretch in cluster_pieces(group):
+            w = min(p["bbox"][0] for p in stretch)
+            so = min(p["bbox"][1] for p in stretch)
+            e = max(p["bbox"][2] for p in stretch)
+            no = max(p["bbox"][3] for p in stretch)
+            out.append(OsmTrailName(
+                extract_id=extract_id, name=stretch[0]["name"], name_lc=name_lc[:200], kind=kind,
+                lat=(so + no) / 2, lon=(w + e) / 2, west=w, south=so, east=e, north=no,
+                feature_ids=json.dumps(sorted(p["id"] for p in stretch)),
+                cell_keys=json.dumps(sorted({k for p in stretch for k in p["cells"]}))))
+    with Session(engine) as s:
+        s.execute(delete(OsmTrailName).where(OsmTrailName.extract_id == extract_id))
+        s.add_all(out)
+        s.commit()
+    return len(out)
+
+
+def backfill_name_index() -> list[str]:
+    """Build the name index for states imported before it existed (status ok, cells stored, no name rows)."""
+    with Session(engine) as s:
+        ok = [r.extract_id for r in s.scalars(select(OsmExtract).where(OsmExtract.status == "ok")).all()]
+        indexed = set(s.scalars(select(OsmTrailName.extract_id).distinct()).all())
+    done = []
+    for eid in ok:
+        if eid not in indexed:
+            n = build_name_index(eid)
+            log.info("osm trails: name index for %s built (%d names)", eid, n)
+            done.append(eid)
+    return done
 
 
 # ---------- which states ----------
@@ -317,6 +419,7 @@ def _sync_rows(needed: dict[str, dict], tried: frozenset = frozenset()) -> list[
         rows = {r.extract_id: r for r in s.scalars(select(OsmExtract)).all()}
         for eid in set(rows) - set(needed):
             s.execute(delete(OsmTrailCell).where(OsmTrailCell.extract_id == eid))
+            s.execute(delete(OsmTrailName).where(OsmTrailName.extract_id == eid))
             s.delete(rows.pop(eid))
         for eid, f in needed.items():
             if eid not in rows:
@@ -340,6 +443,10 @@ async def osm_trails_job(progress) -> str:
     """Job: import (or refresh) the state extracts the regions need. Loops until no state is due, so a region added
     while it runs is picked up in the same run."""
     imported, done_ids = [], set()
+    try:
+        await asyncio.to_thread(backfill_name_index)
+    except Exception:
+        log.exception("osm trails: building the search name index failed")   # the import itself still runs
     while True:
         index = await fetch_index()
         due = await asyncio.to_thread(_sync_rows, needed_extracts(index, _region_points()), frozenset(done_ids))

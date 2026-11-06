@@ -172,6 +172,10 @@ function osmTrailPopup(p) {
   </div>`;
 }
 
+// Color of a road/trail picked in the map search (MapSearch): the same as that kind's line on the map.
+const searchLineColor = (kind) => TRAIL_COLORS[kind] || OSM_TRAIL_STYLES[kind]?.color || OSM_TRAIL_STYLES.foot.color;
+const SEARCH_PIN_COLOR = "#D32F2F";
+
 const osmTrailTip = (p) => lineHoverTip(p.kind, (OSM_TRAIL_STYLES[p.kind] || OSM_TRAIL_STYLES.foot).color, p.name);
 const OSM_ATTRIBUTION = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
 
@@ -827,6 +831,34 @@ const HuntMap = forwardRef(function HuntMap({
       else return;
       fitted.current = true;   // the open-on-the-property fit mustn't redo it a moment later
     },
+    // Map search (MapSearch.jsx): show a picked result. A road/trail with `geometry` is drawn whole in its own color
+    // over a white halo (like the hover highlight) and fitted; anything else gets a red pin with its name, framed by
+    // `bbox` (a town's extent) or centered at `zoom` (never zooming out from a closer view). Stays until cleared.
+    showSearchResult: (res) => {
+      const map = mapRef.current, g = layerGroups.current.search;
+      if (!map || !g) return;
+      g.clearLayers();
+      const label = escHtml(res.label || "");
+      if (res.geometry) {
+        const line = { pane: "searchPane", interactive: false };
+        L.geoJSON(res.geometry, { ...line, style: { color: "#FFFFFF", weight: 10, opacity: 0.9, lineCap: "round", lineJoin: "round" } }).addTo(g);
+        const top = L.geoJSON(res.geometry, { ...line, style: { color: searchLineColor(res.trailKind), weight: 5, opacity: 1, lineCap: "round", lineJoin: "round" } }).addTo(g);
+        if (label) top.bindTooltip(label, { permanent: true, direction: "center", className: "search-pin-label" });
+      } else {
+        const pin = L.circleMarker([res.lat, res.lon], {
+          pane: "searchPane", interactive: false, radius: 8, color: "#FFFFFF", weight: 3, fillColor: SEARCH_PIN_COLOR, fillOpacity: 1,
+        }).addTo(g);
+        if (label) pin.bindTooltip(label, { permanent: true, direction: "top", offset: [0, -10], className: "search-pin-label" });
+      }
+      if (res.bbox) {
+        const [w, so, e, n] = res.bbox;
+        autoFrame.current = null;
+        map.fitBounds([[so, w], [n, e]], { ...shelfPadding(map, 40), maxZoom: res.maxZoom ?? 16, animate: false });
+      } else {
+        frame({ kind: "point", latlng: [res.lat, res.lon], zoom: Math.max(map.getZoom(), res.zoom ?? 15) });
+      }
+    },
+    clearSearchResult: () => { layerGroups.current.search?.clearLayers(); },
   }));
 
   // init map once (waits for the Leaflet global if the CDN script is slow)
@@ -852,10 +884,14 @@ const HuntMap = forwardRef(function HuntMap({
       // OpenStreetMap trails sit just below the Forest Service ones (their own pane, so a redraw of either can't
       // reorder them).
       map.createPane("osmTrailsPane").style.zIndex = 393;
+      // A map-search result sits above the drawn features (overlay pane 400) but below markers and popups.
+      const searchPane = map.createPane("searchPane");
+      searchPane.style.zIndex = 450;
+      searchPane.style.pointerEvents = "none";
       // "publicLand" is drawn in its own lower pane (see above), so every other layer is above the land tint
       // "scent" is added before "stands" so cones render below stand markers; "lee" shading sits below both
       // "location" (the device's blue dot) goes last so it draws above everything else
-      ["publicLand", "roads", "osmTrails", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "ruler", "flow", "suggestions", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
+      ["publicLand", "roads", "osmTrails", "trails", "recSites", "zones", "corridors", "scrapes", "rubs", "lee", "scent", "stands", "draft", "ruler", "flow", "suggestions", "search", "location"].forEach((k) => { layerGroups.current[k] = L.layerGroup().addTo(map); });
       mapRef.current = map;
       setReady(true);
       // Open straight onto the property when its features are already known, instead of loading a
@@ -2070,3 +2106,4 @@ const HuntMap = forwardRef(function HuntMap({
 });
 
 export default HuntMap;
+export { searchLineColor };

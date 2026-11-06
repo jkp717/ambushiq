@@ -661,6 +661,54 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
 }
 .layer-overlay > .layer-toggle-btn { flex-shrink: 0; }
+
+/* ── map search (MapSearch.jsx): magnifier at the top of the left button column, panel across the top of the map,
+   clear of Leaflet's top-left zoom and top-right controls. A red dot on the button = a result is on the map. ── */
+.map-search-btn { position: relative; }
+.map-search-btn.has-result::after {
+  content: ""; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%;
+  background: #D32F2F; border: 1.5px solid #fff;
+}
+.map-search {
+  position: absolute; top: 10px; left: 54px; right: 54px; max-width: 440px; z-index: 1001;
+  color: var(--txt);
+}
+.map-search-bar {
+  display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 6px 0 10px;
+  background: var(--bg); border: 1px solid var(--bord2); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.map-search-glass { color: var(--sub); flex-shrink: 0; }
+.map-search-bar input {
+  flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--txt);
+  font-size: 16px;   /* 16px stops iOS zooming the page on focus */
+}
+.map-search-spin { color: var(--sub); flex-shrink: 0; animation: spin 1s linear infinite; }
+.map-search-clear {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 30px;
+  border: none; border-radius: 6px; background: none; color: var(--sub); cursor: pointer;
+}
+.map-search-clear:hover { background: var(--surf); color: var(--txt); }
+.map-search-list {
+  list-style: none; margin: 4px 0 0; padding: 4px; max-height: min(60vh, 440px); overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--bord2); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.map-search-item { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+.map-search-item.active { background: var(--surf); }
+.map-search-icon { display: flex; align-items: center; justify-content: center; width: 22px; flex-shrink: 0; color: var(--sub); }
+.map-search-icon.kind-water { color: #1976D2; }
+.map-search-icon.kind-landform { color: #8D6E63; }
+.map-search-icon.kind-park { color: #2E7D32; }
+.map-search-icon.kind-coords { color: #D32F2F; }
+.map-search-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.map-search-name, .map-search-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-search-name { font-size: 14px; font-weight: 600; }
+.map-search-sub { font-size: 12px; color: var(--sub); }
+.map-search-dist { font-size: 12px; color: var(--sub); flex-shrink: 0; }
+.map-search-note { padding: 8px; font-size: 12.5px; color: var(--sub); }
+.leaflet-tooltip.search-pin-label {
+  padding: 2px 7px; border-radius: 6px; font-size: 12.5px; font-weight: 700; color: #1d1d1b;
+  background: #fff; border: 1px solid rgba(0,0,0,.25); box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
 .layer-toggle-btn {
   display: flex; align-items: center; justify-content: center;
   width: 34px; height: 34px;
