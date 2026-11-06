@@ -98,7 +98,7 @@ const TRAILS_HINTS = {
 const TRAILS_LEGEND = [
   ["trail", "#8D6E00", "OHV/ATV/motorcycle trail"], ["road", "#6D4C1E", "Designated forest road", true],
   // OpenStreetMap (HuntMap's OSM_TRAIL_STYLES)
-  ["foot", "#B5523B", "Foot trail", "dotted"], ["horse", "#7B4FA0", "Horse trail", true],
+  ["foot", "#E0218A", "Foot trail", "dotted"], ["horse", "#7B4FA0", "Horse trail", true],
   ["track", "#6B7A3A", "Track (two-track)", true],
 ];
 // The OpenStreetMap part of the Trails layer has its own status (its own request; see /api/osm-trails)

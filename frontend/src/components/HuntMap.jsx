@@ -148,7 +148,8 @@ const trailTip = (p) => lineHoverTip(p.kind, TRAIL_COLORS[p.kind] || TRAIL_COLOR
 // OpenStreetMap foot trails, horse trails and tracks (via /api/osm-trails: Geofabrik state extracts the server
 // downloads for each region's state). Drawn just below the Forest Service lines, which win where both exist.
 const OSM_TRAIL_STYLES = {
-  foot:  { color: "#B5523B", weight: 2.5, dashArray: "1 5", lineCap: "round" },
+  // magenta, not rust: a rust trail vanished among the brown-orange 10 ft contour lines
+  foot:  { color: "#E0218A", weight: 2.5, dashArray: "1 5", lineCap: "round" },
   horse: { color: "#7B4FA0", weight: 2.5, dashArray: "6 4" },
   track: { color: "#6B7A3A", weight: 2, dashArray: "10 5" },
 };
@@ -181,7 +182,7 @@ const ROAD_STYLES = {
   highway:   { color: "#B71C1C", weight: 3 },
   secondary: { color: "#D84315", weight: 2.5 },
   connector: { color: "#616161", weight: 1.5 },
-  local:     { color: "#9E9E9E", weight: 1 },
+  local:     { color: "#9E9E9E", weight: 1, hoverColor: "#616161" },   // light gray would wash out on the white halo
 };
 const ROAD_KIND_LABEL = {
   highway: "Controlled-access highway", secondary: "Secondary highway",
@@ -276,9 +277,24 @@ function addSelectableLines(group, features, { pane, styleFn, popupFn, tipFn, lo
       if (!line) return;
       const base = styleFn(f.properties, false);
       let popupOpen = false;
-      const on = () => { line.setStyle({ color: COLORS.selected, weight: base.weight + 3, opacity: 1, dashArray: null }); line.bringToFront(); };
+      // Highlight: the line goes solid, thicker and opaque in its own type's color (so you still see what kind it
+      // is), over a white halo that makes it stand out on any base map.
+      let halo = null;
+      const on = () => {
+        if (!halo) {
+          halo = L.geoJSON(f, {
+            pane, interactive: false,
+            style: { color: "#FFFFFF", weight: base.weight + 7, opacity: 0.85, lineCap: "round", lineJoin: "round" },
+          }).addTo(group);
+        }
+        halo.bringToFront();
+        line.setStyle({ color: base.hoverColor || base.color, weight: base.weight + 2, opacity: 1, dashArray: null });
+        line.bringToFront();
+      };
       const off = () => {
-        if (!popupOpen) line.setStyle({ color: base.color, weight: base.weight, opacity: base.opacity, dashArray: base.dashArray ?? null });
+        if (popupOpen) return;
+        if (halo) { group.removeLayer(halo); halo = null; }
+        line.setStyle({ color: base.color, weight: base.weight, opacity: base.opacity, dashArray: base.dashArray ?? null });
       };
       // A road known only by a placeholder ("Unnamed local road") that still gets a street-name lookup says
       // "Looking up name…" until the answer is in, instead of showing the placeholder and then flipping to the real
