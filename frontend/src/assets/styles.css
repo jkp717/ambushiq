@@ -653,14 +653,36 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 @keyframes map-tile-loading-in { from { opacity: 0; transform: translate(-50%, -4px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* ── layer overlay — collapsible ── */
+/* Bottom-left Tools row (Map.jsx): the Tools button, with its tools sliding out to the right of it. A row (not a
+   column) so it never climbs into Leaflet's top-left zoom / Dark map buttons; max-width keeps it clear of the
+   bottom-right layers button. Folded tools collapse to zero width; a tool that's switched on stays out. */
 .layer-overlay {
   position: absolute; bottom: calc(20px + var(--sheet-controls-lift, 0px)); left: 10px; z-index: 500;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
-  /* never grow past the top of the map: 90px clears Leaflet's top-left zoom control */
-  max-height: calc(100% - 20px - var(--sheet-controls-lift, 0px) - 90px);
+  display: flex; flex-direction: row; align-items: center;
+  max-width: calc(100% - 64px);
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
 }
 .layer-overlay > .layer-toggle-btn { flex-shrink: 0; }
+.layer-overlay .tool-item {
+  margin-left: 6px; overflow: hidden;
+  transition: width .2s cubic-bezier(.2, .8, .2, 1), margin-left .2s cubic-bezier(.2, .8, .2, 1),
+              opacity .15s ease, transform .2s cubic-bezier(.2, .8, .2, 1), background 0.12s;
+}
+.layer-overlay .tool-item.tool-hidden {
+  width: 0; margin-left: 0; opacity: 0; transform: translateX(-10px); pointer-events: none;
+}
+/* fan out left to right when opening (folding back has no delay) */
+.layer-overlay.tools-open .tool-item:nth-child(3) { transition-delay: 25ms; }
+.layer-overlay.tools-open .tool-item:nth-child(4) { transition-delay: 50ms; }
+.layer-overlay.tools-open .tool-item:nth-child(5) { transition-delay: 75ms; }
+.layer-overlay.tools-open .tool-item:nth-child(6) { transition-delay: 100ms; }
+.layer-overlay.tools-open .tool-item:nth-child(7) { transition-delay: 125ms; }
+.map-tools-btn svg { transition: transform .2s ease; }
+.map-tools-btn.open { background: rgba(0,0,0,.70); }
+.map-tools-btn.open svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .layer-overlay .tool-item, .map-tools-btn svg { transition: none; }
+}
 
 /* ── map search (MapSearch.jsx): magnifier at the top of the left button column, panel across the top of the map,
    clear of Leaflet's top-left zoom and top-right controls. A red dot on the button = a result is on the map. ── */
@@ -840,7 +862,8 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
 
 /* ── floating scouting-analysis progress/error card, bottom-left ── */
 .map-scout-progress {
-  position: absolute; bottom: calc(20px + var(--sheet-controls-lift, 0px)); left: 10px; z-index: 500;
+  /* sits above the bottom-left Tools row (34px + gap) */
+  position: absolute; bottom: calc(62px + var(--sheet-controls-lift, 0px)); left: 10px; z-index: 500;
   transition: bottom .22s cubic-bezier(.2, .8, .2, 1);
   width: 220px;
   background: rgba(0,0,0,.50); backdrop-filter: blur(4px);

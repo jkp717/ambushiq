@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Eye, EyeOff, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset, Search } from "lucide-react";
+import { Eye, EyeOff, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset, Search, Wrench } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
@@ -289,6 +289,8 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   const [searchHasResult, setSearchHasResult] = useState(false);
   const getHuntMap = useCallback(() => huntMapRef.current, []);
   const closeSearch = useCallback(() => setSearchOpen(false), []);
+  const [toolsOpen, setToolsOpen] = useState(false);   // the bottom-left Tools row is slid out
+  const toolsRef = useRef(null);
 
   // Scouting Suggestions: draw-a-circle analysis flow
   const [scoutSettings, setScoutSettings] = useState({
@@ -799,8 +801,27 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   }
   function toggleSelectMode() { if (selectMode) exitSelect(); else { cancelDraw(); setSelectMode(true); } }
 
-  // Drawing or selecting on the map takes over clicks: the search panel steps aside
-  useEffect(() => { if (drawMode || selectMode) setSearchOpen(false); }, [drawMode, selectMode]);
+  // Drawing or selecting on the map takes over clicks: the search panel and the tools row step aside
+  useEffect(() => { if (drawMode || selectMode) { setSearchOpen(false); setToolsOpen(false); } }, [drawMode, selectMode]);
+
+  // Bottom-left Tools row: a tap anywhere outside it (or Esc) folds it back; every tool folds it after acting.
+  // A tool that's switched on stays out while folded (`pinned`), so what's active is always visible.
+  useEffect(() => {
+    if (!toolsOpen) return undefined;
+    const down = (e) => { if (toolsRef.current && !toolsRef.current.contains(e.target)) setToolsOpen(false); };
+    const key = (e) => { if (e.key === "Escape") setToolsOpen(false); };
+    document.addEventListener("pointerdown", down);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("pointerdown", down); document.removeEventListener("keydown", key); };
+  }, [toolsOpen]);
+  const tool = (fn) => () => { fn(); setToolsOpen(false); };
+  const toolProps = (pinned, extra) => {
+    const hidden = !toolsOpen && !pinned;
+    return {
+      className: "layer-toggle-btn tool-item" + (extra ? " " + extra : "") + (hidden ? " tool-hidden" : ""),
+      tabIndex: hidden ? -1 : undefined, "aria-hidden": hidden || undefined,
+    };
+  };
   // "/" opens the search (desktop), unless typing somewhere already
   useEffect(() => {
     const onKey = (e) => {
@@ -1209,30 +1230,36 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <MapSearch getHuntMap={getHuntMap} query={searchQuery} onQueryChange={setSearchQuery} hasResult={searchHasResult}
             onResultChange={setSearchHasResult} onClose={closeSearch} />
         )}
-        <div className="layer-overlay">
-          <button className={"layer-toggle-btn map-search-btn" + (searchOpen ? " open" : "") + (searchHasResult ? " has-result" : "")}
-            onClick={() => setSearchOpen((o) => !o)} disabled={!!drawMode || selectMode} aria-expanded={searchOpen}
+        {/* bottom left: the Tools button; its tools slide out to the right. A tool that's switched on (search
+            open/result shown, measuring, location, multi-select) stays out beside Tools while the row is folded. */}
+        <div className={"layer-overlay" + (toolsOpen ? " tools-open" : "")} ref={toolsRef}>
+          <button className={"layer-toggle-btn map-tools-btn" + (toolsOpen ? " open" : "")} onClick={() => setToolsOpen((o) => !o)}
+            aria-expanded={toolsOpen} title={toolsOpen ? "Hide map tools" : "Map tools"}>
+            <Wrench size={16} />
+          </button>
+          <button {...toolProps(searchOpen || searchHasResult, "map-search-btn" + (searchOpen ? " open" : "") + (searchHasResult ? " has-result" : ""))}
+            onClick={tool(() => setSearchOpen((o) => !o))} disabled={!!drawMode || selectMode} aria-expanded={searchOpen}
             title={searchHasResult ? "Search the map (a result is shown)" : "Search the map ( / )"}>
             <Search size={16} />
           </button>
-          <button className={"layer-toggle-btn ruler" + (drawMode === "ruler" ? " on" : "")} onClick={toggleRuler}
+          <button {...toolProps(drawMode === "ruler", "ruler" + (drawMode === "ruler" ? " on" : ""))} onClick={tool(toggleRuler)}
             disabled={!!drawMode && drawMode !== "ruler"} aria-pressed={drawMode === "ruler"}
             title={drawMode === "ruler" ? "Stop measuring" : "Measure distance"}>
             <Ruler size={16} />
           </button>
-          <button className={"layer-toggle-btn loc" + (locationOn ? " on" : "") + (locationOn && geo.status === "locating" ? " locating" : "")}
-            onClick={toggleLocation} aria-pressed={locationOn}
+          <button {...toolProps(locationOn, "loc" + (locationOn ? " on" : "") + (locationOn && geo.status === "locating" ? " locating" : ""))}
+            onClick={tool(toggleLocation)} aria-pressed={locationOn}
             title={locationOn ? "Hide my location" : "Show my location"}>
             <Navigation2 size={16} fill={locationOn ? "currentColor" : "none"} />
           </button>
-          <button className={"layer-toggle-btn" + (selectMode ? " on" : "")} onClick={toggleSelectMode}
+          <button {...toolProps(selectMode, selectMode ? "on" : "")} onClick={tool(toggleSelectMode)}
             aria-pressed={selectMode} title={selectMode ? "Exit multi-select" : "Multi-select"}>
             <BoxSelect size={16} />
           </button>
-          <button className="layer-toggle-btn" onClick={() => huntMapRef.current?.goHome?.()} title="Back to the property">
+          <button {...toolProps(false, "")} onClick={tool(() => huntMapRef.current?.goHome?.())} title="Back to the property">
             <House size={16} />
           </button>
-          <button className="layer-toggle-btn" onClick={() => setShowOfflinePanel(true)} title="Download map for offline use">
+          <button {...toolProps(false, "")} onClick={tool(() => setShowOfflinePanel(true))} title="Download map for offline use">
             <Download size={16} />
           </button>
         </div>
