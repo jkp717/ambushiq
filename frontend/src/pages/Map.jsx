@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Eye, EyeOff, List, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset, Search, Wrench } from "lucide-react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
+import { Eye, EyeOff, List, ChevronLeft, ChevronRight, Play, Pause, Download, BoxSelect, Navigation2, Save, Ruler, House, Sunrise, Sunset, Search, Wrench } from "lucide-react";
 import { api, apiSaved, loadSaved, fromDevice, tokenStore, regionStore } from "../services/api.js";
 import { savedAtLabel } from "../utils/offlineData.js";
 import useForegroundRefresh from "../hooks/useForegroundRefresh.js";
 import useGeolocation from "../hooks/useGeolocation.js";
+import usePresence from "../hooks/usePresence.js";
 import useDeviceHeading, { requestOrientationPermission } from "../hooks/useDeviceHeading.js";
 import { localDate, morningStartIdx, ratingScore5, ratingTone } from "../utils/formatters.js";
 import { fmtDist, fmtYd } from "../utils/units.js";
@@ -90,6 +91,7 @@ const LAND_LEGEND = [
   ["closed", "#C62828", "Closed to public", true],
 ];
 
+const LEGEND_TITLES = { scouting: "Scouting", publicLand: "Public land", trails: "Trails", roads: "Roads", recSites: "Rec sites" };
 const TRAILS_HINTS = {
   zoom: "Zoom in to see trails",
   loading: "Loading trails...",
@@ -228,8 +230,18 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
   // Updated global map layers (stand-specific elements removed)
   const [layers, setLayers] = useState({ corridors: true, zones: true, scouting: true, scrapes: true, rubs: true, suggestions: true, publicLand: true, trails: true, roads: true, recSites: true, leeEddies: true, drainage: false });
   const [layersOpen, setLayersOpen] = useState(false);
-  const [legendOpen, setLegendOpen] = useState({});   // { publicLand, trails, roads, recSites, scouting } -> bool, default collapsed
-  const toggleLegend = (k) => setLegendOpen((l) => ({ ...l, [k]: !l[k] }));
+  // The layers panel grows out of its button; a group's legend (scouting, public land, trails, roads, rec sites) opens
+  // as its own card to the left of the panel, one at a time. A tap outside closes both (see the effect further down).
+  const [flyout, setFlyout] = useState(null);
+  const toggleFlyout = (k) => setFlyout((f) => (f === k ? null : k));
+  const lastFlyout = useRef(null);   // kept while the card plays its closing animation
+  if (flyout) lastFlyout.current = flyout;
+  const layersMounted = usePresence(layersOpen);
+  const flyoutMounted = usePresence(!!flyout && layersOpen);
+  const layersStackRef = useRef(null);
+  const flyoutRef = useRef(null);
+  const groupRowRefs = useRef({});
+  const [flyPos, setFlyPos] = useState(null);
   // Items hidden inside a dropdown, per group: { publicLand: ["closed"], roads: ["local"], ... }. The group's
   // header is the parent switch; an item shows when its header is on and it isn't hidden here.
   const [hiddenKinds, setHiddenKinds] = useState({});
@@ -814,6 +826,89 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
     document.addEventListener("keydown", key);
     return () => { document.removeEventListener("pointerdown", down); document.removeEventListener("keydown", key); };
   }, [toolsOpen]);
+  // ----- layers panel: group legends as cards to the left of the panel -----
+  const legendBody = (key) => {
+    if (key === "scouting") return SCOUTING_LEGEND.map(([k, color, label, mark]) => (
+      <LegendRow key={k} on={layers[k]} onClick={() => toggle(k)} label={label}
+        swatch={mark === "dot" ? <span className="legend-dot" style={{ background: color }} />
+                               : <span className="legend-line" style={{ borderColor: color }} />} />
+    ));
+    if (key === "publicLand") return (<>
+      {LAND_HINTS[landStatus] && <div className="land-hint">{LAND_HINTS[landStatus]}</div>}
+      {LAND_LEGEND.map(([k, color, label, dashed]) => (
+        <LegendRow key={k} on={kindOn("publicLand", k)} onClick={() => toggleKind("publicLand", k)} label={label} swatch={lineSwatch(color, dashed)} />
+      ))}
+    </>);
+    if (key === "trails") return (<>
+      {TRAILS_HINTS[trailsStatus] && <div className="land-hint">{TRAILS_HINTS[trailsStatus]}</div>}
+      {OSM_TRAILS_HINTS[osmTrailsStatus] && <div className="land-hint">{OSM_TRAILS_HINTS[osmTrailsStatus]}</div>}
+      {TRAILS_LEGEND.map(([k, color, label, dashed]) => (
+        <LegendRow key={k} on={kindOn("trails", k)} onClick={() => toggleKind("trails", k)} label={label} swatch={lineSwatch(color, dashed)} />
+      ))}
+    </>);
+    if (key === "roads") return (<>
+      {ROADS_HINTS[roadsStatus] && <div className="land-hint">{ROADS_HINTS[roadsStatus]}</div>}
+      {ROADS_LEGEND.map(([k, color, label]) => (
+        <LegendRow key={k} on={kindOn("roads", k)} onClick={() => toggleKind("roads", k)} label={label} swatch={lineSwatch(color)} />
+      ))}
+    </>);
+    if (key === "recSites") return (<>
+      {RECSITES_HINTS[recSitesStatus] && <div className="land-hint">{RECSITES_HINTS[recSitesStatus]}</div>}
+      {RECSITE_KINDS.map(({ key: k, label }) => (
+        <LegendRow key={k} on={kindOn("recSites", k)} onClick={() => toggleKind("recSites", k)} label={label}
+          swatch={<span className="recsite-legend-pin" dangerouslySetInnerHTML={{ __html: recSitePinSvg(k, 18) }} />} />
+      ))}
+    </>);
+    return null;
+  };
+  // A group chip with the button that opens its legend card
+  const groupRow = (key, chip) => (
+    <div className="layer-group-row" ref={(el) => { groupRowRefs.current[key] = el; }}>
+      {chip}
+      <button className={"chip-expand-btn" + (flyout === key ? " open" : "")} onClick={() => toggleFlyout(key)}
+        aria-expanded={flyout === key} aria-label={`${flyout === key ? "Hide" : "Show"} ${LEGEND_TITLES[key]} legend`}>
+        <ChevronLeft size={12} />
+      </button>
+    </div>
+  );
+  // Line the card up with its row, then keep it on the map: never above the map's top, never below the layers
+  // button, and no wider than the room left of the panel (it scrolls if it's taller than the map).
+  const placeFlyout = useCallback(() => {
+    const stack = layersStackRef.current, fly = flyoutRef.current, row = groupRowRefs.current[lastFlyout.current];
+    const body = stack?.closest(".map-body");
+    if (!stack || !fly || !row || !body) return;
+    const sr = stack.getBoundingClientRect(), rr = row.getBoundingClientRect(), br = body.getBoundingClientRect();
+    const minTop = br.top + 10 - sr.top;
+    const maxHeight = Math.max(80, Math.round(sr.height - minTop));
+    const h = Math.min(fly.scrollHeight, maxHeight);
+    const top = Math.round(Math.max(minTop, Math.min(rr.top - sr.top, sr.height - h)));
+    const maxWidth = Math.max(140, Math.round(sr.left - br.left - 18));
+    setFlyPos((p) => (p && p.top === top && p.maxHeight === maxHeight && p.maxWidth === maxWidth ? p : { top, maxHeight, maxWidth }));
+  }, []);
+  useLayoutEffect(() => {
+    if (!flyoutMounted) { setFlyPos(null); return undefined; }
+    placeFlyout();
+    const fly = flyoutRef.current;
+    const ro = typeof ResizeObserver !== "undefined" && fly ? new ResizeObserver(placeFlyout) : null;
+    if (ro) ro.observe(fly);
+    window.addEventListener("resize", placeFlyout);
+    return () => { if (ro) ro.disconnect(); window.removeEventListener("resize", placeFlyout); };
+  }, [flyoutMounted, flyout, placeFlyout]);
+  // A tap anywhere outside the panel and its card closes them; Esc closes the card first, then the panel.
+  const lastOpenFlyout = useRef(null);
+  lastOpenFlyout.current = flyout;
+  useEffect(() => {
+    if (!layersOpen) { setFlyout(null); return undefined; }
+    const down = (e) => { if (layersStackRef.current && !layersStackRef.current.contains(e.target)) setLayersOpen(false); };
+    const key = (e) => {
+      if (e.key !== "Escape") return;
+      if (lastOpenFlyout.current) setFlyout(null); else setLayersOpen(false);
+    };
+    document.addEventListener("pointerdown", down);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("pointerdown", down); document.removeEventListener("keydown", key); };
+  }, [layersOpen]);
+
   const tool = (fn) => () => { fn(); setToolsOpen(false); };
   const toolProps = (pinned, extra) => {
     const hidden = !toolsOpen && !pinned;
@@ -1268,95 +1363,27 @@ function MapPage({ stands, standsReady = true, zones, corridors, sign, suggestio
           <AddMenu drawMode={drawMode} setDrawMode={(m) => { setDraftPoints([]); setDrawMode(m); }} />
         </div>
         {/* bottom right: the map layers button (its panel opens upward from it) right above the weather card */}
-        <div className="map-right-stack">
-          {layersOpen && (
-            <div className="layer-chips-panel">
+        <div className="map-right-stack" ref={layersStackRef}>
+          {flyoutMounted && lastFlyout.current && (
+            <div key={lastFlyout.current} ref={flyoutRef} role="dialog" aria-label={`${LEGEND_TITLES[lastFlyout.current]} legend`}
+              className={"layer-flyout " + (flyout && layersOpen ? "is-open" : "is-closing")}
+              style={flyPos ? { top: flyPos.top, maxHeight: flyPos.maxHeight, maxWidth: flyPos.maxWidth } : { visibility: "hidden" }}>
+              <div className="layer-flyout-title">{LEGEND_TITLES[lastFlyout.current]}</div>
+              <div className="land-legend">{legendBody(lastFlyout.current)}</div>
+            </div>
+          )}
+          {layersMounted && (
+            <div className={"layer-chips-panel " + (layersOpen ? "is-open" : "is-closing")} onScroll={placeFlyout}>
               <LayerChip on={layers.corridors} onClick={() => toggle("corridors")} color="#A35A1B" label="Corridors" />
               <LayerChip on={layers.zones}     onClick={() => toggle("zones")}     color="#6B4FA0" label="Zones" />
               {/* Scouting: rubs, scrapes and scouting suggestions under one header (the parent switch) */}
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.scouting} onClick={() => toggle("scouting")} label="Scouting" />
-                <button className="chip-expand-btn" onClick={() => toggleLegend("scouting")}
-                  aria-label={legendOpen.scouting ? "Collapse scouting layers" : "Expand scouting layers"}>
-                  {legendOpen.scouting ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </button>
-              </div>
-              {legendOpen.scouting && (
-                <div className="land-legend">
-                  {SCOUTING_LEGEND.map(([key, color, label, mark]) => (
-                    <LegendRow key={key} on={layers[key]} onClick={() => toggle(key)} label={label}
-                      swatch={mark === "dot" ? <span className="legend-dot" style={{ background: color }} />
-                                             : <span className="legend-line" style={{ borderColor: color }} />} />
-                  ))}
-                </div>
-              )}
+              {groupRow("scouting", <LayerChip on={layers.scouting} onClick={() => toggle("scouting")} label="Scouting" />)}
               <LayerChip on={layers.leeEddies} onClick={() => toggle("leeEddies")} color="#0E7C8A" label="Lee eddies" />
               <LayerChip on={layers.drainage} onClick={() => toggle("drainage")} color="#185FA5" label="Drainage" />
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} label="Public land" />
-                <button className="chip-expand-btn" onClick={() => toggleLegend("publicLand")}
-                  aria-label={legendOpen.publicLand ? "Collapse legend" : "Expand legend"}>
-                  {legendOpen.publicLand ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </button>
-              </div>
-              {legendOpen.publicLand && (
-                <div className="land-legend">
-                  {LAND_HINTS[landStatus] && <div className="land-hint">{LAND_HINTS[landStatus]}</div>}
-                  {LAND_LEGEND.map(([key, color, label, dashed]) => (
-                    <LegendRow key={key} on={kindOn("publicLand", key)} onClick={() => toggleKind("publicLand", key)}
-                      label={label} swatch={lineSwatch(color, dashed)} />
-                  ))}
-                </div>
-              )}
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.trails} onClick={() => toggle("trails")} label="Trails" />
-                <button className="chip-expand-btn" onClick={() => toggleLegend("trails")}
-                  aria-label={legendOpen.trails ? "Collapse legend" : "Expand legend"}>
-                  {legendOpen.trails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </button>
-              </div>
-              {legendOpen.trails && (
-                <div className="land-legend">
-                  {TRAILS_HINTS[trailsStatus] && <div className="land-hint">{TRAILS_HINTS[trailsStatus]}</div>}
-                  {OSM_TRAILS_HINTS[osmTrailsStatus] && <div className="land-hint">{OSM_TRAILS_HINTS[osmTrailsStatus]}</div>}
-                  {TRAILS_LEGEND.map(([key, color, label, dashed]) => (
-                    <LegendRow key={key} on={kindOn("trails", key)} onClick={() => toggleKind("trails", key)}
-                      label={label} swatch={lineSwatch(color, dashed)} />
-                  ))}
-                </div>
-              )}
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.roads} onClick={() => toggle("roads")} label="Roads" />
-                <button className="chip-expand-btn" onClick={() => toggleLegend("roads")}
-                  aria-label={legendOpen.roads ? "Collapse legend" : "Expand legend"}>
-                  {legendOpen.roads ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </button>
-              </div>
-              {legendOpen.roads && (
-                <div className="land-legend">
-                  {ROADS_HINTS[roadsStatus] && <div className="land-hint">{ROADS_HINTS[roadsStatus]}</div>}
-                  {ROADS_LEGEND.map(([key, color, label]) => (
-                    <LegendRow key={key} on={kindOn("roads", key)} onClick={() => toggleKind("roads", key)}
-                      label={label} swatch={lineSwatch(color)} />
-                  ))}
-                </div>
-              )}
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} label="Rec sites" />
-                <button className="chip-expand-btn" onClick={() => toggleLegend("recSites")}
-                  aria-label={legendOpen.recSites ? "Collapse legend" : "Expand legend"}>
-                  {legendOpen.recSites ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </button>
-              </div>
-              {legendOpen.recSites && (
-                <div className="land-legend">
-                  {RECSITES_HINTS[recSitesStatus] && <div className="land-hint">{RECSITES_HINTS[recSitesStatus]}</div>}
-                  {RECSITE_KINDS.map(({ key, label }) => (
-                    <LegendRow key={key} on={kindOn("recSites", key)} onClick={() => toggleKind("recSites", key)} label={label}
-                      swatch={<span className="recsite-legend-pin" dangerouslySetInnerHTML={{ __html: recSitePinSvg(key, 18) }} />} />
-                  ))}
-                </div>
-              )}
+              {groupRow("publicLand", <LayerChip on={layers.publicLand} onClick={() => toggle("publicLand")} label="Public land" />)}
+              {groupRow("trails", <LayerChip on={layers.trails} onClick={() => toggle("trails")} label="Trails" />)}
+              {groupRow("roads", <LayerChip on={layers.roads} onClick={() => toggle("roads")} label="Roads" />)}
+              {groupRow("recSites", <LayerChip on={layers.recSites} onClick={() => toggle("recSites")} label="Rec sites" />)}
             </div>
           )}
           <button className={"layer-toggle-btn" + (layersOpen ? " open" : "")} onClick={() => setLayersOpen(o => !o)}

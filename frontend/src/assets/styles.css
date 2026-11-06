@@ -815,6 +815,33 @@ html:has(.map-page), html:has(.map-page) body { overflow: hidden; overscroll-beh
   /* on short screens the panel shrinks and scrolls so the buttons above and below stay reachable */
   min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
 }
+/* grows out of the layers button below it, and shrinks back into it (Map.jsx keeps it mounted while closing) */
+.layer-chips-panel { transform-origin: bottom right; }
+.layer-chips-panel.is-open { animation: layers-grow .2s cubic-bezier(.2, .8, .2, 1) both; }
+.layer-chips-panel.is-closing { animation: layers-shrink .16s ease-in both; pointer-events: none; }
+@keyframes layers-grow { from { opacity: 0; transform: translateY(10px) scale(.6); } to { opacity: 1; transform: none; } }
+@keyframes layers-shrink { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(10px) scale(.6); } }
+/* a group chip and the button that opens its legend card */
+.layer-group-row { display: flex; align-items: center; gap: 4px; }
+.chip-expand-btn.open { background: var(--txt); color: var(--bg); border-color: var(--txt); }
+.chip-expand-btn.open:hover { background: var(--txt); }
+/* a group's legend: its own card to the left of the panel, lined up with its row (top/max sizes set in Map.jsx) */
+.layer-flyout {
+  position: absolute; right: calc(100% + 8px); z-index: 1;
+  min-width: 170px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+  padding: 8px 10px; border-radius: 10px;
+  background: var(--bg); color: var(--txt); border: 1px solid var(--bord2); box-shadow: 0 2px 10px rgba(0,0,0,.3);
+  transform-origin: right top;
+}
+.layer-flyout.is-open { animation: flyout-in .18s cubic-bezier(.2, .8, .2, 1) both; }
+.layer-flyout.is-closing { animation: flyout-out .14s ease-in both; pointer-events: none; }
+@keyframes flyout-in { from { opacity: 0; transform: translateX(12px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes flyout-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(12px) scale(.94); } }
+.layer-flyout-title { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+.layer-flyout .land-legend { padding: 0; background: none; font-size: 12px; gap: 5px; }
+@media (prefers-reduced-motion: reduce) {
+  .layer-chips-panel.is-open, .layer-chips-panel.is-closing, .layer-flyout.is-open, .layer-flyout.is-closing { animation: none; }
+}
 /* chips and legends keep their size inside the scrolling panel */
 .layer-chips-panel > * { flex-shrink: 0; }
 .layer-chips-panel .chip { background: var(--bg); font-size: 11.5px; }
